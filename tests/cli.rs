@@ -48,6 +48,28 @@ fn pack_prints_the_identity_and_writes_the_ref() {
     );
     let ref_path = store.path().join("refs/dev.peios.hello/1.0/noarch");
     assert_eq!(fs::read_to_string(ref_path).unwrap(), identity);
+
+    let local = tempfile::tempdir().unwrap();
+    let fetched = ppk(&[
+        "fetch",
+        "dev.peios.hello@1.0?arch=noarch",
+        "--from",
+        path(store.path()),
+        "--artifact-dir",
+        path(local.path()),
+    ]);
+    assert_eq!(fetched.status.code(), Some(0), "{}", stderr(&fetched));
+    assert_eq!(stdout(&fetched), identity, "fetch prints the same identity");
+}
+
+#[test]
+fn fetch_without_a_source_is_a_usage_error() {
+    let output = ppk(&["fetch", "dev.peios.hello@1.0"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        stderr(&output),
+        "ppk: missing option --from <dir>\nTry 'ppk --help' for more information.\n"
+    );
 }
 
 #[test]
@@ -120,7 +142,12 @@ fn unknown_command_is_a_usage_error() {
 
 #[test]
 fn help_lines_fit_in_80_columns() {
-    for args in [vec!["--help"], vec!["help", "pack"], vec!["help", "help"]] {
+    for args in [
+        vec!["--help"],
+        vec!["help", "pack"],
+        vec!["help", "fetch"],
+        vec!["help", "help"],
+    ] {
         let text = stdout(&ppk(&args));
         for line in text.lines() {
             assert!(line.chars().count() <= 80, "{args:?}: {line}");

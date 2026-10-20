@@ -47,6 +47,27 @@ enum Command {
         )]
         artifact_dir: PathBuf,
     },
+    /// Copy a package from another artifact directory
+    #[command(
+        override_usage = "ppk fetch [options] --from <dir> <package>",
+        after_help = SEE_ALSO
+    )]
+    Fetch {
+        /// Package to copy, as <name>@<version>[?arch=<arch>]
+        #[arg(value_name = "package")]
+        package: PackageId,
+        /// Store packages in <dir> (default: /system/artifacts)
+        #[arg(
+            long,
+            value_name = "dir",
+            default_value = ppk::DEFAULT_ARTIFACT_DIR,
+            hide_default_value = true,
+        )]
+        artifact_dir: PathBuf,
+        /// Copy from the artifact directory <dir>
+        #[arg(long, value_name = "dir")]
+        from: PathBuf,
+    },
     /// Print help for ppk or one of its commands
     #[command(override_usage = "ppk help [<command>]", after_help = SEE_ALSO)]
     Help {
@@ -85,6 +106,14 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         } => {
             let packed = ppk::pack(&package, &path, &artifact_dir)?;
             println!("{}", packed.identity);
+        }
+        Command::Fetch {
+            package,
+            artifact_dir,
+            from,
+        } => {
+            let fetched = ppk::fetch(&package, &from, &artifact_dir)?;
+            println!("{}", fetched.identity);
         }
         Command::Help { .. } => unreachable!("help is handled before run"),
     }
@@ -163,6 +192,9 @@ fn usage_message(err: &clap::Error) -> String {
             Some(ContextValue::String(command)) => format!("unknown command '{command}'"),
             _ => clap_first_line(err),
         },
+        (ErrorKind::MissingRequiredArgument, [arg]) if arg.starts_with('-') => {
+            format!("missing option {arg}")
+        }
         (ErrorKind::MissingRequiredArgument, [_, ..]) => {
             format!("missing argument {}", args.join(" "))
         }

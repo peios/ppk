@@ -94,6 +94,11 @@ Because a blob is named by its content, a file that appears in several
 packages, or in several versions of one package, is stored once. Packing a
 new version adds blobs only for the files that changed.
 
+An artifact directory is also where other machines get packages from. `ppk
+fetch` copies a package out of one artifact directory into another, checking
+every hash on the way; see
+[Fetching a Package](~peios/packaging/fetching-a-package).
+
 ## Packed versions never change
 
 Once a package is packed, its name, version, and architecture always mean

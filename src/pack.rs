@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
 use crate::store::{self, ArtifactDir};
-use crate::{ALGORITHM, Entry, PackageId, render_manifest};
+use crate::{Entry, Identity, PackageId, render_manifest};
 
 /// The result of a successful pack.
 #[derive(Debug)]
@@ -83,8 +83,7 @@ pub fn pack(id: &PackageId, input: &Path, artifact_dir: &Path) -> Result<Packed>
     }
 
     let manifest = render_manifest(id, &entries);
-    let hex = format!("{:x}", Sha256::digest(manifest.as_bytes()));
-    let identity = format!("{ALGORITHM}:{hex}");
+    let identity = Identity::of(manifest.as_bytes());
 
     let layout = ArtifactDir::new(artifact_dir);
     let ref_dir = layout.ref_dir(id);
@@ -101,26 +100,35 @@ pub fn pack(id: &PackageId, input: &Path, artifact_dir: &Path) -> Result<Packed>
     for (hex, path) in &sources {
         let blob = blob_dir.join(hex);
         if !blob.exists() {
-            store::write_blob(path, hex, &blob_dir, &blob)?;
+            if !store::copy_blob(path, hex, &blob_dir, &blob)? {
+                bail!("{}: file changed while being packed", path.display());
+            }
             blobs_written += 1;
         }
     }
 
     let manifest_dir = layout.manifest_dir();
     fs::create_dir_all(&manifest_dir).with_context(|| format!("{}", manifest_dir.display()))?;
-    let manifest_path = manifest_dir.join(&hex);
+    let manifest_path = layout.manifest_path(&identity);
     if !store::write_new(&manifest_dir, &manifest_path, manifest.as_bytes())? {
         bail!("{}: does not match its hash", manifest_path.display());
     }
 
     fs::create_dir_all(&ref_dir).with_context(|| format!("{}", ref_dir.display()))?;
-    if !store::write_new(&ref_dir, &ref_path, format!("{identity}\n").as_bytes())? {
-        let existing = store::read_ref(&ref_path)?.unwrap_or_default();
-        bail!("{id}: already packed as {existing}; a packed version cannot be replaced");
+    if !store::write_new(
+        &ref_dir,
+        &ref_path,
+        store::ref_contents(&identity).as_bytes(),
+    )? {
+        let existing = store::read_ref(&ref_path)?.map(|existing| existing.to_string());
+        bail!(
+            "{id}: already packed as {}; a packed version cannot be replaced",
+            existing.unwrap_or_default()
+        );
     }
 
     Ok(Packed {
-        identity,
+        identity: identity.to_string(),
         manifest_path,
         ref_path,
         entries: entries.len(),
@@ -197,7 +205,7 @@ fn hash_file(path: &Path) -> Result<String> {
     let mut file = File::open(path).with_context(|| format!("{}", path.display()))?;
     let mut hasher = Sha256::new();
     io::copy(&mut file, &mut hasher).with_context(|| format!("{}", path.display()))?;
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(Identity::from_digest(hasher.finalize()).hex().to_owned())
 }
 
 /// The absolute, symlink-resolved form of `path`, which need not exist yet:

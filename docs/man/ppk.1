@@ -1,4 +1,4 @@
-.TH PPK 1 2026-10-20 "Peios ppk 0.1.0"
+.TH PPK 1 2026-10-21 "Peios ppk 0.1.0"
 .SH NAME
 ppk \- create and manage Peios packages
 .SH SYNOPSIS
@@ -7,6 +7,12 @@ ppk \- create and manage Peios packages
 .IR dir ]
 .I package path
 .br
+.B ppk fetch
+.RB [ \-\-artifact\-dir
+.IR dir ]
+.B \-\-from
+.I dir package
+.br
 .B ppk help
 .RI [ command ]
 .br
@@ -14,7 +20,8 @@ ppk \- create and manage Peios packages
 .RB [ \-h | \-\-help | \-V | \-\-version ]
 .SH DESCRIPTION
 .B ppk
-creates Peios packages and stores them in an artifact directory.
+creates Peios packages, stores them in an artifact directory, and copies
+them from one artifact directory to another.
 .PP
 A package is a manifest that lists every path in it, with each file's
 content stored separately as a blob named by its SHA-256 hash.
@@ -82,6 +89,43 @@ If it is packed with different contents,
 .B ppk pack
 fails and writes nothing: a packed version is never replaced.
 .TP
+.BI fetch " package"
+Copy
+.I package
+from the artifact directory named by
+.B \-\-from
+and print its identity on standard output.
+Blobs already present are not copied.
+.IP
+Nothing read from the source is trusted.
+The source's ref must hold exactly one identity and a newline.
+The manifest must hash to that identity, be in exactly the form
+.B ppk pack
+writes, name
+.IR package ,
+and contain only relative paths with no empty,
+.BR . ,
+or
+.B ..
+component.
+Every blob copied must hash to the name the manifest gives it.
+If a check fails,
+.B ppk fetch
+stops without writing the manifest or the ref.
+Blobs it copied before the failure are named by their content and are kept.
+.IP
+If
+.I package
+is already present with the same identity,
+.B ppk fetch
+copies only what is missing.
+If it is present with a different identity,
+.B ppk fetch
+fails and writes nothing.
+.IP
+These checks prove that the package matches the source's ref.
+They do not prove who published it, so fetch only from sources you trust.
+.TP
 .BI help " \fR[\fPcommand\fR]\fP"
 Print help for
 .B ppk
@@ -96,6 +140,13 @@ instead of
 .B ppk
 creates the directory if it does not exist.
 .TP
+.BI \-\-from " dir"
+For
+.BR fetch ,
+copy from the artifact directory
+.IR dir .
+Required.
+.TP
 .BR \-h ", " \-\-help
 Print help and exit.
 .TP
@@ -104,8 +155,8 @@ Print the program name and version and exit.
 .SH SECURITY
 .B ppk
 makes no access checks of its own.
-It needs write access to the artifact directory and read access to the
-directory being packed.
+It needs write access to the artifact directory, and read access to the
+directory being packed or the artifact directory being fetched from.
 Every file it writes in the artifact directory is read-only.
 .SH EXIT STATUS
 .TP
@@ -113,8 +164,9 @@ Every file it writes in the artifact directory is read-only.
 Success, including printing help or the version.
 .TP
 .B 1
-Failure, such as an unreadable file, an unwritable artifact directory, or a
-version that is already packed with different contents.
+Failure, such as an unreadable file, an unwritable artifact directory, a
+version that is already present with different contents, or a package that
+is missing from the source or fails a check.
 .TP
 .B 2
 Usage error: an unknown option, a missing argument, or a malformed
@@ -144,5 +196,14 @@ and print the package's identity.
 The identifier is quoted because some shells treat
 .B ?
 as a wildcard.
+.TP
+.B ppk fetch 'dev.peios.hello@1.0?arch=noarch' \-\-from shared \-\-artifact\-dir artifacts
+Copy the package from the artifact directory
+.I shared
+into
+.I artifacts
+and print its identity, which is the one
+.B ppk pack
+printed.
 .SH SEE ALSO
 https://learn.peios.org/peios/developing-for-peios/packaging/creating-a-package

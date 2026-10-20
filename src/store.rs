@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
-use crate::{ALGORITHM, PackageId};
+use crate::{ALGORITHM, Identity, PackageId};
 
 /// Everything in the artifact directory is immutable once written: content
 /// is named by its hash, and a ref is never replaced.
@@ -32,6 +32,10 @@ impl<'a> ArtifactDir<'a> {
         self.root.join("manifests").join(ALGORITHM)
     }
 
+    pub(crate) fn manifest_path(&self, identity: &Identity) -> PathBuf {
+        self.manifest_dir().join(identity.hex())
+    }
+
     pub(crate) fn ref_dir(&self, id: &PackageId) -> PathBuf {
         self.root.join("refs").join(id.name()).join(id.version())
     }
@@ -41,18 +45,31 @@ impl<'a> ArtifactDir<'a> {
     }
 }
 
-/// The identity a ref names, or `None` if there is no ref at `path`.
-pub(crate) fn read_ref(path: &Path) -> Result<Option<String>> {
-    match fs::read_to_string(path) {
-        Ok(contents) => Ok(Some(contents.trim_end().to_owned())),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err).with_context(|| format!("{}", path.display())),
-    }
+/// The identity a ref names, or `None` if there is no ref at `path`. A ref
+/// holds exactly one identity and a newline; anything else is an error.
+pub(crate) fn read_ref(path: &Path) -> Result<Option<Identity>> {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).with_context(|| format!("{}", path.display())),
+    };
+    let Some(identity) = contents.strip_suffix('\n') else {
+        bail!("{}: not a ref", path.display());
+    };
+    let identity = identity
+        .parse()
+        .with_context(|| format!("{}", path.display()))?;
+    Ok(Some(identity))
 }
 
-/// Copy `path` into `blob`, checking that the content still hashes to `hex`
-/// so a file modified mid-pack cannot be stored under the wrong name.
-pub(crate) fn write_blob(path: &Path, hex: &str, blob_dir: &Path, blob: &Path) -> Result<()> {
+/// The bytes of a ref naming `identity`.
+pub(crate) fn ref_contents(identity: &Identity) -> String {
+    format!("{identity}\n")
+}
+
+/// Copy `path` into `blob` if its content hashes to `hex`. Returns false,
+/// writing nothing, if it does not; the caller knows what that means.
+pub(crate) fn copy_blob(path: &Path, hex: &str, blob_dir: &Path, blob: &Path) -> Result<bool> {
     let file = File::open(path).with_context(|| format!("{}", path.display()))?;
     let mut reader = HashingReader {
         inner: file,
@@ -60,10 +77,11 @@ pub(crate) fn write_blob(path: &Path, hex: &str, blob_dir: &Path, blob: &Path) -
     };
     let mut tmp = new_temp(blob_dir)?;
     io::copy(&mut reader, &mut tmp).with_context(|| format!("{}", path.display()))?;
-    if format!("{:x}", reader.hasher.finalize()) != hex {
-        bail!("{}: file changed while being packed", path.display());
+    if Identity::from_digest(reader.hasher.finalize()).hex() != hex {
+        return Ok(false);
     }
-    persist(tmp, blob)
+    persist(tmp, blob)?;
+    Ok(true)
 }
 
 /// Create `dest` holding `bytes`, via a temporary file in `dir` so readers

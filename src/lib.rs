@@ -31,13 +31,17 @@
 //! will cover the manifest's bytes, so those bytes must say which package
 //! they are.
 
+mod fetch;
 mod id;
+mod identity;
 mod manifest;
 mod pack;
 mod store;
 
+pub use fetch::{Fetched, fetch};
 pub use id::{HOST_ARCH, PackageId};
-pub use manifest::{Entry, render_manifest};
+pub use identity::Identity;
+pub use manifest::{Entry, Manifest, parse_manifest, render_manifest};
 pub use pack::{Packed, pack};
 
 /// The hash algorithm, as it appears in artifact paths and manifest values.

@@ -1,0 +1,148 @@
+.TH PPK 1 2026-10-20 "Peios ppk 0.1.0"
+.SH NAME
+ppk \- create and manage Peios packages
+.SH SYNOPSIS
+.B ppk pack
+.RB [ \-\-artifact\-dir
+.IR dir ]
+.I package path
+.br
+.B ppk help
+.RI [ command ]
+.br
+.B ppk
+.RB [ \-h | \-\-help | \-V | \-\-version ]
+.SH DESCRIPTION
+.B ppk
+creates Peios packages and stores them in an artifact directory.
+.PP
+A package is a manifest that lists every path in it, with each file's
+content stored separately as a blob named by its SHA-256 hash.
+The package's identity is the SHA-256 hash of its manifest, written as
+.B sha256:
+followed by the hash in lowercase hexadecimal.
+.PP
+A
+.I package
+argument is an identifier of the form
+.IB name @ version\c
+.RB [ ?arch= \c
+.IR arch ].
+Each of
+.IR name ,
+.IR version ,
+and
+.I arch
+consists of ASCII letters, digits, and the characters
+.BR . ,
+.BR _ ,
+.BR + ,
+.BR \- ,
+and
+.BR ~ ,
+and starts with a letter or digit.
+Without
+.BR ?arch= ,
+the architecture is the one
+.B ppk
+was built for.
+Use
+.B noarch
+for content that does not depend on the architecture.
+No other qualifier is accepted, and
+.B arch
+can be given only once.
+.SH COMMANDS
+.TP
+.BI pack " package path"
+Pack the directory
+.I path
+as
+.I package
+and print the package's identity on standard output.
+.IP
+Regular files, symbolic links, and empty directories are recorded.
+Directories with contents are implied by them.
+A symbolic link is recorded with its target exactly as it reads and is never followed.
+Of a file's permissions, only whether any execute bit is set is recorded.
+.IP
+.B ppk pack
+refuses a directory that holds anything else, such as a socket or a device;
+a file with its set-user-ID or set-group-ID bit set;
+or a path or link target that is not valid UTF-8.
+It also refuses an artifact directory inside
+.IR path .
+.IP
+If
+.I package
+is already packed with the same contents,
+.B ppk pack
+succeeds without changing anything.
+If it is packed with different contents,
+.B ppk pack
+fails and writes nothing: a packed version is never replaced.
+.TP
+.BI help " \fR[\fPcommand\fR]\fP"
+Print help for
+.B ppk
+or for one of its commands.
+.SH OPTIONS
+.TP
+.BI \-\-artifact\-dir " dir"
+Store packages in
+.I dir
+instead of
+.IR /system/artifacts .
+.B ppk
+creates the directory if it does not exist.
+.TP
+.BR \-h ", " \-\-help
+Print help and exit.
+.TP
+.BR \-V ", " \-\-version
+Print the program name and version and exit.
+.SH SECURITY
+.B ppk
+makes no access checks of its own.
+It needs write access to the artifact directory and read access to the
+directory being packed.
+Every file it writes in the artifact directory is read-only.
+.SH EXIT STATUS
+.TP
+.B 0
+Success, including printing help or the version.
+.TP
+.B 1
+Failure, such as an unreadable file, an unwritable artifact directory, or a
+version that is already packed with different contents.
+.TP
+.B 2
+Usage error: an unknown option, a missing argument, or a malformed
+.IR package .
+.SH FILES
+Paths are relative to the artifact directory,
+.I /system/artifacts
+by default.
+.TP
+.IR blobs/sha256/ hash
+The content of one file, uncompressed, named by the SHA-256 hash of that content.
+.TP
+.IR manifests/sha256/ hash
+A manifest, named by the SHA-256 hash of its bytes.
+.TP
+.IR refs/ name / version / arch
+The identity of the package with that name, version, and architecture,
+followed by a newline.
+.SH EXAMPLES
+.TP
+.B ppk pack 'dev.peios.hello@1.0?arch=noarch' hello \-\-artifact\-dir artifacts
+Pack the directory
+.I hello
+into
+.I artifacts
+and print the package's identity.
+The identifier is quoted because some shells treat
+.B ?
+as a wildcard.
+.SH SEE ALSO
+https://learn.peios.org/peios/developing-for-peios/packaging/creating-a-package

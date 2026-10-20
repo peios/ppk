@@ -87,7 +87,45 @@ fn no_arguments_prints_help_to_stderr() {
     let output = ppk(&[]);
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(stdout(&output), "");
-    assert!(stderr(&output).starts_with("Build and manage Peios packages\n"));
+    assert!(stderr(&output).starts_with("Create and manage Peios packages\n"));
+}
+
+#[test]
+fn help_command_prints_the_same_text_as_the_flag() {
+    for (command, flag) in [
+        (vec!["help"], vec!["--help"]),
+        (vec!["help", "pack"], vec!["pack", "--help"]),
+        (vec!["help", "help"], vec!["help", "--help"]),
+    ] {
+        let by_command = ppk(&command);
+        assert_eq!(by_command.status.code(), Some(0), "{command:?}");
+        let text = stdout(&by_command);
+        assert_eq!(text, stdout(&ppk(&flag)), "{command:?}");
+        assert!(text.ends_with("See ppk(1).\n"), "{command:?}: {text}");
+    }
+}
+
+#[test]
+fn unknown_command_is_a_usage_error() {
+    for args in [vec!["stauts"], vec!["help", "stauts"]] {
+        let output = ppk(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert_eq!(
+            stderr(&output),
+            "ppk: unknown command 'stauts'\nTry 'ppk --help' for more information.\n",
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn help_lines_fit_in_80_columns() {
+    for args in [vec!["--help"], vec!["help", "pack"], vec!["help", "help"]] {
+        let text = stdout(&ppk(&args));
+        for line in text.lines() {
+            assert!(line.chars().count() <= 80, "{args:?}: {line}");
+        }
+    }
 }
 
 #[test]

@@ -109,6 +109,28 @@ fn fetch_reproduces_the_package_exactly() {
 }
 
 #[test]
+fn executables_arrive_in_their_executable_form() {
+    use std::os::unix::fs::PermissionsExt;
+    let source = tempfile::tempdir().unwrap();
+    let local = tempfile::tempdir().unwrap();
+    let content = tree(&[("bin/hello", b"binary")]);
+    fs::set_permissions(
+        content.path().join("bin/hello"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    ppk::pack(&id(HELLO), content.path(), source.path()).unwrap();
+
+    fetch(HELLO, source.path(), local.path()).unwrap();
+    let blob = local.path().join(format!(
+        "blobs/sha256/{}.exec",
+        Identity::of(b"binary").hex()
+    ));
+    let mode = fs::metadata(&blob).unwrap().permissions().mode() & 0o7777;
+    assert_eq!(mode, 0o555);
+}
+
+#[test]
 fn only_missing_blobs_are_copied() {
     let source = tempfile::tempdir().unwrap();
     let local = tempfile::tempdir().unwrap();

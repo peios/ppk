@@ -5,7 +5,9 @@
 //!
 //! ```text
 //! <artifact-dir>/blobs/sha256/<hex>
-//!     file content, uncompressed, named by its SHA-256
+//!     file content, uncompressed, named by its SHA-256 (mode 0444)
+//! <artifact-dir>/blobs/sha256/<hex>.exec
+//!     the same content in executable form (mode 0555), for exec entries
 //! <artifact-dir>/manifests/sha256/<hex>
 //!     a manifest, named by the SHA-256 of its bytes
 //! <artifact-dir>/refs/<name>/<version>/<arch>

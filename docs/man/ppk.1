@@ -177,7 +177,14 @@ Paths are relative to the artifact directory,
 by default.
 .TP
 .IR blobs/sha256/ hash
-The content of one file, uncompressed, named by the SHA-256 hash of that content.
+The content of one file that is not executable, uncompressed, named by the
+SHA-256 hash of that content.
+Mode 0444.
+.TP
+.IR blobs/sha256/ hash .exec
+The same for an executable file.
+Mode 0555.
+Content shipped both as executable and not is stored in both forms.
 .TP
 .IR manifests/sha256/ hash
 A manifest, named by the SHA-256 hash of its bytes.

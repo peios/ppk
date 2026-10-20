@@ -73,7 +73,7 @@ pub fn pack(id: &PackageId, input: &Path, artifact_dir: &Path) -> Result<Packed>
         let entry = match item {
             Found::File { path, exec } => {
                 let hex = hash_file(&path)?;
-                sources.push((hex.clone(), path));
+                sources.push((hex.clone(), exec, path));
                 Entry::Blob { hex, exec }
             }
             Found::Symlink(target) => Entry::Symlink(target),
@@ -97,10 +97,10 @@ pub fn pack(id: &PackageId, input: &Path, artifact_dir: &Path) -> Result<Packed>
     let blob_dir = layout.blob_dir();
     fs::create_dir_all(&blob_dir).with_context(|| format!("{}", blob_dir.display()))?;
     let mut blobs_written = 0;
-    for (hex, path) in &sources {
-        let blob = blob_dir.join(hex);
+    for (hex, exec, path) in &sources {
+        let blob = layout.blob_path(hex, *exec);
         if !blob.exists() {
-            if !store::copy_blob(path, hex, &blob_dir, &blob)? {
+            if !store::copy_blob(path, &blob, hex, *exec)? {
                 bail!("{}: file changed while being packed", path.display());
             }
             blobs_written += 1;

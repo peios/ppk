@@ -1,0 +1,20 @@
+sitename = "Peios Learn"
+title = "ppk Documentation"
+description = "Creating and managing Peios packages with ppk."
+footer = "Peios Learn"
+featured = ["peios"]
+
+[lint]
+rules = [
+  "spelling", "em-dash", "double-hyphen", "curly-quotes",
+  "invisible-characters", "exclamation", "ampersand", "double-space",
+  "title-case", "heading-case", "heading-punctuation", "heading-levels",
+  "code-language", "shell-prompt", "line-length", "hex-case", "serial-comma",
+]
+line_length = 78
+proper_nouns = [
+  "Peios", "ppk", "SHA-256", "TOML", "UTF-8",
+]
+
+[lint.spelling]
+banned-words = ["banned-words.txt"]

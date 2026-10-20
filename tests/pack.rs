@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -15,24 +16,13 @@ fn tree(files: &[(&str, &[u8])]) -> TempDir {
     dir
 }
 
-fn commit_as(
-    name: &str,
-    version: &str,
-    arch: &str,
-    input: &Path,
-    out: &Path,
-) -> anyhow::Result<ppk::Commit> {
-    let pkg = ppk::Package {
-        name,
-        version,
-        arch,
-    };
-    ppk::commit(&pkg, input, out)
+fn pack_as(id: &str, input: &Path, out: &Path) -> anyhow::Result<ppk::Packed> {
+    ppk::pack(&id.parse().unwrap(), input, out)
 }
 
-/// Commit `input` as hello 1.0 x86_64.
-fn commit(input: &Path, out: &Path) -> anyhow::Result<ppk::Commit> {
-    commit_as("hello", "1.0", "x86_64", input, out)
+/// Pack `input` as dev.peios.hello 1.0 for x86_64.
+fn pack(input: &Path, out: &Path) -> anyhow::Result<ppk::Packed> {
+    pack_as("dev.peios.hello@1.0?arch=x86_64", input, out)
 }
 
 fn parse(manifest: &Path) -> toml::Table {
@@ -75,7 +65,25 @@ fn blob_path(out: &Path, entry: &toml::Value) -> PathBuf {
         .unwrap()
         .strip_prefix("sha256:")
         .unwrap();
-    out.join("blobs/sha256").join(format!("{hex}.zst"))
+    out.join("blobs/sha256").join(hex)
+}
+
+/// Every file under `dir`, relative to it, sorted.
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    fn walk(root: &Path, dir: &Path, found: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(root, &path, found);
+            } else {
+                found.push(path.strip_prefix(root).unwrap().to_owned());
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(dir, dir, &mut found);
+    found.sort();
+    found
 }
 
 #[test]
@@ -89,44 +97,53 @@ fn round_trips_every_file() {
     let input = tree(files);
     let out = tempfile::tempdir().unwrap();
 
-    let commit = commit(input.path(), out.path()).unwrap();
-    assert_eq!(commit.entries, files.len());
-    assert_eq!(commit.blobs_written, files.len());
+    let packed = pack(input.path(), out.path()).unwrap();
+    assert_eq!(packed.entries, files.len());
+    assert_eq!(packed.blobs_written, files.len());
 
-    let manifest = parse_files(&commit.manifest_path);
+    let manifest = parse_files(&packed.manifest_path);
     assert_eq!(manifest.len(), files.len());
     for (path, content) in files {
         let blob = blob_path(out.path(), &manifest[*path]);
-        let decoded = zstd::decode_all(fs::File::open(&blob).unwrap()).unwrap();
-        assert_eq!(&decoded, content, "{path}");
+        assert_eq!(&fs::read(&blob).unwrap(), content, "{path}");
         let name = blob.file_name().unwrap().to_str().unwrap();
-        assert_eq!(name, format!("{:x}.zst", Sha256::digest(content)), "{path}");
+        assert_eq!(name, format!("{:x}", Sha256::digest(content)), "{path}");
     }
 }
 
 #[test]
-fn manifest_is_filed_by_name_version_and_arch() {
+fn artifacts_are_read_only() {
+    let input = tree(&[("bin/hello", b"binary")]);
+    let out = tempfile::tempdir().unwrap();
+    let packed = pack(input.path(), out.path()).unwrap();
+    let manifest = parse_files(&packed.manifest_path);
+    for path in [
+        blob_path(out.path(), &manifest["bin/hello"]),
+        packed.manifest_path,
+        packed.ref_path,
+    ] {
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o444, "{}", path.display());
+    }
+}
+
+#[test]
+fn manifest_is_filed_by_its_hash() {
     let input = tree(&[("a", b"a")]);
     let out = tempfile::tempdir().unwrap();
-    let commit = commit_as(
-        "org.gnu.hello",
-        "2.12-1",
-        "aarch64",
+    let packed = pack_as(
+        "org.gnu.hello@2.12-1?arch=aarch64",
         input.path(),
         out.path(),
     )
     .unwrap();
+    let hex = packed.identity.strip_prefix("sha256:").unwrap();
     assert_eq!(
-        commit.manifest_path,
-        out.path()
-            .join("manifests/org.gnu.hello/2.12-1/aarch64/manifest.toml")
+        packed.manifest_path,
+        out.path().join("manifests/sha256").join(hex)
     );
-    let doc = parse(&commit.manifest_path);
-    assert_eq!(doc["name"].as_str(), Some("org.gnu.hello"));
-    assert_eq!(doc["version"].as_str(), Some("2.12-1"));
-    assert_eq!(doc["arch"].as_str(), Some("aarch64"));
     assert_eq!(
-        fs::read_to_string(&commit.manifest_path).unwrap(),
+        fs::read_to_string(&packed.manifest_path).unwrap(),
         "name = \"org.gnu.hello\"\n\
          version = \"2.12-1\"\n\
          arch = \"aarch64\"\n\
@@ -137,14 +154,34 @@ fn manifest_is_filed_by_name_version_and_arch() {
 }
 
 #[test]
+fn ref_names_the_manifest_by_name_version_and_arch() {
+    let input = tree(&[("a", b"a")]);
+    let out = tempfile::tempdir().unwrap();
+    let packed = pack_as(
+        "org.gnu.hello@2.12-1?arch=aarch64",
+        input.path(),
+        out.path(),
+    )
+    .unwrap();
+    assert_eq!(
+        packed.ref_path,
+        out.path().join("refs/org.gnu.hello/2.12-1/aarch64")
+    );
+    assert_eq!(
+        fs::read_to_string(&packed.ref_path).unwrap(),
+        format!("{}\n", packed.identity)
+    );
+}
+
+#[test]
 fn every_kind_of_entry_has_one_spelling() {
     let input = tree(&[("file", b"a"), ("tool", b"a")]);
     set_mode(&input.path().join("tool"), 0o755);
     std::os::unix::fs::symlink("file", input.path().join("link")).unwrap();
     fs::create_dir(input.path().join("empty")).unwrap();
     let out = tempfile::tempdir().unwrap();
-    let commit = commit(input.path(), out.path()).unwrap();
-    let text = fs::read_to_string(&commit.manifest_path).unwrap();
+    let packed = pack(input.path(), out.path()).unwrap();
+    let text = fs::read_to_string(&packed.manifest_path).unwrap();
     let files: Vec<&str> = text.lines().skip_while(|l| *l != "[files]").collect();
     assert_eq!(
         files,
@@ -159,13 +196,13 @@ fn every_kind_of_entry_has_one_spelling() {
 }
 
 #[test]
-fn manifest_hash_is_hash_of_manifest_bytes() {
+fn identity_is_hash_of_manifest_bytes() {
     let input = tree(&[("a", b"a")]);
     let out = tempfile::tempdir().unwrap();
-    let commit = commit(input.path(), out.path()).unwrap();
-    let bytes = fs::read(&commit.manifest_path).unwrap();
+    let packed = pack(input.path(), out.path()).unwrap();
+    let bytes = fs::read(&packed.manifest_path).unwrap();
     assert_eq!(
-        commit.manifest_hash,
+        packed.identity,
         format!("sha256:{:x}", Sha256::digest(&bytes))
     );
 }
@@ -178,12 +215,12 @@ fn identical_trees_give_identical_manifests() {
     let out_a = tempfile::tempdir().unwrap();
     let out_b = tempfile::tempdir().unwrap();
 
-    let ca = commit(a.path(), out_a.path()).unwrap();
-    let cb = commit(b.path(), out_b.path()).unwrap();
-    assert_eq!(ca.manifest_hash, cb.manifest_hash);
+    let pa = pack(a.path(), out_a.path()).unwrap();
+    let pb = pack(b.path(), out_b.path()).unwrap();
+    assert_eq!(pa.identity, pb.identity);
     assert_eq!(
-        fs::read(&ca.manifest_path).unwrap(),
-        fs::read(&cb.manifest_path).unwrap()
+        fs::read(&pa.manifest_path).unwrap(),
+        fs::read(&pb.manifest_path).unwrap()
     );
 }
 
@@ -191,21 +228,17 @@ fn identical_trees_give_identical_manifests() {
 fn name_version_and_arch_are_part_of_identity() {
     let input = tree(&[("a", b"a")]);
     let out = tempfile::tempdir().unwrap();
-    let hashes: Vec<String> = [
-        ("hello", "1.0", "x86_64"),
-        ("hello", "2.0", "x86_64"),
-        ("goodbye", "1.0", "x86_64"),
-        ("hello", "1.0", "aarch64"),
+    let identities: Vec<String> = [
+        "dev.peios.hello@1.0?arch=x86_64",
+        "dev.peios.hello@2.0?arch=x86_64",
+        "dev.peios.goodbye@1.0?arch=x86_64",
+        "dev.peios.hello@1.0?arch=aarch64",
     ]
     .iter()
-    .map(|(n, v, a)| {
-        commit_as(n, v, a, input.path(), out.path())
-            .unwrap()
-            .manifest_hash
-    })
+    .map(|id| pack_as(id, input.path(), out.path()).unwrap().identity)
     .collect();
-    for (i, a) in hashes.iter().enumerate() {
-        for b in &hashes[i + 1..] {
+    for (i, a) in identities.iter().enumerate() {
+        for b in &identities[i + 1..] {
             assert_ne!(a, b);
         }
     }
@@ -221,8 +254,8 @@ fn entries_are_sorted_by_bytes() {
         ("é", b""),
     ]);
     let out = tempfile::tempdir().unwrap();
-    let commit = commit(input.path(), out.path()).unwrap();
-    let text = fs::read_to_string(&commit.manifest_path).unwrap();
+    let packed = pack(input.path(), out.path()).unwrap();
+    let text = fs::read_to_string(&packed.manifest_path).unwrap();
     let keys: Vec<&str> = text
         .lines()
         .skip_while(|line| *line != "[files]")
@@ -236,9 +269,9 @@ fn entries_are_sorted_by_bytes() {
 fn identical_content_shares_one_blob() {
     let input = tree(&[("one", b"same"), ("two", b"same"), ("three", b"different")]);
     let out = tempfile::tempdir().unwrap();
-    let commit = commit(input.path(), out.path()).unwrap();
-    assert_eq!(commit.entries, 3);
-    assert_eq!(commit.blobs_written, 2);
+    let packed = pack(input.path(), out.path()).unwrap();
+    assert_eq!(packed.entries, 3);
+    assert_eq!(packed.blobs_written, 2);
     assert_eq!(
         fs::read_dir(out.path().join("blobs/sha256"))
             .unwrap()
@@ -253,42 +286,46 @@ fn versions_coexist_and_share_unchanged_blobs() {
     let v2 = tree(&[("bin/hello", b"v2 binary"), ("COPYING", b"license")]);
     let out = tempfile::tempdir().unwrap();
 
-    let c1 = commit_as("hello", "1.0", "x86_64", v1.path(), out.path()).unwrap();
-    let c2 = commit_as("hello", "2.0", "x86_64", v2.path(), out.path()).unwrap();
-    assert_eq!(c1.blobs_written, 2);
-    assert_eq!(c2.blobs_written, 1, "COPYING is already stored");
-    assert!(c1.manifest_path.exists());
-    assert!(c2.manifest_path.exists());
-    assert_ne!(c1.manifest_path, c2.manifest_path);
+    let p1 = pack_as("dev.peios.hello@1.0?arch=x86_64", v1.path(), out.path()).unwrap();
+    let p2 = pack_as("dev.peios.hello@2.0?arch=x86_64", v2.path(), out.path()).unwrap();
+    assert_eq!(p1.blobs_written, 2);
+    assert_eq!(p2.blobs_written, 1, "COPYING is already stored");
+    assert!(p1.manifest_path.exists());
+    assert!(p2.manifest_path.exists());
+    assert_ne!(p1.ref_path, p2.ref_path);
 }
 
 #[test]
-fn recommitting_an_identical_version_succeeds() {
+fn repacking_an_identical_version_succeeds() {
     let input = tree(&[("a", b"a")]);
     let out = tempfile::tempdir().unwrap();
-    let first = commit(input.path(), out.path()).unwrap();
-    let again = commit(input.path(), out.path()).unwrap();
+    let first = pack(input.path(), out.path()).unwrap();
+    let again = pack(input.path(), out.path()).unwrap();
     assert_eq!(again.blobs_written, 0);
-    assert_eq!(again.manifest_hash, first.manifest_hash);
+    assert_eq!(again.identity, first.identity);
 }
 
 #[test]
-fn a_committed_version_cannot_be_replaced() {
+fn a_packed_version_cannot_be_replaced() {
     let out = tempfile::tempdir().unwrap();
-    let original = commit(tree(&[("a", b"original")]).path(), out.path()).unwrap();
-    let before = fs::read(&original.manifest_path).unwrap();
+    let original = pack(tree(&[("a", b"original")]).path(), out.path()).unwrap();
+    let before = files_under(out.path());
+    let ref_before = fs::read(&original.ref_path).unwrap();
 
-    let err = commit(tree(&[("a", b"changed")]).path(), out.path()).unwrap_err();
-    assert!(err.to_string().contains("already committed"), "{err:#}");
-    assert_eq!(fs::read(&original.manifest_path).unwrap(), before);
-    let leftovers: Vec<_> = fs::read_dir(original.manifest_path.parent().unwrap())
-        .unwrap()
-        .map(|e| e.unwrap().file_name())
-        .collect();
+    let err = pack(tree(&[("a", b"changed")]).path(), out.path()).unwrap_err();
     assert_eq!(
-        leftovers,
-        ["manifest.toml"],
-        "no temporary files left behind"
+        err.to_string(),
+        format!(
+            "dev.peios.hello@1.0?arch=x86_64: already packed as {}; \
+             a packed version cannot be replaced",
+            original.identity
+        )
+    );
+    assert_eq!(fs::read(&original.ref_path).unwrap(), ref_before);
+    assert_eq!(
+        files_under(out.path()),
+        before,
+        "nothing written, and no temporary files left behind"
     );
 }
 
@@ -297,46 +334,12 @@ fn arches_of_one_version_coexist() {
     let x86 = tree(&[("bin/hello", b"x86 binary")]);
     let arm = tree(&[("bin/hello", b"arm binary")]);
     let out = tempfile::tempdir().unwrap();
-    let a = commit_as("hello", "1.0", "x86_64", x86.path(), out.path()).unwrap();
-    let b = commit_as("hello", "1.0", "aarch64", arm.path(), out.path()).unwrap();
-    assert!(a.manifest_path.exists());
-    assert!(b.manifest_path.exists());
-    assert_ne!(a.manifest_path, b.manifest_path);
-}
-
-#[test]
-fn unsafe_names_versions_and_arches_are_rejected() {
-    let input = tree(&[("a", b"a")]);
-    let out = tempfile::tempdir().unwrap();
-    for bad in [
-        "",
-        ".",
-        "..",
-        "../escape",
-        "a/b",
-        ".hidden",
-        "-flag",
-        "sp ace",
-        "Ünï",
-    ] {
-        let err = commit_as(bad, "1.0", "x86_64", input.path(), out.path()).unwrap_err();
-        assert!(
-            err.to_string().contains("invalid package name"),
-            "{bad:?}: {err:#}"
-        );
-        let err = commit_as("hello", bad, "x86_64", input.path(), out.path()).unwrap_err();
-        assert!(
-            err.to_string().contains("invalid version"),
-            "{bad:?}: {err:#}"
-        );
-        let err = commit_as("hello", "1.0", bad, input.path(), out.path()).unwrap_err();
-        assert!(err.to_string().contains("invalid arch"), "{bad:?}: {err:#}");
-    }
-    assert_eq!(
-        fs::read_dir(out.path()).unwrap().count(),
-        0,
-        "nothing written"
-    );
+    let a = pack_as("dev.peios.hello@1.0?arch=x86_64", x86.path(), out.path()).unwrap();
+    let b = pack_as("dev.peios.hello@1.0?arch=aarch64", arm.path(), out.path()).unwrap();
+    assert!(a.ref_path.exists());
+    assert!(b.ref_path.exists());
+    assert_ne!(a.ref_path, b.ref_path);
+    assert_ne!(a.identity, b.identity);
 }
 
 #[test]
@@ -352,9 +355,9 @@ fn awkward_names_are_escaped_and_parse_back() {
     let files: Vec<(&str, &[u8])> = names.iter().map(|n| (*n, n.as_bytes())).collect();
     let input = tree(&files);
     let out = tempfile::tempdir().unwrap();
-    let commit = commit(input.path(), out.path()).unwrap();
+    let packed = pack(input.path(), out.path()).unwrap();
 
-    let text = fs::read_to_string(&commit.manifest_path).unwrap();
+    let text = fs::read_to_string(&packed.manifest_path).unwrap();
     assert!(text.contains(r#""quote\"d""#));
     assert!(text.contains(r#""back\\slash""#));
     assert!(text.contains(r#""tab\u0009here""#));
@@ -362,11 +365,10 @@ fn awkward_names_are_escaped_and_parse_back() {
     assert!(text.contains(r#""del\u007F""#));
     assert!(text.contains("\"ünïcödé\""));
 
-    let manifest = parse_files(&commit.manifest_path);
+    let manifest = parse_files(&packed.manifest_path);
     for name in names {
         let blob = blob_path(out.path(), &manifest[name]);
-        let decoded = zstd::decode_all(fs::File::open(blob).unwrap()).unwrap();
-        assert_eq!(decoded, name.as_bytes());
+        assert_eq!(fs::read(blob).unwrap(), name.as_bytes());
     }
 }
 
@@ -374,12 +376,12 @@ fn awkward_names_are_escaped_and_parse_back() {
 fn empty_content_gives_empty_files_table() {
     let input = tempfile::tempdir().unwrap();
     let out = tempfile::tempdir().unwrap();
-    let commit = commit(input.path(), out.path()).unwrap();
+    let packed = pack(input.path(), out.path()).unwrap();
     assert_eq!(
-        fs::read_to_string(&commit.manifest_path).unwrap(),
-        "name = \"hello\"\nversion = \"1.0\"\narch = \"x86_64\"\n\n[files]\n"
+        fs::read_to_string(&packed.manifest_path).unwrap(),
+        "name = \"dev.peios.hello\"\nversion = \"1.0\"\narch = \"x86_64\"\n\n[files]\n"
     );
-    assert_eq!(commit.entries, 0);
+    assert_eq!(packed.entries, 0);
 }
 
 #[test]
@@ -391,8 +393,8 @@ fn only_empty_directories_are_listed() {
     std::os::unix::fs::symlink("x", input.path().join("etc/links/only-a-link")).unwrap();
     let out = tempfile::tempdir().unwrap();
 
-    let commit = commit(input.path(), out.path()).unwrap();
-    let manifest = parse_files(&commit.manifest_path);
+    let packed = pack(input.path(), out.path()).unwrap();
+    let manifest = parse_files(&packed.manifest_path);
     let paths: Vec<&String> = manifest.keys().collect();
     assert_eq!(
         paths,
@@ -412,7 +414,6 @@ fn only_empty_directories_are_listed() {
 }
 
 fn set_mode(path: &Path, mode: u32) {
-    use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
 }
 
@@ -433,9 +434,9 @@ fn any_execute_bit_marks_a_file_exec() {
         set_mode(&input.path().join(name), mode);
     }
     let out = tempfile::tempdir().unwrap();
-    let commit = commit(input.path(), out.path()).unwrap();
-    assert_eq!(commit.blobs_written, 1, "mode never affects the blob");
-    let manifest = parse_files(&commit.manifest_path);
+    let packed = pack(input.path(), out.path()).unwrap();
+    assert_eq!(packed.blobs_written, 1, "mode never affects the blob");
+    let manifest = parse_files(&packed.manifest_path);
     for (name, mode, exec) in modes {
         let recorded = manifest[name].get("exec").is_some();
         assert_eq!(recorded, exec, "{name} ({mode:o})");
@@ -446,11 +447,11 @@ fn any_execute_bit_marks_a_file_exec() {
 fn exec_bit_is_part_of_identity_but_not_of_the_blob() {
     let input = tree(&[("bin/hello", b"binary")]);
     let out = tempfile::tempdir().unwrap();
-    let plain = commit_as("hello", "1.0", "x86_64", input.path(), out.path()).unwrap();
+    let plain = pack_as("dev.peios.hello@1.0?arch=x86_64", input.path(), out.path()).unwrap();
     set_mode(&input.path().join("bin/hello"), 0o755);
-    let exec = commit_as("hello", "1.1", "x86_64", input.path(), out.path()).unwrap();
+    let exec = pack_as("dev.peios.hello@1.1?arch=x86_64", input.path(), out.path()).unwrap();
     assert_eq!(exec.blobs_written, 0);
-    assert_ne!(plain.manifest_hash, exec.manifest_hash);
+    assert_ne!(plain.identity, exec.identity);
 }
 
 #[test]
@@ -459,7 +460,7 @@ fn setuid_and_setgid_files_are_rejected() {
         let input = tree(&[("bin/su", b"x")]);
         set_mode(&input.path().join("bin/su"), mode);
         let out = tempfile::tempdir().unwrap();
-        let err = commit(input.path(), out.path()).unwrap_err();
+        let err = pack(input.path(), out.path()).unwrap_err();
         assert!(
             err.to_string()
                 .contains("setuid and setgid bits are not supported"),
@@ -479,10 +480,10 @@ fn symlink_targets_are_recorded_verbatim() {
     symlink("nowhere/at/all", lib.join("dangling")).unwrap();
     let out = tempfile::tempdir().unwrap();
 
-    let commit = commit(input.path(), out.path()).unwrap();
-    assert_eq!(commit.entries, 5);
-    assert_eq!(commit.blobs_written, 1, "symlinks have no blobs");
-    let manifest = parse_files(&commit.manifest_path);
+    let packed = pack(input.path(), out.path()).unwrap();
+    assert_eq!(packed.entries, 5);
+    assert_eq!(packed.blobs_written, 1, "symlinks have no blobs");
+    let manifest = parse_files(&packed.manifest_path);
     for (path, target) in [
         ("usr/lib/libz.so", "libz.so.1.3"),
         ("localtime", "/usr/share/zoneinfo/UTC"),
@@ -498,8 +499,8 @@ fn symlinked_directories_are_not_followed() {
     let input = tree(&[("real/file", b"x")]);
     std::os::unix::fs::symlink("real", input.path().join("alias")).unwrap();
     let out = tempfile::tempdir().unwrap();
-    let commit = commit(input.path(), out.path()).unwrap();
-    let manifest = parse_files(&commit.manifest_path);
+    let packed = pack(input.path(), out.path()).unwrap();
+    let manifest = parse_files(&packed.manifest_path);
     let paths: Vec<&String> = manifest.keys().collect();
     assert_eq!(paths, ["alias", "real/file"]);
     assert_eq!(manifest["alias"]["symlink"].as_str(), Some("real"));
@@ -511,13 +512,13 @@ fn awkward_symlink_targets_are_escaped_and_parse_back() {
     let target = "we\"ird\\tar\nget ü";
     std::os::unix::fs::symlink(target, input.path().join("link")).unwrap();
     let out = tempfile::tempdir().unwrap();
-    let commit = commit(input.path(), out.path()).unwrap();
-    let text = fs::read_to_string(&commit.manifest_path).unwrap();
+    let packed = pack(input.path(), out.path()).unwrap();
+    let text = fs::read_to_string(&packed.manifest_path).unwrap();
     assert!(
         text.contains(r#"{ symlink = "we\"ird\\tar\u000Aget ü" }"#),
         "{text}"
     );
-    let manifest = parse_files(&commit.manifest_path);
+    let manifest = parse_files(&packed.manifest_path);
     assert_eq!(manifest["link"]["symlink"].as_str(), Some(target));
 }
 
@@ -528,7 +529,7 @@ fn non_utf8_symlink_targets_are_rejected() {
     let target = std::ffi::OsStr::from_bytes(b"bad\xff");
     std::os::unix::fs::symlink(target, input.path().join("link")).unwrap();
     let out = tempfile::tempdir().unwrap();
-    let err = commit(input.path(), out.path()).unwrap_err();
+    let err = pack(input.path(), out.path()).unwrap_err();
     assert!(
         err.to_string()
             .contains("symlink target is not valid UTF-8"),
@@ -541,7 +542,7 @@ fn special_files_are_rejected() {
     let input = tempfile::tempdir().unwrap();
     let _socket = std::os::unix::net::UnixListener::bind(input.path().join("sock")).unwrap();
     let out = tempfile::tempdir().unwrap();
-    let err = commit(input.path(), out.path()).unwrap_err();
+    let err = pack(input.path(), out.path()).unwrap_err();
     assert!(err.to_string().contains("not a regular file"), "{err:#}");
 }
 
@@ -552,15 +553,15 @@ fn non_utf8_paths_are_rejected() {
     let name = std::ffi::OsStr::from_bytes(b"bad\xff");
     fs::write(input.path().join(name), b"x").unwrap();
     let out = tempfile::tempdir().unwrap();
-    let err = commit(input.path(), out.path()).unwrap_err();
+    let err = pack(input.path(), out.path()).unwrap_err();
     assert!(err.to_string().contains("not valid UTF-8"), "{err:#}");
 }
 
 #[test]
-fn output_inside_input_is_rejected() {
+fn artifact_dir_inside_input_is_rejected() {
     let input = tree(&[("a", b"a")]);
     let out = input.path().join("not/yet/created");
-    let err = commit(input.path(), &out).unwrap_err();
+    let err = pack(input.path(), &out).unwrap_err();
     assert!(err.to_string().contains("inside the input"), "{err:#}");
     assert!(!input.path().join("not").exists());
 }
@@ -569,6 +570,6 @@ fn output_inside_input_is_rejected() {
 fn input_must_be_a_directory() {
     let input = tree(&[("file", b"x")]);
     let out = tempfile::tempdir().unwrap();
-    let err = commit(&input.path().join("file"), out.path()).unwrap_err();
+    let err = pack(&input.path().join("file"), out.path()).unwrap_err();
     assert!(err.to_string().contains("not a directory"), "{err:#}");
 }

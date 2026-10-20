@@ -1,27 +1,37 @@
 //! Packing for the Peios package format.
 //!
-//! `commit` turns a directory into content-addressed blobs and a manifest:
+//! [`pack`] turns a directory into content-addressed blobs and a manifest in
+//! an artifact directory:
 //!
 //! ```text
-//! <out>/blobs/sha256/<hex>.zst
-//!     zstd-compressed file content, named by the SHA-256 of the
-//!     *uncompressed* bytes
-//! <out>/manifests/<name>/<version>/<arch>/manifest.toml
-//!     name, version, arch, and a [files] table mapping each path to an
-//!     inline table whose first key says what kind of entry it is:
-//!         "bin/hello" = { blob = "sha256:<hex>", exec = true }
-//!         "share/doc/hello/README" = { blob = "sha256:<hex>" }
-//!         "lib/libz.so" = { symlink = "libz.so.1" }
-//!         "var/lib/hello" = { dir = true }
+//! <artifact-dir>/blobs/sha256/<hex>
+//!     file content, uncompressed, named by its SHA-256
+//! <artifact-dir>/manifests/sha256/<hex>
+//!     a manifest, named by the SHA-256 of its bytes
+//! <artifact-dir>/refs/<name>/<version>/<arch>
+//!     "sha256:<hex>\n": which manifest that package is
+//! ```
+//!
+//! A manifest records name, version, arch, and a [files] table mapping each
+//! path to an inline table whose first key says what kind of entry it is:
+//!
+//! ```text
+//! "bin/hello" = { blob = "sha256:<hex>", exec = true }
+//! "share/doc/hello/README" = { blob = "sha256:<hex>" }
+//! "lib/libz.so" = { symlink = "libz.so.1" }
+//! "var/lib/hello" = { dir = true }
 //! ```
 //!
 //! The manifest is emitted by hand rather than through a TOML serializer so
 //! that its bytes are canonical: the same input tree always produces the same
-//! manifest, and so the same manifest hash.
+//! manifest, and so the same hash. That hash is the package's identity.
 //!
 //! The name, version and arch are written into the manifest as well as its
-//! path. The path is only where it is filed; a signature covers the
-//! manifest's bytes, so those bytes must say which package they are.
+//! ref. The ref is only an index, rebuildable from the manifests; a signature
+//! will cover the manifest's bytes, so those bytes must say which package
+//! they are.
+
+mod id;
 
 use std::fmt::Write as _;
 use std::fs::{self, File, Permissions};
@@ -32,29 +42,27 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
-/// The hash algorithm, as it appears in blob paths and manifest values.
+pub use id::{HOST_ARCH, PackageId};
+
+/// The hash algorithm, as it appears in artifact paths and manifest values.
 pub const ALGORITHM: &str = "sha256";
 
-/// Compression level for blobs. Packing happens once and the result is
-/// fetched many times, so favour size over speed. The level does not affect
-/// identity: blobs are named by the hash of their uncompressed content.
-const ZSTD_LEVEL: i32 = 19;
+/// Where packages are stored unless told otherwise.
+pub const DEFAULT_ARTIFACT_DIR: &str = "/system/artifacts";
 
-/// Which package a commit is: the manifest's name, version and architecture.
-#[derive(Debug, Clone, Copy)]
-pub struct Package<'a> {
-    pub name: &'a str,
-    pub version: &'a str,
-    pub arch: &'a str,
-}
+/// Everything in the artifact directory is immutable once written: content
+/// is named by its hash, and a ref is never replaced.
+const ARTIFACT_MODE: u32 = 0o444;
 
-/// The result of a successful commit.
+/// The result of a successful pack.
 #[derive(Debug)]
-pub struct Commit {
+pub struct Packed {
+    /// The package's identity: `sha256:<hex>` of the manifest's bytes.
+    pub identity: String,
     /// Where the manifest was written.
     pub manifest_path: PathBuf,
-    /// The package's identity: `sha256:<hex>` of the manifest's bytes.
-    pub manifest_hash: String,
+    /// Where the ref naming the manifest was written.
+    pub ref_path: PathBuf,
     /// Number of entries recorded in the manifest.
     pub entries: usize,
     /// Number of blobs written; files whose blob already existed are not counted.
@@ -83,7 +91,7 @@ enum Found {
     Dir,
 }
 
-/// Commit the content directory `input` into `out` as `pkg`.
+/// Pack the content directory `input` into `artifact_dir` as `id`.
 ///
 /// Regular files, symlinks and directories are supported. Symlinks are
 /// recorded, never followed; empty directories are recorded; of a file's mode
@@ -91,17 +99,11 @@ enum Found {
 /// and paths or symlink targets that are not valid UTF-8 are errors rather
 /// than being skipped.
 ///
-/// A committed package is immutable: committing the same name, version and
-/// arch again succeeds only if it produces the identical manifest.
-pub fn commit(pkg: &Package, input: &Path, out: &Path) -> Result<Commit> {
-    let Package {
-        name,
-        version,
-        arch,
-    } = *pkg;
-    check_component("package name", name)?;
-    check_component("version", version)?;
-    check_component("arch", arch)?;
+/// A packed package is immutable: packing the same name, version and arch
+/// again succeeds only if it produces the identical manifest. Blobs are
+/// written first, then the manifest, then the ref, so a ref never names a
+/// manifest that is missing or incomplete.
+pub fn pack(id: &PackageId, input: &Path, artifact_dir: &Path) -> Result<Packed> {
     if !fs::metadata(input)
         .with_context(|| format!("{}", input.display()))?
         .is_dir()
@@ -109,10 +111,10 @@ pub fn commit(pkg: &Package, input: &Path, out: &Path) -> Result<Commit> {
         bail!("{}: not a directory", input.display());
     }
     let input_real = fs::canonicalize(input).with_context(|| format!("{}", input.display()))?;
-    if resolve(out)?.starts_with(&input_real) {
+    if resolve(artifact_dir)?.starts_with(&input_real) {
         bail!(
-            "output directory {} is inside the input directory {}",
-            out.display(),
+            "{}: artifact directory is inside the input directory {}",
+            artifact_dir.display(),
             input.display()
         );
     }
@@ -121,20 +123,15 @@ pub fn commit(pkg: &Package, input: &Path, out: &Path) -> Result<Commit> {
     walk(input, input, &mut found)?;
     found.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
 
-    let blob_dir = out.join("blobs").join(ALGORITHM);
-    fs::create_dir_all(&blob_dir).with_context(|| format!("{}", blob_dir.display()))?;
-
+    // Hash everything before writing anything, so that a refused pack leaves
+    // the artifact directory untouched.
     let mut entries = Vec::with_capacity(found.len());
-    let mut blobs_written = 0;
+    let mut sources = Vec::new();
     for (rel, item) in found {
         let entry = match item {
             Found::File { path, exec } => {
                 let hex = hash_file(&path)?;
-                let blob = blob_dir.join(format!("{hex}.zst"));
-                if !blob.exists() {
-                    write_blob(&path, &hex, &blob_dir, &blob)?;
-                    blobs_written += 1;
-                }
+                sources.push((hex.clone(), path));
                 Entry::Blob { hex, exec }
             }
             Found::Symlink(target) => Entry::Symlink(target),
@@ -143,42 +140,49 @@ pub fn commit(pkg: &Package, input: &Path, out: &Path) -> Result<Commit> {
         entries.push((rel, entry));
     }
 
-    let manifest = render_manifest(pkg, &entries);
-    let manifest_hash = format!("{ALGORITHM}:{:x}", Sha256::digest(manifest.as_bytes()));
-    let manifest_dir = out.join("manifests").join(name).join(version).join(arch);
-    fs::create_dir_all(&manifest_dir).with_context(|| format!("{}", manifest_dir.display()))?;
-    let manifest_path = manifest_dir.join("manifest.toml");
-    if !write_new(&manifest_dir, &manifest_path, manifest.as_bytes())? {
-        bail!(
-            "{name} {version} {arch} is already committed with different contents ({}); \
-             a committed package cannot be replaced",
-            manifest_path.display()
-        );
+    let manifest = render_manifest(id, &entries);
+    let hex = format!("{:x}", Sha256::digest(manifest.as_bytes()));
+    let identity = format!("{ALGORITHM}:{hex}");
+
+    let ref_dir = artifact_dir.join("refs").join(id.name()).join(id.version());
+    let ref_path = ref_dir.join(id.arch());
+    // The ref write at the end still refuses to replace a ref that appears
+    // after this check.
+    if let Some(existing) = read_ref(&ref_path)?.filter(|existing| *existing != identity) {
+        bail!("{id}: already packed as {existing}; a packed version cannot be replaced");
     }
 
-    Ok(Commit {
+    let blob_dir = artifact_dir.join("blobs").join(ALGORITHM);
+    fs::create_dir_all(&blob_dir).with_context(|| format!("{}", blob_dir.display()))?;
+    let mut blobs_written = 0;
+    for (hex, path) in &sources {
+        let blob = blob_dir.join(hex);
+        if !blob.exists() {
+            write_blob(path, hex, &blob_dir, &blob)?;
+            blobs_written += 1;
+        }
+    }
+
+    let manifest_dir = artifact_dir.join("manifests").join(ALGORITHM);
+    fs::create_dir_all(&manifest_dir).with_context(|| format!("{}", manifest_dir.display()))?;
+    let manifest_path = manifest_dir.join(&hex);
+    if !write_new(&manifest_dir, &manifest_path, manifest.as_bytes())? {
+        bail!("{}: does not match its hash", manifest_path.display());
+    }
+
+    fs::create_dir_all(&ref_dir).with_context(|| format!("{}", ref_dir.display()))?;
+    if !write_new(&ref_dir, &ref_path, format!("{identity}\n").as_bytes())? {
+        let existing = read_ref(&ref_path)?.unwrap_or_default();
+        bail!("{id}: already packed as {existing}; a packed version cannot be replaced");
+    }
+
+    Ok(Packed {
+        identity,
         manifest_path,
-        manifest_hash,
+        ref_path,
         entries: entries.len(),
         blobs_written,
     })
-}
-
-/// Names, versions and arches become path components, so until their syntax
-/// is designed they are limited to a conservative set that cannot escape the
-/// output directory: ASCII letters, digits and `. _ + - ~`, starting with a
-/// letter or digit.
-fn check_component(what: &str, s: &str) -> Result<()> {
-    let valid = s.starts_with(|c: char| c.is_ascii_alphanumeric())
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || "._+-~".contains(c));
-    if !valid {
-        bail!(
-            "invalid {what} {s:?}: use ASCII letters, digits and . _ + - ~, \
-             starting with a letter or digit"
-        );
-    }
-    Ok(())
 }
 
 /// Render the manifest for `entries`, which must already be sorted by path.
@@ -186,11 +190,11 @@ fn check_component(what: &str, s: &str) -> Result<()> {
 /// Every entry is an inline table with single spaces inside the braces and
 /// around `=`, keys in a fixed order, and `exec` written only when true, so
 /// each entry has exactly one spelling.
-pub fn render_manifest<P: AsRef<str>>(pkg: &Package, entries: &[(P, Entry)]) -> String {
+pub fn render_manifest<P: AsRef<str>>(id: &PackageId, entries: &[(P, Entry)]) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "name = {}", toml_string(pkg.name));
-    let _ = writeln!(out, "version = {}", toml_string(pkg.version));
-    let _ = writeln!(out, "arch = {}", toml_string(pkg.arch));
+    let _ = writeln!(out, "name = {}", toml_string(id.name()));
+    let _ = writeln!(out, "version = {}", toml_string(id.version()));
+    let _ = writeln!(out, "arch = {}", toml_string(id.arch()));
     out.push_str("\n[files]\n");
     for (path, entry) in entries {
         let value = match entry {
@@ -224,6 +228,15 @@ fn toml_string(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+/// The identity a ref names, or `None` if there is no ref at `path`.
+fn read_ref(path: &Path) -> Result<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents.trim_end().to_owned())),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err).with_context(|| format!("{}", path.display())),
+    }
 }
 
 /// Collect every regular file, symlink and empty directory under `dir`, keyed
@@ -298,38 +311,20 @@ fn hash_file(path: &Path) -> Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-/// Compress `path` into `blob`, checking that the content still hashes to
-/// `hex` so a file modified mid-commit cannot be stored under the wrong name.
+/// Copy `path` into `blob`, checking that the content still hashes to `hex`
+/// so a file modified mid-pack cannot be stored under the wrong name.
 fn write_blob(path: &Path, hex: &str, blob_dir: &Path, blob: &Path) -> Result<()> {
     let file = File::open(path).with_context(|| format!("{}", path.display()))?;
-    let len = file
-        .metadata()
-        .with_context(|| format!("{}", path.display()))?
-        .len();
     let mut reader = HashingReader {
         inner: file,
         hasher: Sha256::new(),
     };
     let mut tmp = new_temp(blob_dir)?;
-    compress(&mut reader, &mut tmp, len)
-        .with_context(|| format!("compressing {}", path.display()))?;
+    io::copy(&mut reader, &mut tmp).with_context(|| format!("{}", path.display()))?;
     if format!("{:x}", reader.hasher.finalize()) != hex {
-        bail!("{}: file changed while being committed", path.display());
+        bail!("{}: file changed while being packed", path.display());
     }
     persist(tmp, blob)
-}
-
-/// zstd-compress exactly `len` bytes from `reader` into `writer`.
-///
-/// Declaring the size up front lets zstd size its window and tables to the
-/// input; without it every small file pays for level 19's full tables.
-fn compress(reader: &mut impl Read, writer: &mut impl Write, len: u64) -> io::Result<()> {
-    let mut encoder = zstd::stream::Encoder::new(writer, ZSTD_LEVEL)?;
-    encoder.set_pledged_src_size(Some(len))?;
-    encoder.include_contentsize(true)?;
-    io::copy(reader, &mut encoder)?;
-    encoder.finish()?;
-    Ok(())
 }
 
 /// Create `dest` holding `bytes`, via a temporary file in `dir` so readers
@@ -349,12 +344,14 @@ fn write_new(dir: &Path, dest: &Path, bytes: &[u8]) -> Result<bool> {
     }
 }
 
+/// A temporary file in `dir`, already read-only by mode. The handle returned
+/// stays writable, because access is checked when the file is opened.
 fn new_temp(dir: &Path) -> Result<tempfile::NamedTempFile> {
     tempfile::Builder::new()
         .prefix(".tmp-")
-        .permissions(Permissions::from_mode(0o644))
+        .permissions(Permissions::from_mode(ARTIFACT_MODE))
         .tempfile_in(dir)
-        .with_context(|| format!("creating temporary file in {}", dir.display()))
+        .with_context(|| format!("{}: cannot create a temporary file", dir.display()))
 }
 
 fn persist(tmp: tempfile::NamedTempFile, dest: &Path) -> Result<()> {
@@ -362,6 +359,7 @@ fn persist(tmp: tempfile::NamedTempFile, dest: &Path) -> Result<()> {
         .sync_all()
         .with_context(|| format!("{}", dest.display()))?;
     tmp.persist(dest)
+        .map_err(|err| err.error)
         .with_context(|| format!("{}", dest.display()))?;
     Ok(())
 }

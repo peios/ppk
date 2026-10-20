@@ -1,0 +1,166 @@
+use std::fs;
+use std::path::Path;
+use std::process::{Command, Output};
+
+fn ppk(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_ppk"))
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+fn stdout(output: &Output) -> String {
+    String::from_utf8(output.stdout.clone()).unwrap()
+}
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8(output.stderr.clone()).unwrap()
+}
+
+fn content_dir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("bin")).unwrap();
+    fs::write(dir.path().join("bin/hello"), b"binary").unwrap();
+    dir
+}
+
+fn path(p: &Path) -> &str {
+    p.to_str().unwrap()
+}
+
+#[test]
+fn pack_prints_the_identity_and_writes_the_ref() {
+    let content = content_dir();
+    let store = tempfile::tempdir().unwrap();
+    let output = ppk(&[
+        "pack",
+        "dev.peios.hello@1.0?arch=noarch",
+        path(content.path()),
+        "--artifact-dir",
+        path(store.path()),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(stderr(&output), "");
+    let identity = stdout(&output);
+    assert!(
+        identity.starts_with("sha256:") && identity.ends_with('\n'),
+        "{identity}"
+    );
+    let ref_path = store.path().join("refs/dev.peios.hello/1.0/noarch");
+    assert_eq!(fs::read_to_string(ref_path).unwrap(), identity);
+}
+
+#[test]
+fn malformed_package_is_a_usage_error() {
+    let content = content_dir();
+    let output = ppk(&["pack", "dev.peios.hello", path(content.path())]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        stderr(&output),
+        "ppk: dev.peios.hello: missing '@<version>'\n\
+         Try 'ppk --help' for more information.\n"
+    );
+}
+
+#[test]
+fn unknown_option_is_a_usage_error() {
+    let output = ppk(&["pack", "--jsno"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        stderr(&output),
+        "ppk: unknown option '--jsno'\nTry 'ppk --help' for more information.\n"
+    );
+}
+
+#[test]
+fn missing_path_is_a_usage_error() {
+    let output = ppk(&["pack", "dev.peios.hello@1.0"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        stderr(&output),
+        "ppk: missing argument <path>\nTry 'ppk --help' for more information.\n"
+    );
+}
+
+#[test]
+fn no_arguments_prints_help_to_stderr() {
+    let output = ppk(&[]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(stdout(&output), "");
+    assert!(stderr(&output).starts_with("Build and manage Peios packages\n"));
+}
+
+#[test]
+fn help_and_version_go_to_stdout() {
+    let help = ppk(&["--help"]);
+    assert_eq!(help.status.code(), Some(0));
+    assert!(stdout(&help).contains("pack"), "{}", stdout(&help));
+
+    let pack_help = ppk(&["pack", "--help"]);
+    assert_eq!(pack_help.status.code(), Some(0));
+    let text = stdout(&pack_help);
+    assert!(
+        text.contains("Usage: ppk pack [options] <package> <path>"),
+        "{text}"
+    );
+    let short_help = ppk(&["pack", "-h"]);
+    assert_eq!(
+        stdout(&short_help),
+        text,
+        "-h and --help print the same text"
+    );
+    assert!(
+        text.contains(&format!("(default: {})", ppk::DEFAULT_ARTIFACT_DIR)),
+        "{text}"
+    );
+
+    let version = ppk(&["--version"]);
+    assert_eq!(version.status.code(), Some(0));
+    assert_eq!(
+        stdout(&version),
+        format!("ppk {}\n", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[test]
+fn failure_is_one_line_without_an_os_error_number() {
+    let store = tempfile::tempdir().unwrap();
+    let missing = store.path().join("missing");
+    let output = ppk(&[
+        "pack",
+        "dev.peios.hello@1.0",
+        path(&missing),
+        "--artifact-dir",
+        path(store.path()),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        stderr(&output),
+        format!("ppk: {}: No such file or directory\n", missing.display())
+    );
+}
+
+#[test]
+fn replacing_a_packed_version_fails() {
+    let store = tempfile::tempdir().unwrap();
+    let pack = |content: &Path| {
+        ppk(&[
+            "pack",
+            "dev.peios.hello@1.0?arch=noarch",
+            path(content),
+            "--artifact-dir",
+            path(store.path()),
+        ])
+    };
+    let content = content_dir();
+    assert_eq!(pack(content.path()).status.code(), Some(0));
+    fs::write(content.path().join("bin/hello"), b"changed").unwrap();
+    let output = pack(content.path());
+    assert_eq!(output.status.code(), Some(1));
+    let message = stderr(&output);
+    assert!(
+        message.starts_with("ppk: dev.peios.hello@1.0?arch=noarch: already packed as sha256:"),
+        "{message}"
+    );
+    assert_eq!(message.lines().count(), 1, "{message}");
+}

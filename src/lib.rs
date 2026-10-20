@@ -33,6 +33,7 @@
 //! will cover the manifest's bytes, so those bytes must say which package
 //! they are.
 
+mod closure;
 mod fetch;
 mod id;
 mod identity;
@@ -40,6 +41,7 @@ mod manifest;
 mod pack;
 mod store;
 
+pub use closure::{Closed, closure};
 pub use fetch::{Fetched, fetch};
 pub use id::{HOST_ARCH, PackageId};
 pub use identity::Identity;
@@ -51,3 +53,7 @@ pub const ALGORITHM: &str = "sha256";
 
 /// Where packages are stored unless told otherwise.
 pub const DEFAULT_ARTIFACT_DIR: &str = "/system/artifacts";
+
+/// Where closures are built unless told otherwise: this directory inside the
+/// artifact directory, so that they are on the same filesystem as its blobs.
+pub const CLOSURE_SUBDIR: &str = "closures";

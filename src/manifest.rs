@@ -136,7 +136,7 @@ fn check_path(path: &str) -> Result<()> {
 /// Quote `s` as a TOML basic string in one fixed spelling: `"` and `\` are
 /// backslash-escaped, every control character is written as `\uXXXX`, and
 /// everything else is literal UTF-8.
-fn toml_string(s: &str) -> String {
+pub(crate) fn toml_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {

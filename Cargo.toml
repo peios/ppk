@@ -6,7 +6,7 @@ description = "Peios package tool"
 
 [dependencies]
 anyhow = "1.0"
-clap = { version = "4.6", features = ["derive"] }
+clap = { version = "4.6", features = ["derive", "wrap_help"] }
 sha2 = "0.10"
 tempfile = "3.23"
 toml = "0.8"

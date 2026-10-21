@@ -146,18 +146,6 @@ fn compose_env_needs_an_output_directory_and_well_formed_extras() {
             ],
             "\"usr/x\": inside usr, which the packages provide",
         ),
-        (
-            vec![
-                "compose-env",
-                "-p",
-                "dev.peios.hello@1.0",
-                "--out",
-                "o",
-                "--include-artifacts",
-                "--copy-artifacts",
-            ],
-            "the argument '--include-artifacts' cannot be used with '--copy-artifacts'",
-        ),
     ] {
         let output = ppk(&args);
         assert_eq!(output.status.code(), Some(2), "{args:?}");
@@ -277,6 +265,52 @@ fn compose_env_composes_a_profile_and_what_the_options_add() {
             arch = ppk::HOST_ARCH
         )
     );
+}
+
+#[test]
+fn a_profile_can_include_its_artifacts_and_copying_wins() {
+    use std::os::unix::fs::MetadataExt;
+
+    let store = tempfile::tempdir().unwrap();
+    let artifacts = store.path().join("artifacts");
+    pack_one("dev.peios.hello@1.0", "hello", &artifacts);
+    let profile = store.path().join("env.toml");
+    fs::write(
+        &profile,
+        "include_artifacts = true\n\n[packages]\n\"dev.peios.hello\" = \"1.0\"\n",
+    )
+    .unwrap();
+    // The links to the one blob, which hardlinking adds to.
+    let blob = fs::read_dir(artifacts.join("blobs/sha256"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let links = || fs::metadata(&blob).unwrap().nlink();
+    let compose = |out: &str, extra: &[&str]| {
+        let out = store.path().join(out);
+        let mut args = vec![
+            "compose-env",
+            path(&profile),
+            "--artifact-dir",
+            path(&artifacts),
+            "--out",
+            path(&out),
+        ];
+        args.extend(extra);
+        let output = ppk(&args);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        assert!(out.join("system/artifacts/refs/dev.peios.hello").is_dir());
+    };
+
+    let before = links();
+    compose("included", &[]);
+    assert!(links() > before, "the profile's artifacts are hardlinked");
+    let included = links();
+    // Copying is a way of including, so it wins rather than conflicts.
+    compose("copied", &["--include-artifacts", "--copy-artifacts"]);
+    assert_eq!(links(), included, "the copy shares nothing with the source");
 }
 
 #[test]

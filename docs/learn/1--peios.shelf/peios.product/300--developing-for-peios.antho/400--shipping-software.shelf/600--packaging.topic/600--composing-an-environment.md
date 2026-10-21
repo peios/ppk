@@ -75,12 +75,14 @@ needs comes from the profile or the command line:
   `"bin" = ":bin"` and `bin::bin` both link `bin` to `usr/bin`.
 - An empty directory, such as a mount point, from the profile's `dirs` or
   `--dir <path>`.
-- `--include-artifacts` gives the root its own artifact directory,
-  `system/artifacts`, holding the packages themselves as hard links, so
-  that `ppk` inside the environment finds them.
+- The packages themselves, from the profile's `include_artifacts = true`
+  or `--include-artifacts`, in the root's own artifact directory,
+  `system/artifacts`, as hard links, so that `ppk` inside the environment
+  finds them.
 - `--copy-artifacts` does the same with copies, checking every manifest and
-  blob as `ppk fetch` does. Use it to compose a root on another filesystem
-  than the artifact directory, such as a fresh tmpfs.
+  blob as `ppk fetch` does, and wins over hard links. Use it to compose a
+  root on another filesystem than the artifact directory, such as a fresh
+  tmpfs.
 
 Paths are relative to the root. The options add to what the profile
 gives:

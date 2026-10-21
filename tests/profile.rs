@@ -53,6 +53,12 @@ fn every_key_is_optional_and_arch_applies_to_every_package() {
     assert_eq!(Profile::parse("").unwrap(), Profile::default());
     let profile = Profile::parse("arch = \"aarch64\"\n[packages]\n\"a.b.c\" = \"1\"\n").unwrap();
     assert_eq!(profile.packages, [id("a.b.c@1?arch=aarch64")]);
+    assert!(!profile.include_artifacts);
+    assert!(
+        Profile::parse("include_artifacts = true")
+            .unwrap()
+            .include_artifacts
+    );
 }
 
 #[test]
@@ -79,6 +85,10 @@ fn a_malformed_profile_is_refused() {
             "symlinks: \"init\" has no target",
         ),
         ("arch = 1", "arch is not a string"),
+        (
+            "include_artifacts = \"yes\"",
+            "include_artifacts is not true or false",
+        ),
         ("[packages", "not valid TOML"),
     ] {
         let found = error(text);

@@ -3,29 +3,64 @@
 # provides = ["rootfs-ready"]
 # ///
 #
-# Live boot: compose the system's root, as the environment profile
-# /system/live.toml describes it, from packages in the initramfs's store, on
-# a fresh tmpfs, and offer it to prelude at /mnt/rootfs.
+# Live boot: find the medium this initramfs was built for, compose the
+# system's root from the environment profile and packages it holds, on a
+# fresh tmpfs, and offer the root to prelude at /mnt/rootfs.
 #
-# The root lives on its own tmpfs because prelude deletes what is left on
-# the initramfs's filesystem once it hands over; --copy-artifacts gives it a
-# store of its own there.
+# The initramfs names its medium in /system/medium. The medium holds the
+# same identifier in /peios-medium, beside the live system's profile,
+# /live.toml, and its store, /artifacts. It is found by trying each disk,
+# disc and stick with an ISO9660 filesystem, so that it boots however it
+# is attached, and the identifier keeps another Peios medium attached
+# alongside from being taken for it. The root lives on its own tmpfs
+# because prelude deletes what is left on the initramfs's filesystem once
+# it hands over; --copy-artifacts gives it a store of its own there, so
+# the medium is unmounted afterwards.
 
 . /usr/libexec/prelude/hook-log.sh
 hook_log_init ppk-live-root
 
-profile=/system/live.toml
+medium=/mnt/medium
 live=/mnt/live
 rootfs=/mnt/rootfs
+# Seconds to wait for the medium, which on a USB stick can appear well
+# into boot.
+wait=10
 
-if [ ! -f "$profile" ]; then
+if ! read -r want </system/medium; then
     # This hook is the image's root strategy, so a missing input is a
     # failure, not a reason to decline.
-    log_fail "no live system profile at $profile"
+    log_fail "no medium named in /system/medium"
     exit 1
 fi
 
-log "composing the system root from $profile"
+# Mounts the medium named $want at $medium, trying each block device that
+# might hold it. Fails if none does.
+find_medium() {
+    for dev in /dev/sr* /dev/sd* /dev/vd* /dev/nvme*n* /dev/mmcblk*; do
+        [ -b "$dev" ] || continue
+        mount -t iso9660 -o ro "$dev" "$medium" 2>/dev/null || continue
+        if read -r found <"$medium/peios-medium" && [ "$found" = "$want" ]; then
+            log "found the medium on $dev"
+            return 0
+        fi
+        umount "$medium"
+    done 2>/dev/null
+    return 1
+}
+
+mkdir -p "$medium" || exit 1
+waited=0
+until find_medium; do
+    if [ "$waited" -ge "$wait" ]; then
+        log_fail "medium $want not found"
+        exit 1
+    fi
+    sleep 1
+    waited=$((waited + 1))
+done
+
+log "composing the system root from the medium"
 mkdir -p "$live" || exit 1
 mount -t tmpfs tmpfs "$live" || exit 1
 # A tmpfs has no security descriptor until its mounter gives it one, and
@@ -33,7 +68,8 @@ mount -t tmpfs tmpfs "$live" || exit 1
 seed-sd "$live" || exit 1
 # prelude moves /proc, /sys and /dev into the new root, so the root has
 # them whatever the profile says.
-ppk compose-env "$profile" --out "$live/root" --copy-artifacts \
-    --dir proc --dir sys --dir dev >/dev/null || exit 1
+ppk compose-env "$medium/live.toml" --artifact-dir "$medium/artifacts" --out "$live/root" \
+    --copy-artifacts --dir proc --dir sys --dir dev >/dev/null || exit 1
+umount "$medium" || exit 1
 mount --bind "$live/root" "$rootfs" || exit 1
 log_ok "system root composed at $rootfs"

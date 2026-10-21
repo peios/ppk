@@ -119,10 +119,10 @@ trap 'rm -rf -- "$work"' EXIT HUP INT TERM
 PEIOS_SDK=$sdk "$pekit" package --workspace "$pkgs" --artifact-dir "$work/artifacts" \
     net.busybox.busybox dev.peios.ppk dev.peios.prelude dev.peios.live-root >/dev/null
 
-# The live system is busybox and ppk. The initramfs adds prelude, its
-# init, and the hook that composes the live system; peiso puts the live
-# system's packages there too, for the hook to compose it from. rd.shell
-# makes prelude open its recovery shell if boot fails.
+# The live system is busybox and ppk. The initramfs holds them too, for
+# the hook that composes the live system from the ISO, which runs them,
+# with prelude, its init, and the hook itself. rd.shell makes prelude open
+# its recovery shell if boot fails.
 cat >"$work/spec.toml" <<EOF
 disable_default_repos = true
 
@@ -135,9 +135,11 @@ cmdline = "console=ttyS0 panic=-1 quiet rd.shell"
 
 [[package]]
 name = "net.busybox.busybox"
+initramfs = true
 
 [[package]]
 name = "dev.peios.ppk"
+initramfs = true
 
 [[package]]
 name = "dev.peios.prelude"

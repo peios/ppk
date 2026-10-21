@@ -1,0 +1,112 @@
+#!/bin/bash
+# Boot a Peios kernel with a busybox shell and ppk on its serial console, for
+# trying ppk by hand. The guest is a throwaway: nothing in it survives.
+set -euo pipefail
+
+readonly MUSL_TARGET=x86_64-unknown-linux-musl
+readonly DEFAULT_KERNEL_RELEASE=7.0.9-peios-0.21.0-alpha11
+readonly DEFAULT_KERNEL="$HOME/.cache/provium/builds/peinit/image/root/usr/lib/modules/$DEFAULT_KERNEL_RELEASE/vmlinuz-$DEFAULT_KERNEL_RELEASE"
+
+usage() {
+    cat <<'EOF'
+Boot a Peios kernel with a busybox shell and ppk
+
+Usage: tools/vm-shell [options]
+
+Options:
+  --kernel <file>  Boot this kernel (default: $PPK_VM_KERNEL, or the cached
+                   full-system test image's kernel)
+  --memory <size>  Give the guest this much memory (default: 1G)
+  -h, --help       Print help
+
+Exit the shell to power the guest off, or press Ctrl-A then X.
+EOF
+}
+
+usage_error() {
+    echo "vm-shell: $1" >&2
+    echo "Try 'tools/vm-shell --help' for more information." >&2
+    exit 2
+}
+
+fail() {
+    echo "vm-shell: $1" >&2
+    exit 1
+}
+
+kernel=${PPK_VM_KERNEL:-$DEFAULT_KERNEL}
+memory=1G
+while (($#)); do
+    case $1 in
+        --kernel)
+            (($# >= 2)) || usage_error "missing argument for '--kernel'"
+            kernel=$2
+            shift 2
+            ;;
+        --memory)
+            (($# >= 2)) || usage_error "missing argument for '--memory'"
+            memory=$2
+            shift 2
+            ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *)
+            usage_error "unknown option '$1'"
+            ;;
+    esac
+done
+
+[[ -f $kernel ]] || fail "$kernel: No such file"
+busybox=$(command -v busybox) || fail "busybox: not found on PATH"
+# The guest has no libraries, so busybox must be statically linked.
+if ldd "$busybox" >/dev/null 2>&1; then
+    fail "$busybox: not statically linked"
+fi
+
+repo=$(cd -- "$(dirname -- "$0")/.." && pwd)
+cargo build --quiet --release --target "$MUSL_TARGET" --manifest-path "$repo/Cargo.toml"
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/ppk-vm-shell.XXXXXXXX")
+trap 'rm -rf -- "$work"' EXIT HUP INT TERM
+
+root=$work/root
+mkdir -p -- "$root"/{bin,dev,proc,sys,tmp} "$root/demo/busybox/bin"
+cp -- "$busybox" "$root/bin/busybox"
+ln -s busybox "$root/bin/sh"
+cp -- "$repo/target/$MUSL_TARGET/release/ppk" "$root/bin/ppk"
+# A directory to pack straight away.
+cp -- "$busybox" "$root/demo/busybox/bin/busybox"
+
+cat >"$root/init" <<'INIT'
+#!/bin/sh
+/bin/busybox --install -s /bin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mount -t tmpfs tmpfs /tmp
+cat <<'HINT'
+
+ppk is /bin/ppk, and /demo/busybox is a directory to pack. Try:
+
+  ppk pack dev.peios.busybox@1.0 /demo/busybox --artifact-dir /artifacts
+  ppk closure dev.peios.busybox@1.0 --artifact-dir /artifacts
+
+Exit the shell to power off.
+
+HINT
+setsid cttyhack sh
+poweroff -f
+INIT
+chmod 755 -- "$root/init"
+
+(cd -- "$root" && find . -print0 | cpio --null --create --format=newc --owner=0:0 --quiet) |
+    gzip -1 >"$work/initramfs.cpio.gz"
+
+qemu-system-x86_64 \
+    -enable-kvm -cpu host -m "$memory" \
+    -nographic -no-reboot \
+    -kernel "$kernel" \
+    -initrd "$work/initramfs.cpio.gz" \
+    -append "console=ttyS0 rdinit=/init panic=-1 quiet"

@@ -36,31 +36,41 @@ Add `--json` to see each test's `t:log` output.
 
 ## An interactive shell
 
-`tools/vm-shell` boots the same kernel straight into a `ppk` environment,
-with a busybox shell on the serial console, so you can try commands by hand:
+`tools/vm-shell` boots the same kernel with an initramfs built from a `ppk`
+closure, and a busybox shell on the serial console, so you can try commands
+by hand:
 
 ```sh
 tools/vm-shell
 ```
 
-It builds the static `ppk`, packs the host's busybox on the host as
-`dev.peios.busybox@<version>`, with a link for each applet, and starts QEMU
-in the terminal. The initramfs holds only `/system/bin/ppk`, the artifact
-directory `/system/artifacts` and an empty `/usr`. The kernel starts `ppk`
-as PID 1 with `run dev.peios.busybox@<version>` and no command, so `ppk`
-builds the closure and replaces itself with the closure's `/usr/bin/sh`.
+On the host, it builds the static `ppk` and packs it and the host's busybox
+as `dev.peios.ppk@<version>` and `dev.peios.busybox@<version>`, with a link
+for each busybox applet. It composes their closure and lays the closure out
+as the image's `/usr`. The image adds the rest of the root:
 
-Nothing in the guest mounts `/proc`, `/sys` or `/dev`, and the shell has no
-controlling terminal, so <kbd>Ctrl</kbd>+<kbd>C</kbd> does nothing. Run
+- `/init`, a link to busybox's `init`;
+- `/bin`, a link to `usr/bin`, because busybox's `init` starts `/bin/sh`;
+- empty `/proc`, `/sys` and `/tmp`;
+- `/system/artifacts`, holding the two packages.
+
+`mkirf` from the `peiosutils` repository beside `ppk` turns that tree into
+the initramfs; pass `--mkirf` to use another. QEMU then starts in the
+terminal.
+
+busybox's `init` is scaffolding until prelude takes its place. With no
+`/etc/inittab`, it complains that `/etc/init.d/rcS` is missing, then offers
+a shell on the console when you press <kbd>Enter</kbd>, and a new one when
+that shell exits. Nothing mounts `/proc`, `/sys` or `/dev`. Run
 `poweroff -f` to power the guest off, or press <kbd>Ctrl</kbd>+<kbd>A</kbd>
-then <kbd>X</kbd>; exiting the shell ends PID 1, which panics the kernel and
-also ends QEMU. Nothing in the guest survives. Pass `--kernel` or set
+then <kbd>X</kbd>. Nothing in the guest survives. Pass `--kernel` or set
 `PPK_VM_KERNEL` to boot another kernel; `--help` lists the options.
 
 The shell runs as SYSTEM on `rootfs`, so every access check passes for it.
 The store has no descriptors of its own, because it was packed on the host
-and cpio doesn't carry extended attributes; its files inherit `rootfs`'s
-SYSTEM-only one. To see what an ordinary user can do, use the VM tests.
+and the archive doesn't carry extended attributes; its files inherit
+`rootfs`'s SYSTEM-only one. To see what an ordinary user can do, use the VM
+tests.
 
 ### What the tests do and don't show
 

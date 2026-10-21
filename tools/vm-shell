@@ -1,8 +1,8 @@
 #!/bin/bash
-# Boot a Peios kernel straight into a ppk environment, for trying ppk by
-# hand. The guest holds ppk and an artifact directory with busybox packed in
-# it, and nothing else: ppk is PID 1, and runs busybox's shell with the
-# busybox package at /usr. The guest is a throwaway: nothing in it survives.
+# Boot a Peios kernel with an initramfs built from a ppk closure, for trying
+# ppk by hand. The host packs busybox and ppk, composes their closure, lays
+# it out as the image's /usr, and has mkirf turn that into the initramfs.
+# The guest is a throwaway: nothing in it survives.
 set -euo pipefail
 
 readonly MUSL_TARGET=x86_64-unknown-linux-musl
@@ -11,13 +11,15 @@ readonly DEFAULT_KERNEL="$HOME/.cache/provium/builds/peinit/image/root/usr/lib/m
 
 usage() {
     cat <<'EOF'
-Boot a Peios kernel into a busybox shell that ppk runs as PID 1
+Boot a Peios kernel with an initramfs built from a ppk closure
 
 Usage: tools/vm-shell [options]
 
 Options:
   --kernel <file>  Boot this kernel (default: $PPK_VM_KERNEL, or the cached
                    full-system test image's kernel)
+  --mkirf <file>   Build the initramfs with this mkirf (default: one built
+                   from the peiosutils repository beside ppk)
   --memory <size>  Give the guest this much memory (default: 1G)
   -h, --help       Print help
 
@@ -37,12 +39,18 @@ fail() {
 }
 
 kernel=${PPK_VM_KERNEL:-$DEFAULT_KERNEL}
+mkirf=
 memory=1G
 while (($#)); do
     case $1 in
         --kernel)
             (($# >= 2)) || usage_error "missing argument for '--kernel'"
             kernel=$2
+            shift 2
+            ;;
+        --mkirf)
+            (($# >= 2)) || usage_error "missing argument for '--mkirf'"
+            mkirf=$2
             shift 2
             ;;
         --memory)
@@ -69,49 +77,72 @@ fi
 # The first line of busybox's help is "BusyBox v1.37.0 (...) multi-call binary."
 busybox_version=$("$busybox" | sed -n '1s/^BusyBox v\([0-9][0-9.]*\).*/\1/p')
 [[ -n $busybox_version ]] || fail "$busybox: cannot read its version"
-package=dev.peios.busybox@$busybox_version
 
 repo=$(cd -- "$(dirname -- "$0")/.." && pwd)
 cargo build --quiet --release --target "$MUSL_TARGET" --manifest-path "$repo/Cargo.toml"
 ppk=$repo/target/$MUSL_TARGET/release/ppk
+ppk_version=$("$ppk" --version | sed -n 's/^ppk //p')
+
+if [[ -z $mkirf ]]; then
+    peiosutils=$repo/../peiosutils
+    [[ -f $peiosutils/Cargo.toml ]] || fail "$peiosutils: No such repository; pass --mkirf"
+    cargo build --quiet --release --package pu_mkirf --manifest-path "$peiosutils/Cargo.toml"
+    mkirf=$peiosutils/target/release/mkirf
+fi
+[[ -x $mkirf ]] || fail "$mkirf: not executable"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/ppk-vm-shell.XXXXXXXX")
 trap 'rm -rf -- "$work"' EXIT HUP INT TERM
 
-# The busybox package: the binary, and a link to it for each applet.
-content=$work/busybox
-mkdir -p -- "$content/bin"
-cp -- "$busybox" "$content/bin/busybox"
+# The packages, staged with paths relative to /usr. busybox gets a link to
+# itself for each applet.
+mkdir -p -- "$work/busybox/bin" "$work/ppk/bin"
+cp -- "$busybox" "$work/busybox/bin/busybox"
 "$busybox" --list | while read -r applet; do
     # Some builds list busybox itself as an applet.
-    [[ $applet == busybox ]] || ln -s busybox "$content/bin/$applet"
+    [[ $applet == busybox ]] || ln -s busybox "$work/busybox/bin/$applet"
 done
+cp -- "$ppk" "$work/ppk/bin/ppk"
 
 root=$work/root
-# An environment mounts its closure over /usr, so the guest needs one.
-mkdir -p -- "$root/system/bin" "$root/usr"
-cp -- "$ppk" "$root/system/bin/ppk"
-"$ppk" pack "$package" "$content" --artifact-dir "$root/system/artifacts" >/dev/null
+artifacts=$root/system/artifacts
+packages=("dev.peios.busybox@$busybox_version" "dev.peios.ppk@$ppk_version")
+"$ppk" pack "${packages[0]}" "$work/busybox" --artifact-dir "$artifacts" >/dev/null
+"$ppk" pack "${packages[1]}" "$work/ppk" --artifact-dir "$artifacts" >/dev/null
 
-(cd -- "$root" && find . -print0 | cpio --null --create --format=newc --owner=0:0 --quiet) |
-    gzip -1 >"$work/initramfs.cpio.gz"
+# Build the closure outside the image's store, which then holds only the
+# packages, and lay it out as the image's /usr.
+closures=$work/closures
+closure=$("$ppk" closure "${packages[@]}" --artifact-dir "$artifacts" --closure-dir "$closures")
+cp -al -- "$closures/${closure#sha256:}" "$root/usr"
+
+# The rest of the root comes from the image, not a package. busybox picks
+# its applet from the name it was run as, and the kernel runs /init as
+# "/init", so init is busybox's own init; it starts /bin/sh, hence /bin.
+ln -s usr/bin/init "$root/init"
+ln -s usr/bin "$root/bin"
+mkdir -- "$root/proc" "$root/sys" "$root/tmp"
+
+# mkirf reports what it wrote; show its output only when it fails.
+if ! built=$("$mkirf" "$root" "$work/initramfs.cpio.zst" 2>&1); then
+    printf '%s\n' "$built" >&2
+    exit 1
+fi
 
 cat <<HINT
 
-The guest starts in busybox's shell, which ppk runs as PID 1 with
-$package at /usr. ppk is /system/bin/ppk, and the
-package is in /system/artifacts. Nothing has mounted /proc, /sys or /dev,
-and the shell has no controlling terminal, so Ctrl-C does nothing.
+The initramfs is the closure of ${packages[*]},
+laid out as /usr, and its init is busybox's. Press Enter for a shell. ppk is
+/usr/bin/ppk, and the packages are in /system/artifacts. Nothing has mounted
+/proc, /sys or /dev.
 
 Run 'poweroff -f' to power off, or press Ctrl-A then X.
 
 HINT
 
-# The kernel passes the words after its own `--` to init, but stops at a
-# second `--`, so `ppk run` is given no command and starts the closure's shell.
 qemu-system-x86_64 \
     -enable-kvm -cpu host -m "$memory" \
     -nographic -no-reboot \
     -kernel "$kernel" \
-    -initrd "$work/initramfs.cpio.gz" \
-    -append "console=ttyS0 rdinit=/system/bin/ppk panic=-1 quiet -- run $package"
+    -initrd "$work/initramfs.cpio.zst" \
+    -append "console=ttyS0 panic=-1 quiet"

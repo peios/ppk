@@ -132,9 +132,12 @@ enum Command {
         /// Create the empty directory <path>
         #[arg(long, value_name = "path")]
         dir: Vec<ppk::EnvDir>,
-        /// Add the packages' own artifacts at system/artifacts
+        /// Hardlink the packages into system/artifacts
         #[arg(long)]
         include_artifacts: bool,
+        /// Copy the packages into system/artifacts
+        #[arg(long, conflicts_with = "include_artifacts")]
+        copy_artifacts: bool,
     },
     /// Run a command, or a shell, with the closure of packages at /usr
     #[command(
@@ -224,11 +227,19 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             symlink,
             dir,
             include_artifacts,
+            copy_artifacts,
         } => {
+            let artifacts = if copy_artifacts {
+                ppk::RootArtifacts::Copy
+            } else if include_artifacts {
+                ppk::RootArtifacts::Include
+            } else {
+                ppk::RootArtifacts::None
+            };
             let extras = ppk::Extras {
                 symlinks: symlink,
                 dirs: dir,
-                include_artifacts,
+                artifacts,
             };
             let composed = ppk::compose_env(&packages, &artifact_dir, &out, &extras)?;
             println!("{}", composed.identity);

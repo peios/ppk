@@ -27,7 +27,7 @@ ppk \- create and manage Peios packages
 .IR link ]...
 .RB [ \-\-dir
 .IR path ]...
-.RB [ \-\-include\-artifacts ]
+.RB [ \-\-include\-artifacts | \-\-copy\-artifacts ]
 .B \-\-out
 .I dir package\c
 \&...
@@ -194,16 +194,19 @@ The root's
 .I usr
 is the closure of the packages, built in place as
 .B closure
-builds it: every file is a hard link to its blob.
-Nothing is written to the artifact directory.
+builds it: every file is a hard link to its blob, in the root's own
+artifact directory if it has one and otherwise in the artifact directory
+the packages are read from.
+Nothing is written to that artifact directory.
 .IP
 What lies outside
 .I usr
 belongs to the environment, not to any package, and comes from
 .BR \-\-symlink ,
 .BR \-\-dir ,
+.BR \-\-include\-artifacts ,
 and
-.BR \-\-include\-artifacts .
+.BR \-\-copy\-artifacts .
 Their paths are relative to the root, must not contain an empty,
 .BR . ,
 or
@@ -218,8 +221,10 @@ place when complete.
 fails, writing nothing, if the directory already exists, if the packages
 clash as they would for
 .BR closure ,
-if a path given lies under a symbolic link given, or if the directory is
-not on the same filesystem as the artifact directory.
+if a path given lies under a symbolic link given, or, unless
+.B \-\-copy\-artifacts
+is given, if the directory is not on the same filesystem as the artifact
+directory.
 .TP
 .BI run " package\fR...\fP \fR[\fP" \-\- " command \fR[\fPargument\fR...]]\fP"
 Run
@@ -344,6 +349,20 @@ holding the packages' refs, manifests, and blobs as hard links, so that
 .B ppk
 inside the environment finds them by default.
 Only the packages composed are included, and not their closure.
+The root must be on the same filesystem as the artifact directory.
+.TP
+.B \-\-copy\-artifacts
+For
+.BR compose\-env ,
+give the root its own artifact directory as
+.B \-\-include\-artifacts
+does, but copy the packages into it, checking each as
+.B fetch
+does, so that the root can be on any filesystem.
+The root's own files and its artifact directory then share nothing with
+the artifact directory the packages are read from.
+Cannot be given with
+.BR \-\-include\-artifacts .
 .TP
 .BR \-h ", " \-\-help
 Print help and exit.

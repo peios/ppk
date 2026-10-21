@@ -143,6 +143,17 @@ fn compose_env_needs_an_output_directory_and_well_formed_extras() {
             ],
             "\"usr/x\": inside usr, which the packages provide",
         ),
+        (
+            vec![
+                "compose-env",
+                "dev.peios.hello@1.0",
+                "--out",
+                "o",
+                "--include-artifacts",
+                "--copy-artifacts",
+            ],
+            "the argument '--include-artifacts' cannot be used with '--copy-artifacts'",
+        ),
     ] {
         let output = ppk(&args);
         assert_eq!(output.status.code(), Some(2), "{args:?}");

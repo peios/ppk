@@ -19,9 +19,10 @@ work, see [Environments](~peios/packaging/environments).
 
 - Install `ppk`.
 - Have every package in your artifact directory.
-- Choose a directory for the root that doesn't exist yet, on the same
-  filesystem as the artifact directory: every file in the root is a hard
-  link to its blob.
+- Choose a directory for the root that doesn't exist yet. Every file in the
+  root is a hard link to its blob, so the directory must be on the same
+  filesystem as the artifact directory, unless you copy the packages into
+  the root with `--copy-artifacts`.
 
 ## Compose the root
 
@@ -51,8 +52,11 @@ needs comes from the command line:
   `bin::bin` links `bin` to `usr/bin`.
 - `--dir <path>` creates an empty directory, such as a mount point.
 - `--include-artifacts` gives the root its own artifact directory,
-  `system/artifacts`, holding the packages themselves, so that `ppk` inside
-  the environment finds them.
+  `system/artifacts`, holding the packages themselves as hard links, so
+  that `ppk` inside the environment finds them.
+- `--copy-artifacts` does the same with copies, checking every manifest and
+  blob as `ppk fetch` does. Use it to compose a root on another filesystem
+  than the artifact directory, such as a fresh tmpfs.
 
 Paths are relative to the root and can be given more than once:
 

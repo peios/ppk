@@ -204,11 +204,28 @@ pub(crate) fn merge(
 }
 
 /// Hardlinks fail across filesystems, so refuse before writing anything.
-pub(crate) fn check_same_filesystem(
+fn check_same_filesystem(
     layout: &ArtifactDir,
     artifact_dir: &Path,
     closure_dir: &Path,
 ) -> Result<()> {
+    if !same_filesystem(layout, artifact_dir, closure_dir)? {
+        bail!(
+            "{}: not on the same filesystem as the artifact directory {}",
+            closure_dir.display(),
+            artifact_dir.display()
+        );
+    }
+    Ok(())
+}
+
+/// Whether `dir` is on the filesystem that holds the store's blobs, so that
+/// it can hold hardlinks to them.
+pub(crate) fn same_filesystem(
+    layout: &ArtifactDir,
+    artifact_dir: &Path,
+    dir: &Path,
+) -> Result<bool> {
     let blob_dir = layout.blob_dir();
     let store = if blob_dir.is_dir() {
         blob_dir
@@ -218,17 +235,10 @@ pub(crate) fn check_same_filesystem(
     let store_device = fs::metadata(&store)
         .with_context(|| format!("{}", store.display()))?
         .dev();
-    let closure_device = fs::metadata(closure_dir)
-        .with_context(|| format!("{}", closure_dir.display()))?
+    let device = fs::metadata(dir)
+        .with_context(|| format!("{}", dir.display()))?
         .dev();
-    if store_device != closure_device {
-        bail!(
-            "{}: not on the same filesystem as the artifact directory {}",
-            closure_dir.display(),
-            artifact_dir.display()
-        );
-    }
-    Ok(())
+    Ok(store_device == device)
 }
 
 pub(crate) fn build_entry(

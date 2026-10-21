@@ -360,6 +360,42 @@ fn failure_is_one_line_without_an_os_error_number() {
 }
 
 #[test]
+fn an_os_error_number_is_removed_from_the_middle_of_a_message() {
+    // tempfile's errors carry " at path ..." after the error number.
+    let content = content_dir();
+    let dir = tempfile::tempdir().unwrap();
+    let artifacts = dir.path().join("artifacts");
+    let packed = ppk(&[
+        "pack",
+        "dev.peios.hello@1.0",
+        path(content.path()),
+        "--artifact-dir",
+        path(&artifacts),
+    ]);
+    assert_eq!(packed.status.code(), Some(0), "{}", stderr(&packed));
+    let missing = dir.path().join("missing");
+
+    let output = ppk(&[
+        "compose-env",
+        "dev.peios.hello@1.0",
+        "--artifact-dir",
+        path(&artifacts),
+        "--out",
+        path(&missing.join("root")),
+        "--copy-artifacts",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let message = stderr(&output);
+    assert!(
+        message.starts_with(&format!(
+            "ppk: {}: cannot create a temporary directory: No such file or directory at path ",
+            missing.display()
+        )) && !message.contains("os error"),
+        "{message}"
+    );
+}
+
+#[test]
 fn replacing_a_packed_version_fails() {
     let store = tempfile::tempdir().unwrap();
     let pack = |content: &Path| {

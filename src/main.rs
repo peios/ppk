@@ -376,16 +376,20 @@ fn clap_first_line(err: &clap::Error) -> String {
 }
 
 /// The error and its causes on one line, outermost first, without the
-/// `(os error N)` that Rust appends to system errors.
+/// `(os error N)` that Rust appends to system errors. Some errors carry
+/// more after it, such as tempfile's ` at path ...`, so it is cut out
+/// wherever it is.
 fn describe(err: &anyhow::Error) -> String {
     let causes: Vec<String> = err
         .chain()
         .map(|cause| {
-            let text = cause.to_string();
-            match text.rfind(" (os error ") {
-                Some(at) if text.ends_with(')') => text[..at].to_owned(),
-                _ => text,
+            let mut text = cause.to_string();
+            if let Some(start) = text.find(" (os error ")
+                && let Some(len) = text[start..].find(')')
+            {
+                text.replace_range(start..=start + len, "");
             }
+            text
         })
         .collect();
     causes.join(": ")

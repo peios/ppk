@@ -38,12 +38,16 @@ version = "1.0"
 arch = "noarch"
 
 [files]
-"usr/bin/hello" = { blob = "sha256:de7a5d81f4ab0680f55966b56e7bebfd5da26f4f45d8cd6e2e22c6a0e523c37f", exec = true }
-"usr/share/doc/hello/README" = { blob = "sha256:c90139667a35e240080ae250c1f99a5df3a6d509b0aa65b3d5550f87e20cb3a4" }
+"bin/hello" = { blob = "sha256:de7a5d81f4ab0680f55966b56e7bebfd5da26f4f45d8cd6e2e22c6a0e523c37f", exec = true }
+"share/doc/hello/README" = { blob = "sha256:c90139667a35e240080ae250c1f99a5df3a6d509b0aa65b3d5550f87e20cb3a4" }
 ```
 
-Paths are relative to the root of the system the package is installed
-into.
+Paths are relative to `/usr`, where everything Peios ships lives, including
+the configuration it ships in `/usr/etc`. This package's `bin/hello` is
+`/usr/bin/hello`. A package can't ship anything outside `/usr`: a machine's
+own configuration and state live outside it, and stay the machine's. An
+absolute symbolic link target is read from the root of the system, so a
+link to `/usr/lib/libz.so.1` names a file in the same or another package.
 
 ## A package's identity
 

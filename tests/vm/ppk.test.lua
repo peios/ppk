@@ -71,6 +71,40 @@ local function build_closure(t, vm)
     return "/system/closures/" .. hex, blob
 end
 
+-- As SYSTEM: pack ppk itself and build its closure, so that someone other
+-- than SYSTEM can run a copy that carries the store's descriptor. Returns
+-- that copy.
+local function ppk_for_everyone(t, vm)
+    t:assert(vm:mkdir("/ppk-content/bin", { parents = true }) == nil)
+    busybox(vm, { "cp", PPK, "/ppk-content/bin/ppk" }):assert_ok()
+    make_executable(t, vm, "/ppk-content/bin/ppk")
+    ppk(vm, { "pack", "dev.peios.ppk@0.1", "/ppk-content", "--artifact-dir", "/system" }):assert_ok()
+    local closed = ppk(vm, { "closure", "dev.peios.ppk@0.1", "--artifact-dir", "/system" })
+    closed:assert_ok()
+    return "/system/closures/" .. closed.stdout:match("^sha256:(%x+)\n$") .. "/bin/ppk"
+end
+
+-- This guest's root mount is private, which would hide a mount leaking back
+-- out of an environment. Share it, as a running system's often is.
+local function share_root(t, vm)
+    local MS_REC, MS_SHARED = 0x4000, 0x100000
+    local shared = vm:syscall(sys.NR.mount, {
+        args = { 0, 0, 0, MS_REC | MS_SHARED, 0 },
+        bufs = { "/\0" },
+        ptrs = { 1 },
+    })
+    t:assert_eq(shared.errno, 0, "make / shared")
+end
+
+-- `ppk run` of the busybox closure, with `command` after the separator.
+local function run_args(command)
+    local args = { "run", "dev.peios.busybox@1.0", "--artifact-dir", "/system", "--" }
+    for _, arg in ipairs(command) do
+        args[#args + 1] = arg
+    end
+    return args
+end
+
 test("ppk runs on Peios", function(t)
     local vm = boot(t)
     local r = ppk(vm, { "--version" })
@@ -124,4 +158,46 @@ test("an ordinary user can run a closure but cannot change the store", function(
         local _, create_errno = sys.open(w, planted, sys.O.WRONLY | sys.O.CREAT, tonumber("644", 8))
         t:assert_eq(create_errno, sys.E.ACCES, "adding to a closure is refused")
     end)
+end)
+
+test("run shows the closure at /usr to its command alone", function(t)
+    local vm = boot(t)
+    build_closure(t, vm)
+    -- This guest has no /usr, and an environment replaces one rather than
+    -- creating it.
+    t:assert(vm:mkdir("/usr") == nil)
+    share_root(t, vm)
+
+    local listed = ppk(vm, run_args({ "/usr/bin/busybox", "ls", "/usr/bin" }))
+    listed:assert_ok()
+    t:assert_eq(listed.stdout, "busybox\n")
+    t:assert_eq(#vm:listdir("/usr"), 0, "the mount stays inside the environment")
+
+    local failed = ppk(vm, run_args({ "/usr/bin/busybox", "false" }))
+    t:assert_eq(failed.exit_code, 1, "the command's status is ppk's")
+    local missing = ppk(vm, run_args({ "/usr/bin/nothing" }))
+    t:assert_eq(missing.exit_code, 127, missing.stderr)
+    t:assert_eq(missing.stderr, "ppk: /usr/bin/nothing: No such file or directory\n")
+end)
+
+test("an ordinary user can run a command in an environment", function(t)
+    local vm = boot(t)
+    build_closure(t, vm)
+    local user_ppk = ppk_for_everyone(t, vm)
+    -- Everyone can read a real system's /usr; one made here would otherwise
+    -- inherit the SYSTEM-only descriptor of this guest's root.
+    t:assert(vm:mkdir("/usr") == nil)
+    local read_and_traverse = 0x1200A9
+    local set = kacs.set_sd(vm, "/usr", kacs.grant(read_and_traverse))
+    t:assert_eq(set.errno, 0, "set /usr's descriptor")
+    share_root(t, vm)
+
+    local bypass_traverse = kacs.PRIV.CHANGE_NOTIFY
+    local user = { privs_present = bypass_traverse, privs_enabled = bypass_traverse }
+    token.as_principal(t, vm, user, function(w)
+        local r = w:run(user_ppk, { args = run_args({ "/usr/bin/busybox", "ls", "/usr/bin" }) })
+        t:assert_eq(r.exit_code, 0, r.stderr)
+        t:assert_eq(r.stdout, "busybox\n")
+    end)
+    t:assert_eq(#vm:listdir("/usr"), 0, "the user's mount stays inside the environment")
 end)

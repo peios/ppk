@@ -20,6 +20,16 @@ ppk \- create and manage Peios packages
 .IR dir ]
 .IR package ...
 .br
+.B ppk run
+.RB [ \-\-artifact\-dir
+.IR dir ]
+.RB [ \-\-closure\-dir
+.IR dir ]
+.IR package ...
+.B \-\-
+.I command
+.RI [ argument ...]
+.br
 .B ppk help
 .RI [ command ]
 .br
@@ -32,6 +42,12 @@ from one artifact directory to another, and composes them into closures.
 .PP
 A package is a manifest that lists every path in it, with each file's
 content stored separately as a blob named by its SHA-256 hash.
+Paths are relative to
+.IR /usr :
+a package's
+.I bin/hello
+is
+.IR /usr/bin/hello .
 The package's identity is the SHA-256 hash of its manifest, written as
 .B sha256:
 followed by the hash in lowercase hexadecimal.
@@ -135,7 +151,8 @@ They do not prove who published it, so fetch only from sources you trust.
 .TP
 .BI closure " package\fR...\fP"
 Compose the packages, each already in the artifact directory, into a
-closure: one directory tree laid out as a system root.
+closure: one directory tree, the contents of a
+.IR /usr .
 Print the closure's identity on standard output.
 .IP
 Every file in the tree is a hard link to its blob, in the form its entry
@@ -153,6 +170,36 @@ if a path lies beneath a file or symbolic link of another package, or if
 the closure directory is not on the same filesystem as the artifact
 directory.
 .TP
+.BI run " package\fR...\fP " \-\- " command \fR[\fPargument\fR...]\fP"
+Run
+.I command
+in an environment: the caller's own view of the filesystem, in a mount
+namespace of its own, with the closure of the packages mounted at
+.IR /usr .
+Everything outside
+.I /usr
+is as the caller sees it.
+The closure is built as
+.B closure
+builds it, or reused if it exists.
+.IP
+.B ppk run
+then replaces itself with
+.IR command ,
+whose exit status becomes
+.BR ppk 's.
+.I command
+is looked up through
+.B PATH
+inside the environment, unless it contains a slash.
+The mount stays inside the environment: nothing outside it sees the
+closure at
+.IR /usr ,
+and the command's children share the environment.
+.IP
+.I /usr
+must already exist; an environment replaces it rather than creating it.
+.TP
 .BI help " \fR[\fPcommand\fR]\fP"
 Print help for
 .B ppk
@@ -169,8 +216,10 @@ creates the directory if it does not exist.
 .TP
 .BI \-\-closure\-dir " dir"
 For
-.BR closure ,
-store closures in
+.B closure
+and
+.BR run ,
+keep closures in
 .I dir
 instead of the
 .I closures
@@ -208,6 +257,14 @@ Only the DACL is set: the owner stays whoever ran
 .BR ppk .
 Off Peios, where the system call does not exist, no descriptor is set.
 .PP
+.B run
+needs no privilege on Peios: any process can create a mount namespace and
+bind-mount into its own.
+Reusing a closure only reads the store, so anyone can run a closure that
+already exists; building one needs write access to the closure directory.
+The closure is not mounted read-only, which needs a privilege; its files are
+protected by their descriptors instead.
+.PP
 A package is readable by everyone on a machine it is stored on, so a
 package must never contain a secret.
 .SH EXIT STATUS
@@ -223,6 +280,20 @@ is missing from the source or fails a check.
 .B 2
 Usage error: an unknown option, a missing argument, or a malformed
 .IR package .
+.TP
+.B 126
+For
+.BR run ,
+the command was found but could not be executed.
+.TP
+.B 127
+For
+.BR run ,
+the command was not found.
+.PP
+Once
+.B run
+has started its command, the exit status is the command's.
 .SH FILES
 Paths are relative to the artifact directory,
 .I /system/artifacts
@@ -277,5 +348,12 @@ printed.
 Compose the two packages into a closure in
 .I /system/artifacts/closures
 and print its identity.
+.TP
+.B ppk run 'dev.peios.hello@1.0?arch=noarch' \-\- /usr/bin/hello
+Run
+.I /usr/bin/hello
+from the package, in an environment whose
+.I /usr
+is the package's closure.
 .SH SEE ALSO
 https://learn.peios.org/peios/developing-for-peios/packaging/creating-a-package

@@ -105,6 +105,27 @@ fn closures_default_to_inside_the_artifact_directory() {
 }
 
 #[test]
+fn run_needs_packages_and_a_command_after_the_separator() {
+    for (args, missing) in [
+        (vec!["run"], "arguments <package>... <command>..."),
+        (vec!["run", "dev.peios.hello@1.0"], "argument <command>..."),
+        (
+            vec!["run", "dev.peios.hello@1.0", "--"],
+            "argument <command>...",
+        ),
+        (vec!["run", "--", "true"], "argument <package>..."),
+    ] {
+        let output = ppk(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert_eq!(
+            stderr(&output),
+            format!("ppk: missing {missing}\nTry 'ppk --help' for more information.\n"),
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
 fn closure_without_packages_is_a_usage_error() {
     let output = ppk(&["closure"]);
     assert_eq!(output.status.code(), Some(2));
@@ -189,6 +210,7 @@ fn help_lines_fit_in_80_columns() {
         vec!["help", "pack"],
         vec!["help", "fetch"],
         vec!["help", "closure"],
+        vec!["help", "run"],
         vec!["help", "help"],
     ] {
         let text = stdout(&ppk(&args));

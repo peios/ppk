@@ -34,7 +34,7 @@ ppk fetch 'dev.peios.hello@1.0?arch=noarch' --from shared --artifact-dir artifac
 `ppk` prints the package's identity:
 
 ```text
-sha256:d733b1a3841303470451952e42ff614ccc64adeda05447f3d725ddfe19e3361b
+sha256:044f86f4999c008042cb80ea46ee1f468457702cfe8426c7edf50997f79e420c
 ```
 
 ## Check the result
@@ -68,7 +68,7 @@ package under the same name, version, and architecture, `ppk fetch` refuses
 and writes nothing:
 
 ```text
-ppk: dev.peios.hello@1.0?arch=noarch: already present as sha256:d733b1a3841303470451952e42ff614ccc64adeda05447f3d725ddfe19e3361b, but other has sha256:0cc1ee3de34099532422a2191a78f0711624c7255139325c3a2b16263d8fa981
+ppk: dev.peios.hello@1.0?arch=noarch: already present as sha256:044f86f4999c008042cb80ea46ee1f468457702cfe8426c7edf50997f79e420c, but other has sha256:ebba3ef047137da86f6cdbee1a9282967c738022621c073f79efe09b3543442e
 ```
 
 A packed version never changes, so two different packages under one version

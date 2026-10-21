@@ -1,4 +1,7 @@
 use std::error::Error as _;
+use std::ffi::OsString;
+use std::io;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -6,8 +9,18 @@ use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{CommandFactory, Parser, Subcommand};
 use ppk::PackageId;
 
+/// Exit status for a failure.
+const EXIT_FAILURE: u8 = 1;
+
 /// Exit status for a problem with the arguments, as distinct from a failure.
 const EXIT_USAGE: u8 = 2;
+
+/// Exit status when `run` finds its command but cannot execute it, as shells
+/// use.
+const EXIT_CANNOT_EXECUTE: u8 = 126;
+
+/// Exit status when `run` cannot find its command, as shells use.
+const EXIT_NOT_FOUND: u8 = 127;
 
 /// The help's closing pointer to the full documentation.
 const SEE_ALSO: &str = "See ppk(1).";
@@ -39,7 +52,7 @@ enum Command {
         /// Package to create, as <name>@<version>[?arch=<arch>]
         #[arg(value_name = "package")]
         package: PackageId,
-        /// Directory whose contents become the package's files
+        /// Directory whose contents become the package's files under /usr
         #[arg(value_name = "path")]
         path: PathBuf,
         /// Store packages in <dir> (default: /system/artifacts)
@@ -93,6 +106,30 @@ enum Command {
         #[arg(long, value_name = "dir")]
         closure_dir: Option<PathBuf>,
     },
+    /// Run a command with the closure of packages at /usr
+    #[command(
+        override_usage = "ppk run [options] <package>... -- <command> [<argument>...]",
+        after_help = SEE_ALSO
+    )]
+    Run {
+        /// Packages to compose, each as <name>@<version>[?arch=<arch>]
+        #[arg(value_name = "package", required = true)]
+        packages: Vec<PackageId>,
+        /// Read packages from <dir> (default: /system/artifacts)
+        #[arg(
+            long,
+            value_name = "dir",
+            default_value = ppk::DEFAULT_ARTIFACT_DIR,
+            hide_default_value = true,
+        )]
+        artifact_dir: PathBuf,
+        /// Use closures in <dir> (default: <artifact-dir>/closures)
+        #[arg(long, value_name = "dir")]
+        closure_dir: Option<PathBuf>,
+        /// Command to run, and its arguments
+        #[arg(value_name = "command", last = true, required = true)]
+        command: Vec<OsString>,
+    },
     /// Print help for ppk or one of its commands
     #[command(override_usage = "ppk help [<command>]", after_help = SEE_ALSO)]
     Help {
@@ -113,8 +150,8 @@ fn main() -> ExitCode {
     if let Command::Help { command } = &cli.command {
         return print_help(&program, command.as_deref());
     }
-    match run(cli) {
-        Ok(()) => ExitCode::SUCCESS,
+    match run(&program, cli) {
+        Ok(status) => status,
         Err(err) => {
             eprintln!("{program}: {}", describe(&err));
             ExitCode::FAILURE
@@ -122,7 +159,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: Cli) -> anyhow::Result<()> {
+fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
         Command::Pack {
             package,
@@ -149,9 +186,37 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             let closed = ppk::closure(&packages, &artifact_dir, &closure_dir)?;
             println!("{}", closed.identity);
         }
+        Command::Run {
+            packages,
+            artifact_dir,
+            closure_dir,
+            command,
+        } => {
+            let closure_dir = closure_dir.unwrap_or_else(|| artifact_dir.join(ppk::CLOSURE_SUBDIR));
+            let closed = ppk::closure(&packages, &artifact_dir, &closure_dir)?;
+            ppk::environment::enter(&closed.tree_path)?;
+            return Ok(exec(program, &command));
+        }
         Command::Help { .. } => unreachable!("help is handled before run"),
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Replace ppk with `command`, which then decides the exit status. Returns
+/// only if the command could not be started, with the status shells use.
+fn exec(program: &str, command: &[OsString]) -> ExitCode {
+    let (name, args) = command
+        .split_first()
+        .expect("clap requires a command after --");
+    let err = std::process::Command::new(name).args(args).exec();
+    let status = match err.kind() {
+        io::ErrorKind::NotFound => EXIT_NOT_FOUND,
+        io::ErrorKind::PermissionDenied => EXIT_CANNOT_EXECUTE,
+        _ => EXIT_FAILURE,
+    };
+    let err = anyhow::Error::new(err).context(name.to_string_lossy().into_owned());
+    eprintln!("{program}: {}", describe(&err));
+    ExitCode::from(status)
 }
 
 /// `ppk help [<command>]`: the same text as `--help` for ppk or that command.
@@ -229,8 +294,9 @@ fn usage_message(err: &clap::Error) -> String {
         (ErrorKind::MissingRequiredArgument, [arg]) if arg.starts_with('-') => {
             format!("missing option {arg}")
         }
+        (ErrorKind::MissingRequiredArgument, [_]) => format!("missing argument {}", args[0]),
         (ErrorKind::MissingRequiredArgument, [_, ..]) => {
-            format!("missing argument {}", args.join(" "))
+            format!("missing arguments {}", args.join(" "))
         }
         (ErrorKind::ValueValidation, _) if err.source().is_some() => {
             err.source().map(ToString::to_string).unwrap_or_default()

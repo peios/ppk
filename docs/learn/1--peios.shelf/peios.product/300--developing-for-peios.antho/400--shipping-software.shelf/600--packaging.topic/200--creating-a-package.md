@@ -24,9 +24,9 @@ versioned package. For what a package contains, see
 
 ## Pack a directory
 
-1. Stage the package's files in a directory, laid out as they will be
-   installed from the root of the system. For example, a program installed
-   as `/usr/bin/hello` goes at `hello/usr/bin/hello`.
+1. Stage the package's files in a directory, laid out as they will appear
+   under `/usr`. For example, a program installed as `/usr/bin/hello` goes
+   at `hello/bin/hello`.
 2. Make sure each program in the directory is marked executable. The
    package records which files are executable and nothing else about their
    permissions.
@@ -40,7 +40,7 @@ versioned package. For what a package contains, see
    `ppk` prints the package's identity:
 
    ```text
-   sha256:d733b1a3841303470451952e42ff614ccc64adeda05447f3d725ddfe19e3361b
+   sha256:044f86f4999c008042cb80ea46ee1f468457702cfe8426c7edf50997f79e420c
    ```
 
 ## Check the result
@@ -55,7 +55,7 @@ cat artifacts/refs/dev.peios.hello/1.0/noarch
 It holds the identity that `ppk pack` printed:
 
 ```text
-sha256:d733b1a3841303470451952e42ff614ccc64adeda05447f3d725ddfe19e3361b
+sha256:044f86f4999c008042cb80ea46ee1f468457702cfe8426c7edf50997f79e420c
 ```
 
 The manifest is `artifacts/manifests/sha256/` followed by the same hash.
@@ -79,7 +79,7 @@ A packed version never changes. If you pack the same version again with
 different files, `ppk` refuses and exits with status 1:
 
 ```text
-ppk: dev.peios.hello@1.0?arch=noarch: already packed as sha256:d733b1a3841303470451952e42ff614ccc64adeda05447f3d725ddfe19e3361b; a packed version cannot be replaced
+ppk: dev.peios.hello@1.0?arch=noarch: already packed as sha256:044f86f4999c008042cb80ea46ee1f468457702cfe8426c7edf50997f79e420c; a packed version cannot be replaced
 ```
 
 Pack the changed files as a new version instead, such as

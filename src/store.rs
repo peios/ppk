@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
+use crate::access;
 use crate::{ALGORITHM, Identity, PackageId};
 
 /// Everything in the artifact directory is immutable once written: content
@@ -121,14 +122,36 @@ pub(crate) fn write_new(dir: &Path, dest: &Path, bytes: &[u8]) -> Result<bool> {
     }
 }
 
-/// A temporary file in `dir`, already read-only by `mode`. The handle
-/// returned stays writable, because access is checked when the file is opened.
+/// A temporary file in `dir`, already read-only by `mode` and carrying the
+/// store's security descriptor. The handle returned stays writable, because
+/// access is checked when the file is opened.
 fn new_temp(dir: &Path, mode: u32) -> Result<tempfile::NamedTempFile> {
-    tempfile::Builder::new()
+    let tmp = tempfile::Builder::new()
         .prefix(".tmp-")
         .permissions(Permissions::from_mode(mode))
         .tempfile_in(dir)
-        .with_context(|| format!("{}: cannot create a temporary file", dir.display()))
+        .with_context(|| format!("{}: cannot create a temporary file", dir.display()))?;
+    access::protect_file(tmp.as_file(), tmp.path())?;
+    Ok(tmp)
+}
+
+/// Create `dir` and any missing parents. Each directory created gets the
+/// store's security descriptor, which what is later created in it inherits.
+pub(crate) fn create_dirs(dir: &Path) -> Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = dir.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        create_dirs(parent)?;
+    }
+    match fs::create_dir(dir) {
+        Ok(()) => access::protect_dir(dir),
+        // Another run created it first.
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => Ok(()),
+        Err(err) => Err(err).with_context(|| format!("{}", dir.display())),
+    }
 }
 
 fn persist(tmp: tempfile::NamedTempFile, dest: &Path) -> Result<()> {

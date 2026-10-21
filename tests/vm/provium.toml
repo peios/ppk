@@ -4,7 +4,13 @@
 # x86_64-unknown-linux-musl. See docs/testing.md.
 
 [provium]
-roots = ["."]
+# The syscall and token helpers come from provium's and the kernel's own
+# integration suites, which must be checked out beside ppk.
+roots = [
+    ".",
+    "../../../provium/tests/integration/tests",
+    "../../../kernel/peios/tests/integration/tests",
+]
 
 [profiles.kernel-only]
 # The kernel from the cached full-system test image. Any Peios kernel with

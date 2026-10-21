@@ -116,3 +116,20 @@ change, give it a new version.
 Every file in the artifact directory is read-only for the same reason: a
 blob, manifest, or ref that changed after it was written would stop matching
 what refers to it.
+
+## Who can read a package
+
+Everyone on a machine can read and run what's in its artifact directory.
+`ppk` gives every file it stores a security descriptor that grants Everyone
+read and execute, and SYSTEM and Administrators full control. The
+directories it creates there grant the same, so any user can reach the
+packages.
+
+A package is the same on every machine it's installed on, because its
+content is named by hash. It can't hold anything that belongs to one
+machine or one user, and anything in it is readable by every user of every
+machine that stores it.
+
+> [!IMPORTANT]
+> Never put a secret, such as a key or a password, in a package. Keep
+> secrets in the machine's own configuration instead.

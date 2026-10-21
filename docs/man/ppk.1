@@ -195,7 +195,21 @@ Print the program name and version and exit.
 makes no access checks of its own.
 It needs write access to the artifact directory, and read access to the
 directory being packed or the artifact directory being fetched from.
-Every file it writes in the artifact directory is read-only.
+.PP
+Every file
+.B ppk
+writes in the artifact directory gets a security descriptor whose
+protected DACL grants Everyone read and execute, and SYSTEM and
+Administrators full control.
+Every directory it creates there, and the root of every closure tree, gets
+the same grants, inherited by what is created inside it.
+A file in a closure is a hard link, so it has its blob's descriptor.
+Only the DACL is set: the owner stays whoever ran
+.BR ppk .
+Off Peios, where the system call does not exist, no descriptor is set.
+.PP
+A package is readable by everyone on a machine it is stored on, so a
+package must never contain a secret.
 .SH EXIT STATUS
 .TP
 .B 0

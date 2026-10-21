@@ -50,15 +50,23 @@ guest off, or press <kbd>Ctrl</kbd>+<kbd>A</kbd> then <kbd>X</kbd>. Nothing in
 the guest survives. Pass `--kernel` or set `PPK_VM_KERNEL` to boot another
 kernel; `--help` lists the options.
 
-The shell runs as SYSTEM on `rootfs`, the same as the VM tests, so the
-limits that follow apply to it too.
+The shell runs as SYSTEM on `rootfs`, so every access check passes for it.
+To see what an ordinary user can do, use the VM tests.
 
 ### What the tests do and don't show
 
 The guest's root is the kernel's `rootfs`, which KACS manages. Its root
-grants full access to SYSTEM only, and the agent runs as SYSTEM, so every
-check passes on access. The tests therefore show that `ppk` runs unsigned on
-Peios, that KACS lets it hardlink read-only blobs, and that an executable
-form runs from a closure tree. They don't show that anyone but SYSTEM can
-use a closure: blobs inherit the SYSTEM-only descriptor, and a hardlink
-shares it.
+grants full access to SYSTEM only, and the agent runs as SYSTEM. The tests
+show that `ppk` runs unsigned on Peios, that KACS lets it hardlink
+read-only blobs, and that an executable form runs from a closure tree.
+
+One test then acts as an ordinary user, through the kernel suite's
+`token.as_principal`. The user holds only the privilege that bypasses
+traverse checking, as an ordinary user does; without it, this guest's
+SYSTEM-only `/` would hide every path. The test checks that the user is
+refused a file `ppk` didn't write, can run a closure's program and read a
+blob, and is refused writing a blob or adding a file to a closure.
+
+The syscall and token helpers come from provium's and the kernel's
+integration suites, so the VM tests need the `provium` and `kernel`
+repositories checked out beside `ppk`.

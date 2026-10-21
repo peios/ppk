@@ -173,6 +173,20 @@ fn an_existing_closure_is_reused_untouched() {
 }
 
 #[test]
+fn reusing_a_closure_needs_no_write_access() {
+    let store = Store::new();
+    store.pack(HELLO, &[("a", b"a", 0o644)]);
+    let first = store.closure(&[HELLO]).unwrap();
+    fs::set_permissions(store.closures(), fs::Permissions::from_mode(0o555)).unwrap();
+
+    let again = store.closure(&[HELLO]);
+    fs::set_permissions(store.closures(), fs::Permissions::from_mode(0o755)).unwrap();
+    let again = again.unwrap();
+    assert!(again.reused);
+    assert_eq!(again.identity, first.identity);
+}
+
+#[test]
 fn identical_entries_from_two_packages_are_allowed() {
     let store = Store::new();
     store.pack(HELLO, &[("usr/share/licenses/COPYING", b"GPL", 0o644)]);

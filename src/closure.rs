@@ -73,7 +73,18 @@ pub fn closure(packages: &[PackageId], artifact_dir: &Path, closure_dir: &Path) 
         reused,
     };
     if tree_path.is_dir() {
-        write_manifest(closure_dir, &manifest_path, &manifest)?;
+        // Reusing a closure only reads, so that anyone who can read the store
+        // can use the closures an administrator built.
+        match fs::read(&manifest_path) {
+            Ok(existing) if existing == manifest.as_bytes() => {}
+            Ok(_) => bail!("{}: does not match its hash", manifest_path.display()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                write_manifest(closure_dir, &manifest_path, &manifest)?;
+            }
+            Err(err) => {
+                return Err(err).with_context(|| format!("{}", manifest_path.display()));
+            }
+        }
         return Ok(closed(true));
     }
 

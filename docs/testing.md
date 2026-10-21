@@ -67,6 +67,12 @@ SYSTEM-only `/` would hide every path. The test checks that the user is
 refused a file `ppk` didn't write, can run a closure's program and read a
 blob, and is refused writing a blob or adding a file to a closure.
 
+Two tests cover `ppk run`, as SYSTEM and as the same ordinary user, who
+runs a copy of `ppk` packed into its own closure. Both first make the
+guest's root mount shared, because a private root would hide a mount
+leaking out of the environment, and then check that the guest's own `/usr`
+is still empty after the command has seen the closure there.
+
 The syscall and token helpers come from provium's and the kernel's
 integration suites, so the VM tests need the `provium` and `kernel`
 repositories checked out beside `ppk`.

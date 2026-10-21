@@ -23,7 +23,8 @@ pub enum Entry {
     Blob { hex: String, exec: bool },
     /// A symbolic link to this target, recorded exactly as `readlink` returns
     /// it. A relative target resolves from the link's directory; an absolute
-    /// one from the root of the system the package is installed into.
+    /// one from the root of the system, not from `/usr`, where the package's
+    /// own paths are.
     Symlink(String),
     /// An empty directory. Directories with anything in them are implied by
     /// their contents and never listed, so each tree has one manifest.

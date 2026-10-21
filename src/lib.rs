@@ -35,6 +35,7 @@
 
 mod access;
 mod closure;
+pub mod environment;
 mod fetch;
 mod id;
 mod identity;

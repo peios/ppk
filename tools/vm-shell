@@ -72,7 +72,8 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/ppk-vm-shell.XXXXXXXX")
 trap 'rm -rf -- "$work"' EXIT HUP INT TERM
 
 root=$work/root
-mkdir -p -- "$root"/{bin,dev,proc,sys,tmp} "$root/demo/busybox/bin"
+# An environment mounts its closure over /usr, so the guest needs one.
+mkdir -p -- "$root"/{bin,dev,proc,sys,tmp,usr} "$root/demo/busybox/bin"
 cp -- "$busybox" "$root/bin/busybox"
 ln -s busybox "$root/bin/sh"
 cp -- "$repo/target/$MUSL_TARGET/release/ppk" "$root/bin/ppk"
@@ -92,6 +93,7 @@ ppk is /bin/ppk, and /demo/busybox is a directory to pack. Try:
 
   ppk pack dev.peios.busybox@1.0 /demo/busybox --artifact-dir /artifacts
   ppk closure dev.peios.busybox@1.0 --artifact-dir /artifacts
+  ppk run dev.peios.busybox@1.0 --artifact-dir /artifacts -- /usr/bin/busybox ls /usr/bin
 
 Exit the shell to power off.
 

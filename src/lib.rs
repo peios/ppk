@@ -53,7 +53,7 @@ pub use identity::Identity;
 pub use manifest::{Entry, Manifest, parse_manifest, render_manifest};
 pub use pack::{Packed, pack};
 pub use profile::Profile;
-pub use store::{packed, prepare_artifact_dir};
+pub use store::{packed, prepare_artifact_dir, versions};
 
 /// The hash algorithm, as it appears in artifact paths and manifest values.
 pub const ALGORITHM: &str = "sha256";

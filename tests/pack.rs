@@ -613,6 +613,32 @@ fn packed_names_the_identity_a_version_is_packed_as() {
 }
 
 #[test]
+fn versions_lists_what_is_packed_for_an_arch() {
+    let input = tree(&[("a", b"a")]);
+    let out = tempfile::tempdir().unwrap();
+    assert!(
+        ppk::versions("dev.peios.hello", "x86_64", out.path())
+            .unwrap()
+            .is_empty()
+    );
+    for id in [
+        "dev.peios.hello@2.0?arch=x86_64",
+        "dev.peios.hello@1.0?arch=x86_64",
+        "dev.peios.hello@3.0?arch=aarch64",
+    ] {
+        pack_as(id, input.path(), out.path()).unwrap();
+    }
+    assert_eq!(
+        ppk::versions("dev.peios.hello", "x86_64", out.path()).unwrap(),
+        ["1.0", "2.0"]
+    );
+    assert_eq!(
+        ppk::versions("dev.peios.hello", "aarch64", out.path()).unwrap(),
+        ["3.0"]
+    );
+}
+
+#[test]
 fn preparing_creates_a_missing_artifact_dir_and_leaves_it_empty() {
     let parent = tempfile::tempdir().unwrap();
     let out = parent.path().join("nested/artifacts");

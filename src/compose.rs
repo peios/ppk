@@ -16,9 +16,10 @@ use anyhow::{Context, Result, bail};
 
 use crate::access;
 use crate::closure::{
-    build_entry, check_same_filesystem, merge, package_identities, render_closure_manifest,
+    build_entry, merge, package_identities, render_closure_manifest, same_filesystem,
 };
 use crate::environment::MOUNT_POINT;
+use crate::fetch::fetch;
 use crate::manifest::{check_path, toml_string};
 use crate::store::ArtifactDir;
 use crate::{DEFAULT_ARTIFACT_DIR, Entry, Identity, PackageId};
@@ -106,14 +107,28 @@ impl FromStr for EnvDir {
     }
 }
 
+/// Whether a composed root gets an artifact directory of its own holding the
+/// packages, where ppk inside it looks by default, and how it is filled.
+/// With one, the root's `usr` hardlinks into it; without, into the source.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RootArtifacts {
+    /// No artifact directory of its own.
+    #[default]
+    None,
+    /// Hardlink the packages' refs, manifests and blobs from the source,
+    /// which must be on the root's filesystem.
+    Include,
+    /// Copy them from the source as `fetch` does, checking every manifest
+    /// and blob, so the source may be on any filesystem.
+    Copy,
+}
+
 /// What a composed root holds besides its `usr`.
 #[derive(Clone, Debug, Default)]
 pub struct Extras {
     pub symlinks: Vec<EnvSymlink>,
     pub dirs: Vec<EnvDir>,
-    /// Also hardlink the packages' blobs, manifests and refs into the root's
-    /// own artifact directory, where ppk looks by default.
-    pub include_artifacts: bool,
+    pub artifacts: RootArtifacts,
 }
 
 /// Compose `packages`, each already in `artifact_dir`, into a new root at
@@ -123,8 +138,9 @@ pub struct Extras {
 /// Everything is checked before anything is written: the packages merge as
 /// for a closure, no extra lies under an extra symlink, and `out` must not
 /// exist. The root is built in a temporary directory beside `out` and
-/// renamed into place, so `out` is complete if it exists. `out` must be on
-/// the same filesystem as `artifact_dir`, because its files are hardlinks.
+/// renamed into place, so `out` is complete if it exists. Unless the
+/// packages are copied into the root, `out` must be on the same filesystem
+/// as `artifact_dir`, because its files are hardlinks.
 pub fn compose_env(
     packages: &[PackageId],
     artifact_dir: &Path,
@@ -143,7 +159,13 @@ pub fn compose_env(
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
     };
-    check_same_filesystem(&layout, artifact_dir, parent)?;
+    if extras.artifacts != RootArtifacts::Copy && !same_filesystem(&layout, artifact_dir, parent)? {
+        bail!(
+            "{}: not on the same filesystem as the artifact directory {}; use --copy-artifacts",
+            out.display(),
+            artifact_dir.display()
+        );
+    }
 
     let tmp = tempfile::Builder::new()
         .prefix(".tmp-")
@@ -154,19 +176,26 @@ pub fn compose_env(
     // are hardlinks, and keep their blobs' descriptor.
     access::protect_dir(tmp.path())?;
 
+    let root_store = tmp.path().join(artifacts());
+    match extras.artifacts {
+        RootArtifacts::None => {}
+        RootArtifacts::Include => {
+            include_artifacts(&layout, &root_store, packages, &identities, &merged)?;
+        }
+        RootArtifacts::Copy => {
+            for id in packages {
+                fetch(id, artifact_dir, &root_store)?;
+            }
+        }
+    }
+    let usr_layout = match extras.artifacts {
+        RootArtifacts::None => layout,
+        RootArtifacts::Include | RootArtifacts::Copy => ArtifactDir::new(&root_store),
+    };
     let usr = tmp.path().join(usr());
     fs::create_dir(&usr).with_context(|| format!("{}", usr.display()))?;
     for (path, (entry, _)) in &merged {
-        build_entry(&layout, &usr, path, entry)?;
-    }
-    if extras.include_artifacts {
-        include_artifacts(
-            &layout,
-            &tmp.path().join(artifacts()),
-            packages,
-            &identities,
-            &merged,
-        )?;
+        build_entry(&usr_layout, &usr, path, entry)?;
     }
     for dir in &extras.dirs {
         let dest = tmp.path().join(dir.path());
@@ -235,11 +264,11 @@ fn check_extras(extras: &Extras) -> Result<()> {
 
     let artifacts = artifacts();
     let mut checked: Vec<&str> = paths.keys().copied().collect();
-    if extras.include_artifacts {
+    if extras.artifacts != RootArtifacts::None {
         for path in &checked {
             if path.starts_with(&format!("{artifacts}/")) || (*path == artifacts && paths[path]) {
                 bail!(
-                    "{}: inside {artifacts}, which --include-artifacts provides",
+                    "{}: inside {artifacts}, which holds the packages",
                     toml_string(path)
                 );
             }

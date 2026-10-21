@@ -2,7 +2,7 @@ use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use ppk::{EnvDir, EnvSymlink, Extras, Identity, PackageId};
+use ppk::{EnvDir, EnvSymlink, Extras, Identity, PackageId, RootArtifacts};
 use tempfile::TempDir;
 
 /// An artifact directory, and room beside it for composed roots.
@@ -127,7 +127,7 @@ fn extras_are_created_around_usr() {
     let extras = Extras {
         symlinks: symlinks(&["init::bin/hello", "lib/deep/hello::bin/hello", "abs:/x/y"]),
         dirs: dirs(&["proc", "var/lib"]),
-        include_artifacts: false,
+        artifacts: RootArtifacts::None,
     };
     store.compose(&[HELLO], &extras).unwrap();
     let out = store.out();
@@ -162,7 +162,7 @@ fn included_artifacts_are_a_store_ppk_can_use() {
         &[("unused", b"unused", 0o644)],
     );
     let extras = Extras {
-        include_artifacts: true,
+        artifacts: RootArtifacts::Include,
         ..Extras::default()
     };
     let composed = store.compose(&[HELLO, LIBZ], &extras).unwrap();
@@ -188,6 +188,58 @@ fn included_artifacts_are_a_store_ppk_can_use() {
 }
 
 #[test]
+fn copied_artifacts_are_a_separate_store_that_usr_links_into() {
+    let store = Store::new();
+    store.pack(HELLO, &[("bin/hello", b"binary", 0o755)]);
+    store.pack(
+        "dev.peios.unused@1.0?arch=x86_64",
+        &[("unused", b"unused", 0o644)],
+    );
+    let extras = Extras {
+        artifacts: RootArtifacts::Copy,
+        ..Extras::default()
+    };
+    let composed = store.compose(&[HELLO], &extras).unwrap();
+
+    let copied = store.out().join("system/artifacts");
+    assert!(!copied.join("refs/dev.peios.unused").exists());
+    let blob = copied.join(format!(
+        "blobs/sha256/{}.exec",
+        Identity::of(b"binary").hex()
+    ));
+    let source_ino = fs::metadata(store.blob(b"binary", true)).unwrap().ino();
+    let copy_ino = fs::metadata(&blob).unwrap().ino();
+    assert_ne!(copy_ino, source_ino, "blobs are copied");
+    assert_eq!(
+        fs::metadata(store.out().join("usr/bin/hello"))
+            .unwrap()
+            .ino(),
+        copy_ino,
+        "usr links into the root's own store"
+    );
+
+    let closures = store.dir.path().join("closures");
+    let closed = ppk::closure(&[id(HELLO)], &copied, &closures).unwrap();
+    assert_eq!(closed.identity, composed.identity);
+}
+
+#[test]
+fn a_tampered_blob_is_not_copied() {
+    let store = Store::new();
+    store.pack(HELLO, &[("bin/hello", b"binary", 0o755)]);
+    let blob = store.blob(b"binary", true);
+    fs::set_permissions(&blob, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(&blob, b"tampered").unwrap();
+    let extras = Extras {
+        artifacts: RootArtifacts::Copy,
+        ..Extras::default()
+    };
+    let err = store.compose(&[HELLO], &extras).unwrap_err();
+    assert!(err.to_string().contains("does not match"), "{err:#}");
+    assert!(store.beside_artifacts().is_empty(), "nothing written");
+}
+
+#[test]
 fn an_existing_root_is_refused() {
     let store = Store::new();
     store.pack(HELLO, &[("bin/hello", b"binary", 0o755)]);
@@ -205,49 +257,48 @@ fn an_existing_root_is_refused() {
 fn clashing_extras_are_refused_and_nothing_is_written() {
     let store = Store::new();
     store.pack(HELLO, &[("bin/hello", b"binary", 0o755)]);
-    for (links, directories, include_artifacts, message) in [
+    for (links, directories, artifacts, message) in [
         (
             vec!["a:/etc"],
             vec!["a/b"],
-            false,
+            RootArtifacts::None,
             "\"a/b\": under \"a\", which is a symlink",
         ),
         (
             vec!["a:/etc", "a/b:x"],
             vec![],
-            false,
+            RootArtifacts::None,
             "\"a/b\": under \"a\", which is a symlink",
         ),
         (
             vec!["a:x", "a:y"],
             vec![],
-            false,
+            RootArtifacts::None,
             "\"a\": given more than once",
         ),
         (
             vec!["a:x"],
             vec!["a"],
-            false,
+            RootArtifacts::None,
             "\"a\": given as both a directory and a symlink",
         ),
         (
             vec!["system:/tmp"],
             vec![],
-            true,
+            RootArtifacts::Include,
             "\"system/artifacts\": under \"system\", which is a symlink",
         ),
         (
             vec![],
             vec!["system/artifacts/blobs"],
-            true,
-            "\"system/artifacts/blobs\": inside system/artifacts, \
-             which --include-artifacts provides",
+            RootArtifacts::Copy,
+            "\"system/artifacts/blobs\": inside system/artifacts, which holds the packages",
         ),
     ] {
         let extras = Extras {
             symlinks: symlinks(&links),
             dirs: dirs(&directories),
-            include_artifacts,
+            artifacts,
         };
         let err = store.compose(&[HELLO], &extras).unwrap_err();
         assert_eq!(err.to_string(), message, "{links:?} {directories:?}");
@@ -312,7 +363,7 @@ fn malformed_symlinks_and_directories_are_refused() {
 }
 
 #[test]
-fn a_root_on_another_filesystem_is_refused() {
+fn a_root_on_another_filesystem_needs_copied_artifacts() {
     // As for closures: the build tree and the system temporary directory are
     // separate filesystems on many hosts.
     let artifacts = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
@@ -328,14 +379,34 @@ fn a_root_on_another_filesystem_is_refused() {
     ppk::pack(&id(HELLO), content.path(), artifacts.path()).unwrap();
 
     let out = parent.path().join("root");
-    let err =
-        ppk::compose_env(&[id(HELLO)], artifacts.path(), &out, &Extras::default()).unwrap_err();
-    assert!(
-        err.to_string().ends_with(&format!(
-            "not on the same filesystem as the artifact directory {}",
-            artifacts.path().display()
-        )),
-        "{err:#}"
-    );
-    assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+    for artifacts_mode in [RootArtifacts::None, RootArtifacts::Include] {
+        let extras = Extras {
+            artifacts: artifacts_mode,
+            ..Extras::default()
+        };
+        let err = ppk::compose_env(&[id(HELLO)], artifacts.path(), &out, &extras).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "{}: not on the same filesystem as the artifact directory {}; \
+                 use --copy-artifacts",
+                out.display(),
+                artifacts.path().display()
+            ),
+            "{artifacts_mode:?}"
+        );
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+    }
+
+    let extras = Extras {
+        artifacts: RootArtifacts::Copy,
+        ..Extras::default()
+    };
+    ppk::compose_env(&[id(HELLO)], artifacts.path(), &out, &extras).unwrap();
+    let file = fs::metadata(out.join("usr/a")).unwrap();
+    let blob = out.join(format!(
+        "system/artifacts/blobs/sha256/{}",
+        Identity::of(b"a").hex()
+    ));
+    assert_eq!(file.ino(), fs::metadata(blob).unwrap().ino());
 }

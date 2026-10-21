@@ -611,3 +611,25 @@ fn packed_names_the_identity_a_version_is_packed_as() {
     let other: ppk::PackageId = "dev.peios.hello@1.0?arch=aarch64".parse().unwrap();
     assert_eq!(ppk::packed(&other, out.path()).unwrap(), None);
 }
+
+#[test]
+fn preparing_creates_a_missing_artifact_dir_and_leaves_it_empty() {
+    let parent = tempfile::tempdir().unwrap();
+    let out = parent.path().join("nested/artifacts");
+    ppk::prepare_artifact_dir(&out).unwrap();
+    assert_eq!(fs::read_dir(&out).unwrap().count(), 0);
+    // Already there, it is still fine.
+    ppk::prepare_artifact_dir(&out).unwrap();
+}
+
+#[test]
+fn preparing_an_artifact_dir_that_cannot_be_written_fails() {
+    let parent = tempfile::tempdir().unwrap();
+    let out = parent.path().join("artifacts");
+    fs::create_dir(&out).unwrap();
+    set_mode(&out, 0o555);
+    assert!(ppk::prepare_artifact_dir(&out).is_err());
+    // Nor can one be made where its parent cannot be written.
+    assert!(ppk::prepare_artifact_dir(&out.join("inner")).is_err());
+    set_mode(&out, 0o755);
+}

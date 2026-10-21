@@ -67,6 +67,16 @@ pub fn packed(id: &PackageId, artifact_dir: &Path) -> Result<Option<Identity>> {
     read_ref(&ArtifactDir::new(artifact_dir).ref_path(id))
 }
 
+/// Create `artifact_dir` if it is missing, and check that files can be
+/// created in it, so that a caller with costly work to do before packing
+/// finds out first.
+pub fn prepare_artifact_dir(artifact_dir: &Path) -> Result<()> {
+    create_dirs(artifact_dir)?;
+    // Removed again when dropped.
+    new_temp(artifact_dir, ARTIFACT_MODE)?;
+    Ok(())
+}
+
 /// The identity a ref names, or `None` if there is no ref at `path`. A ref
 /// holds exactly one identity and a newline; anything else is an error.
 pub(crate) fn read_ref(path: &Path) -> Result<Option<Identity>> {

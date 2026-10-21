@@ -22,11 +22,20 @@ the packages you name. Do this to use a set of packages without changing
 
 ## Run the command
 
-Run `ppk run` with the packages, then `--`, then the command and its
-arguments:
+Run `ppk run` with the packages after `-p`, then `--`, then the command
+and its arguments:
 
 ```sh
-ppk run 'dev.peios.hello@1.0?arch=noarch' -- /usr/bin/hello
+ppk run -p 'dev.peios.hello@1.0?arch=noarch' -- /usr/bin/hello
+```
+
+One `-p` takes every package after it. To use the packages of an
+environment profile, give the profile first; packages after `-p` are added
+to its own. A run keeps the rest of the filesystem as it is, so a
+profile's links and directories don't apply:
+
+```sh
+ppk run env.toml -p dev.peios.extra@1.0 -- /usr/bin/hello
 ```
 
 The command runs with the packages at `/usr`:
@@ -45,7 +54,7 @@ Leave out `--` and the command, and `ppk run` starts `/usr/bin/sh` in the
 environment:
 
 ```sh
-ppk run dev.peios.busybox@1.37.0
+ppk run -p net.busybox.busybox@1.37.0-1
 ```
 
 The shell is the closure's own, not yours, so one of the packages must

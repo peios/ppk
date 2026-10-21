@@ -99,7 +99,7 @@ end
 
 -- `ppk run` of the busybox closure, with `command` after the separator.
 local function run_args(command)
-    local args = { "run", "dev.peios.busybox@1.0", "--artifact-dir", "/system", "--" }
+    local args = { "run", "-p", "dev.peios.busybox@1.0", "--artifact-dir", "/system", "--" }
     for _, arg in ipairs(command) do
         args[#args + 1] = arg
     end

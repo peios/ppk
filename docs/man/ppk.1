@@ -21,6 +21,7 @@ ppk \- create and manage Peios packages
 .IR package ...
 .br
 .B ppk compose\-env
+.RI [ profile ]
 .RB [ \-\-artifact\-dir
 .IR dir ]
 .RB [ \-\-symlink
@@ -28,16 +29,19 @@ ppk \- create and manage Peios packages
 .RB [ \-\-dir
 .IR path ]...
 .RB [ \-\-include\-artifacts | \-\-copy\-artifacts ]
+.RB [ \-p
+.IR package ...]
 .B \-\-out
-.I dir package\c
-\&...
+.I dir
 .br
 .B ppk run
+.RI [ profile ]
 .RB [ \-\-artifact\-dir
 .IR dir ]
 .RB [ \-\-closure\-dir
 .IR dir ]
-.IR package ...
+.RB [ \-p
+.IR package ...]
 .RB [ \-\-
 .I command
 .RI [ argument ...]]
@@ -97,6 +101,54 @@ for content that does not depend on the architecture.
 No other qualifier is accepted, and
 .B arch
 can be given only once.
+.SH PROFILES
+An environment profile is a TOML file that says exactly what an environment
+holds, for
+.B compose\-env
+and
+.BR run :
+.PP
+.RS
+.EX
+dirs = ["proc", "sys", "tmp"]
+
+[packages]
+"net.busybox.busybox" = "1.37.0\-1"
+"dev.peios.prelude" = "0.0.7\-1"
+
+[symlinks]
+"init" = ":sbin/prelude"
+.EE
+.RE
+.PP
+.B packages
+maps each package's name to its exact version: a profile holds one version
+of each package.
+Every package is for the architecture
+.B arch
+gives, or the one
+.B ppk
+was built for.
+.B symlinks
+maps each link's path to its target, written as what follows
+.IB path :
+in
+.BR \-\-symlink ,
+so that a leading colon stands for
+.IR usr .
+.B dirs
+lists empty directories.
+Every key is optional, and any other key is an error.
+.PP
+The packages named with
+.B \-p
+are added to the profile's, and the links and directories named with
+.B \-\-symlink
+and
+.B \-\-dir
+to its own.
+Another version of a package the profile holds, or a link at a path the
+profile links elsewhere, is an error.
 .SH COMMANDS
 .TP
 .BI pack " package path"
@@ -185,11 +237,18 @@ if a path lies beneath a file or symbolic link of another package, or if
 the closure directory is not on the same filesystem as the artifact
 directory.
 .TP
-.BI compose\-env " package\fR...\fP"
-Lay out the root of an environment in the new directory named by
+.BI compose\-env " \fR[\fPprofile\fR]\fP"
+Lay out the root of the environment that
+.I profile
+and the options describe in the new directory named by
 .BR \-\-out ,
 for a tool such as an image builder to take, and print the identity of the
 packages' closure on standard output.
+At least one of
+.I profile
+and
+.B \-p
+must be given, and the environment must hold a package.
 The root's
 .I usr
 is the closure of the packages, built in place as
@@ -201,7 +260,11 @@ Nothing is written to that artifact directory.
 .IP
 What lies outside
 .I usr
-belongs to the environment, not to any package, and comes from
+belongs to the environment, not to any package, and comes from the
+profile's
+.B symlinks
+and
+.BR dirs ,
 .BR \-\-symlink ,
 .BR \-\-dir ,
 .BR \-\-include\-artifacts ,
@@ -226,18 +289,27 @@ if a path given lies under a symbolic link given, or, unless
 is given, if the directory is not on the same filesystem as the artifact
 directory.
 .TP
-.BI run " package\fR...\fP \fR[\fP" \-\- " command \fR[\fPargument\fR...]]\fP"
+.BI run " \fR[\fPprofile\fR] [\fP" \-\- " command \fR[\fPargument\fR...]]\fP"
 Run
 .IR command ,
 or
 .I /usr/bin/sh
 when no command is given,
 in an environment: the caller's own view of the filesystem, in a mount
-namespace of its own, with the closure of the packages mounted at
+namespace of its own, with the closure of the packages of
+.I profile
+and
+.B \-p
+mounted at
 .IR /usr .
+At least one of them must be given.
 Everything outside
 .I /usr
-is as the caller sees it.
+is as the caller sees it, so a profile's
+.B symlinks
+and
+.B dirs
+do not apply.
 The closure is built as
 .B closure
 builds it, or reused if it exists.
@@ -267,6 +339,17 @@ Print help for
 .B ppk
 or for one of its commands.
 .SH OPTIONS
+.TP
+.BR \-p ", " \-\-package " \fIpackage\fR..."
+For
+.B compose\-env
+and
+.BR run ,
+add every
+.I package
+that follows, up to the next option, to the environment.
+Can be given more than once.
+A profile must come before it, since what follows it is read as packages.
 .TP
 .BI \-\-artifact\-dir " dir"
 Store packages in
@@ -479,28 +562,36 @@ Compose the two packages into a closure in
 .I /system/artifacts/closures
 and print its identity.
 .TP
-.B ppk run 'dev.peios.hello@1.0?arch=noarch' \-\- /usr/bin/hello
+.B ppk run \-p 'dev.peios.hello@1.0?arch=noarch' \-\- /usr/bin/hello
 Run
 .I /usr/bin/hello
 from the package, in an environment whose
 .I /usr
 is the package's closure.
 .TP
-.B ppk compose\-env dev.peios.busybox@1.37.0 dev.peios.prelude@0.0.7 \-\-out initramfs \-\-symlink init::sbin/prelude \-\-dir proc \-\-dir sys
+.B ppk compose\-env initramfs.toml \-\-out initramfs
 Lay out the root of an initramfs in
 .IR initramfs ,
-with the two packages as its
+from the profile shown under
+.BR PROFILES :
+the two packages as its
 .IR usr ,
 .I init
 linked to
 .IR usr/sbin/prelude ,
 and empty
-.I proc
+.IR proc ,
+.IR sys ,
 and
-.I sys
+.I tmp
 directories.
 .TP
-.B ppk run dev.peios.busybox@1.37.0
+.B ppk compose\-env initramfs.toml \-p dev.peios.ppk@0.1.0\-1 \-\-out initramfs
+The same, with
+.B ppk
+added to the profile's packages.
+.TP
+.B ppk run \-p net.busybox.busybox@1.37.0\-1
 Start the shell that the busybox package provides, in an environment
 whose
 .I /usr

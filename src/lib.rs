@@ -42,6 +42,7 @@ mod id;
 mod identity;
 mod manifest;
 mod pack;
+mod profile;
 mod store;
 
 pub use closure::{Closed, closure};
@@ -51,6 +52,7 @@ pub use id::{HOST_ARCH, PackageId};
 pub use identity::Identity;
 pub use manifest::{Entry, Manifest, parse_manifest, render_manifest};
 pub use pack::{Packed, pack};
+pub use profile::Profile;
 pub use store::{packed, prepare_artifact_dir};
 
 /// The hash algorithm, as it appears in artifact paths and manifest values.

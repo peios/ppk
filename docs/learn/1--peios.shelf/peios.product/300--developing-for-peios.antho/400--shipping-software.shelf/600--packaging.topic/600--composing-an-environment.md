@@ -2,8 +2,8 @@
 title: Composing an Environment
 type: how-to
 description: Lay out an environment's whole root in a directory with ppk
-  compose-env, add the links and directories it needs outside /usr, and
-  include its packages.
+  compose-env from a profile or a list of packages, add the links and
+  directories it needs outside /usr, and include its packages.
 related:
   - peios/packaging/environments
   - peios/packaging/building-a-closure
@@ -26,11 +26,20 @@ work, see [Environments](~peios/packaging/environments).
 
 ## Compose the root
 
-Run `ppk compose-env` with the packages and `--out`:
+1. Describe the environment in a profile, such as `env.toml`. For the
+   format, see [Environments](~peios/packaging/environments):
 
-```sh
-ppk compose-env 'dev.peios.hello@1.0?arch=noarch' 'dev.peios.greetings@2.0?arch=noarch' --artifact-dir artifacts --out root
-```
+   ```toml
+   [packages]
+   "dev.peios.hello" = "1.0"
+   "dev.peios.greetings" = "2.0"
+   ```
+
+2. Run `ppk compose-env` with the profile and `--out`:
+
+   ```sh
+   ppk compose-env env.toml --artifact-dir artifacts --out root
+   ```
 
 `ppk` prints the identity of the packages' closure, the same one
 `ppk closure` prints for them:
@@ -42,15 +51,30 @@ sha256:854cb23deb27e55765ee2a3138a745efb7cbc2a4cf2e3e0d53e8106fc308a8c6
 `root/usr` holds the packages' files. Nothing is written to the artifact
 directory.
 
+To add packages to the profile's, or to compose without a profile, name
+them after `-p`. One `-p` takes every package after it, up to the next
+option, so the profile must come first:
+
+```sh
+ppk compose-env env.toml -p dev.peios.extra@1.0 --artifact-dir artifacts --out root
+ppk compose-env -p dev.peios.hello@1.0 dev.peios.greetings@2.0 --artifact-dir artifacts --out root
+```
+
+These packages are all for the architecture `ppk` was built for. To name
+another, give it in the package, as `dev.peios.hello@1.0?arch=noarch`, or
+give `arch` in the profile.
+
 ## Add what lies outside usr
 
 A package can only place files under `/usr`, so anything else the root
-needs comes from the command line:
+needs comes from the profile or the command line:
 
-- `--symlink <path>:<target>` creates a link. The target is written as
-  given, unless it starts with a second colon, which stands for `/usr`:
-  `bin::bin` links `bin` to `usr/bin`.
-- `--dir <path>` creates an empty directory, such as a mount point.
+- A link, from the profile's `symlinks` or `--symlink <path>:<target>`.
+  The target is written as given, unless it starts with a colon in the
+  profile, or a second colon on the command line, which stands for `/usr`:
+  `"bin" = ":bin"` and `bin::bin` both link `bin` to `usr/bin`.
+- An empty directory, such as a mount point, from the profile's `dirs` or
+  `--dir <path>`.
 - `--include-artifacts` gives the root its own artifact directory,
   `system/artifacts`, holding the packages themselves as hard links, so
   that `ppk` inside the environment finds them.
@@ -58,10 +82,11 @@ needs comes from the command line:
   blob as `ppk fetch` does. Use it to compose a root on another filesystem
   than the artifact directory, such as a fresh tmpfs.
 
-Paths are relative to the root and can be given more than once:
+Paths are relative to the root. The options add to what the profile
+gives:
 
 ```sh
-ppk compose-env 'dev.peios.hello@1.0?arch=noarch' 'dev.peios.greetings@2.0?arch=noarch' --artifact-dir artifacts --out root --symlink bin::bin --dir tmp --include-artifacts
+ppk compose-env env.toml --artifact-dir artifacts --out root --symlink bin::bin --dir tmp --include-artifacts
 ```
 
 The root then holds `bin`, a link to `usr/bin`, an empty `tmp`, the
@@ -81,6 +106,13 @@ follow the link out of the root:
 
 ```text
 ppk: "bin/extra": under "bin", which is a symlink
+```
+
+It refuses another version of a package the profile holds, since an
+environment holds one version of each:
+
+```text
+ppk: dev.peios.hello@2.0?arch=x86_64: the environment holds dev.peios.hello@1.0?arch=x86_64 already
 ```
 
 It also refuses packages that conflict, in the same way as

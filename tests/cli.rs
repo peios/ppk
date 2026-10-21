@@ -89,6 +89,7 @@ fn compose_env_prints_the_identity_and_lays_out_the_root() {
     let out = store.path().join("root");
     let output = ppk(&[
         "compose-env",
+        "-p",
         "dev.peios.hello@1.0",
         "--artifact-dir",
         path(&artifacts),
@@ -118,12 +119,13 @@ fn compose_env_prints_the_identity_and_lays_out_the_root() {
 fn compose_env_needs_an_output_directory_and_well_formed_extras() {
     for (args, message) in [
         (
-            vec!["compose-env", "dev.peios.hello@1.0"],
+            vec!["compose-env", "-p", "dev.peios.hello@1.0"],
             "missing option --out <dir>",
         ),
         (
             vec![
                 "compose-env",
+                "-p",
                 "dev.peios.hello@1.0",
                 "--out",
                 "o",
@@ -135,6 +137,7 @@ fn compose_env_needs_an_output_directory_and_well_formed_extras() {
         (
             vec![
                 "compose-env",
+                "-p",
                 "dev.peios.hello@1.0",
                 "--out",
                 "o",
@@ -146,6 +149,7 @@ fn compose_env_needs_an_output_directory_and_well_formed_extras() {
         (
             vec![
                 "compose-env",
+                "-p",
                 "dev.peios.hello@1.0",
                 "--out",
                 "o",
@@ -197,11 +201,89 @@ fn closures_default_to_inside_the_artifact_directory() {
     );
 }
 
+/// Packs a package `id` holding one file, `bin/<file>`, into `artifacts`.
+fn pack_one(id: &str, file: &str, artifacts: &Path) {
+    let content = tempfile::tempdir().unwrap();
+    fs::create_dir(content.path().join("bin")).unwrap();
+    fs::write(content.path().join("bin").join(file), file).unwrap();
+    let packed = ppk(&[
+        "pack",
+        id,
+        path(content.path()),
+        "--artifact-dir",
+        path(artifacts),
+    ]);
+    assert_eq!(packed.status.code(), Some(0), "{}", stderr(&packed));
+}
+
+#[test]
+fn compose_env_composes_a_profile_and_what_the_options_add() {
+    let store = tempfile::tempdir().unwrap();
+    let artifacts = store.path().join("artifacts");
+    pack_one("dev.peios.hello@1.0", "hello", &artifacts);
+    pack_one("dev.peios.greet@2.0", "greet", &artifacts);
+    pack_one("dev.peios.wave@3.0", "wave", &artifacts);
+    let profile = store.path().join("env.toml");
+    fs::write(
+        &profile,
+        "dirs = [\"proc\"]\n\n[packages]\n\"dev.peios.hello\" = \"1.0\"\n\n\
+         [symlinks]\n\"init\" = \":bin/hello\"\n",
+    )
+    .unwrap();
+
+    // One -p takes every package after it.
+    let out = store.path().join("root");
+    let output = ppk(&[
+        "compose-env",
+        path(&profile),
+        "-p",
+        "dev.peios.greet@2.0",
+        "dev.peios.wave@3.0",
+        "--artifact-dir",
+        path(&artifacts),
+        "--out",
+        path(&out),
+        "--dir",
+        "tmp",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    for file in ["hello", "greet", "wave"] {
+        assert!(out.join("usr/bin").join(file).is_file(), "{file}");
+    }
+    assert_eq!(
+        fs::read_link(out.join("init")).unwrap(),
+        Path::new("usr/bin/hello")
+    );
+    assert!(out.join("proc").is_dir());
+    assert!(out.join("tmp").is_dir());
+
+    // Another version of a package the profile holds is refused.
+    let output = ppk(&[
+        "compose-env",
+        path(&profile),
+        "-p",
+        "dev.peios.hello@2.0",
+        "--artifact-dir",
+        path(&artifacts),
+        "--out",
+        path(&store.path().join("other")),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        stderr(&output),
+        format!(
+            "ppk: dev.peios.hello@2.0?arch={arch}: the environment holds \
+             dev.peios.hello@1.0?arch={arch} already\n",
+            arch = ppk::HOST_ARCH
+        )
+    );
+}
+
 #[test]
 fn run_needs_packages() {
     for (args, missing) in [
-        (vec!["run"], "argument <package>..."),
-        (vec!["run", "--", "true"], "argument <package>..."),
+        (vec!["run"], "<profile> or -p <package>..."),
+        (vec!["run", "--", "true"], "<profile> or -p <package>..."),
     ] {
         let output = ppk(&args);
         assert_eq!(output.status.code(), Some(2), "{args:?}");
@@ -377,6 +459,7 @@ fn an_os_error_number_is_removed_from_the_middle_of_a_message() {
 
     let output = ppk(&[
         "compose-env",
+        "-p",
         "dev.peios.hello@1.0",
         "--artifact-dir",
         path(&artifacts),

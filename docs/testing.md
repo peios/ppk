@@ -71,21 +71,26 @@ is why each run packs into a store of its own. prelude's recipe takes the
 SDK from `PEIOS_SDK`, which the script sets from `--sdk`.
 
 The script then writes a spec for `peiso`: the live system is busybox and
-`ppk`, and the initramfs also holds prelude and live-root. `peiso`
-composes the initramfs's root: the closure of its packages and the live
-system's as `/usr` and, around it:
+`ppk`, and the initramfs holds those two, which the hook runs, with
+prelude and live-root. `peiso` composes the initramfs's root: the closure
+of its four packages as `/usr` and, around it:
 
 - `/init`, a link to `usr/sbin/prelude`;
 - empty `/proc`, `/sys` and `/tmp`;
-- `/system/artifacts`, holding those packages;
-- `/system/live.toml`, the live system's environment profile, which names
-  busybox and `ppk`, links `/bin` and `/sbin` to `usr/bin` and `usr/sbin`,
-  and gives an empty `/tmp`.
+- `/system/medium`, the identifier of the ISO it boots from.
 
 `mkirf` turns that tree into the initramfs, writing the hook into prelude's
 hook sequence, and `mkuki` makes the initramfs, the kernel and its command
 line into a unified kernel image. `peiso` writes the ISO with the image as
-its UEFI boot loader and every package in `/artifacts`. Pass `--mkirf`,
+its UEFI boot loader and, beside it:
+
+- `/artifacts`, a store holding every package;
+- `/live.toml`, the live system's environment profile, which names busybox
+  and `ppk`, links `/bin` and `/sbin` to `usr/bin` and `usr/sbin`, and
+  gives an empty `/tmp`;
+- `/peios-medium`, the same identifier as the initramfs's.
+
+Pass `--mkirf`,
 `--mkuki`, `--peiso` or `--pekit` to use another of those tools, and
 `--pkgs` to use another recipe workspace. QEMU then boots the ISO in the
 terminal, under OVMF, with `rd.shell` on the kernel command line.
@@ -94,14 +99,18 @@ At boot:
 
 1. prelude mounts `/proc`, `/sys` and `/dev`, and gives `/dev` its security
    descriptors with `seed-sd`.
-2. The `ppk-live-root` hook mounts a tmpfs at `/mnt/live` and gives it a
-   descriptor with `seed-sd`: a tmpfs refuses all access, even to SYSTEM,
-   until its root has one. It then runs `ppk compose-env` with
-   `/system/live.toml` and `--copy-artifacts`, so the system's root has its
-   own copy of its packages, adds `/proc`, `/sys` and `/dev` for prelude to
-   move its mounts onto, and bind-mounts that root onto `/mnt/rootfs`. The
-   root lives on its own tmpfs because prelude deletes what is left on the
-   initramfs's filesystem once it hands over.
+2. The `ppk-live-root` hook finds the ISO: it mounts each disk, disc and
+   stick with an ISO9660 filesystem at `/mnt/medium` in turn, and keeps the
+   one whose `/peios-medium` matches `/system/medium`, waiting up to ten
+   seconds for one to appear. In QEMU it is `/dev/sr0`. The hook mounts a
+   tmpfs at `/mnt/live` and gives it a descriptor with `seed-sd`: a tmpfs
+   refuses all access, even to SYSTEM, until its root has one. It then
+   runs `ppk compose-env` with the medium's `live.toml` and `artifacts`
+   and `--copy-artifacts`, so the system's root has its own copy of its
+   packages, adds `/proc`, `/sys` and `/dev` for prelude to move its mounts
+   onto, unmounts the medium, and bind-mounts the root onto `/mnt/rootfs`.
+   The root lives on its own tmpfs because prelude deletes what is left on
+   the initramfs's filesystem once it hands over.
 3. prelude moves `/proc`, `/sys` and `/dev` into the new root, switches to
    it, and starts its first fallback init that exists, `/sbin/init`, which
    is busybox's `init`.

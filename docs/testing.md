@@ -44,27 +44,38 @@ by hand:
 tools/vm-shell
 ```
 
-On the host, it builds the static `ppk` and packs it and the host's busybox
-as `dev.peios.ppk@<version>` and `dev.peios.busybox@<version>`, with a link
-for each busybox applet. It composes their closure and lays the closure out
-as the image's `/usr`. The image adds the rest of the root:
+On the host, it builds the static `ppk` and prelude, and packs three
+packages:
 
-- `/init`, a link to busybox's `init`;
-- `/bin`, a link to `usr/bin`, because busybox's `init` starts `/bin/sh`;
+- `dev.peios.busybox@<version>`, the host's busybox with a link for each
+  applet;
+- `dev.peios.ppk@<version>`, with `bin/ppk`;
+- `dev.peios.prelude@<version>`, with `sbin/prelude` and
+  `libexec/prelude/hook-log.sh`, as prelude installs them.
+
+It composes their closure and lays the closure out as the image's `/usr`.
+The image adds the rest of the root:
+
+- `/init`, a link to `usr/sbin/prelude`;
 - empty `/proc`, `/sys` and `/tmp`;
-- `/system/artifacts`, holding the two packages.
+- `/system/artifacts`, holding the three packages.
 
 `mkirf` from the `peiosutils` repository beside `ppk` turns that tree into
-the initramfs; pass `--mkirf` to use another. QEMU then starts in the
-terminal.
+the initramfs, writing prelude's empty hook sequence. Pass `--mkirf` to use
+another `mkirf`, and `--prelude` to build prelude from another checkout
+than the one beside `ppk`. QEMU then starts in the terminal, with `rd.shell`
+on the kernel command line.
 
-busybox's `init` is scaffolding until prelude takes its place. With no
-`/etc/inittab`, it complains that `/etc/init.d/rcS` is missing, then offers
-a shell on the console when you press <kbd>Enter</kbd>, and a new one when
-that shell exits. Nothing mounts `/proc`, `/sys` or `/dev`. Run
-`poweroff -f` to power the guest off, or press <kbd>Ctrl</kbd>+<kbd>A</kbd>
-then <kbd>X</kbd>. Nothing in the guest survives. Pass `--kernel` or set
-`PPK_VM_KERNEL` to boot another kernel; `--help` lists the options.
+prelude mounts `/proc`, `/sys` and `/dev`, and warns that `seed-sd` is
+missing: the box leaves it out for now, because it needs the static
+libpeios SDK. With no hook to mount a root, boot fails and prelude opens its
+recovery shell. That shell has no controlling terminal, so
+<kbd>Ctrl</kbd>+<kbd>C</kbd> does nothing. Run `poweroff -f` to power the
+guest off, or press <kbd>Ctrl</kbd>+<kbd>A</kbd> then <kbd>X</kbd>. Exiting
+the shell halts the guest but leaves QEMU running, so press
+<kbd>Ctrl</kbd>+<kbd>A</kbd> then <kbd>X</kbd> after it. Nothing in the
+guest survives. Pass `--kernel` or set `PPK_VM_KERNEL` to boot another
+kernel; `--help` lists the options.
 
 The shell runs as SYSTEM on `rootfs`, so every access check passes for it.
 The store has no descriptors of its own, because it was packed on the host

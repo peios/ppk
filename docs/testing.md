@@ -34,6 +34,25 @@ provium .
 
 Add `--json` to see each test's `t:log` output.
 
+## An interactive shell
+
+`tools/vm-shell` boots the same kernel with a busybox shell and `ppk` on
+the serial console, so you can try commands by hand:
+
+```sh
+tools/vm-shell
+```
+
+It builds the static `ppk`, packs it with busybox into an initramfs, and
+starts QEMU in the terminal. `/demo/busybox` in the guest is a directory to
+pack, and the shell prints commands to try. Exit the shell to power the
+guest off, or press <kbd>Ctrl</kbd>+<kbd>A</kbd> then <kbd>X</kbd>. Nothing in
+the guest survives. Pass `--kernel` or set `PPK_VM_KERNEL` to boot another
+kernel; `--help` lists the options.
+
+The shell runs as SYSTEM on `rootfs`, the same as the VM tests, so the
+limits that follow apply to it too.
+
 ### What the tests do and don't show
 
 The guest's root is the kernel's `rootfs`, which KACS manages. Its root

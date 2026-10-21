@@ -70,19 +70,23 @@ have checked out. Their versions do not change with their contents, which
 is why each run packs into a store of its own. prelude's recipe takes the
 SDK from `PEIOS_SDK`, which the script sets from `--sdk`.
 
-`ppk compose-env` then lays out the initramfs's root, with the four
+The script writes two environment profiles from the versions `pekit`
+reports. The live system's, `live.toml`, names busybox and `ppk`, links
+`/bin` and `/sbin` to `usr/bin` and `usr/sbin`, and gives an empty `/tmp`.
+`ppk compose-env` lays out the initramfs's root from the other: the four
 packages' closure as its `/usr` and, around it:
 
-- `/init`, a link to `usr/sbin/prelude` (`--symlink init::sbin/prelude`);
-- empty `/proc`, `/sys` and `/tmp` (`--dir`);
+- `/init`, a link to `usr/sbin/prelude`;
+- empty `/proc`, `/sys` and `/tmp`;
 - `/system/artifacts`, holding the four packages (`--include-artifacts`).
+
+The script then puts `live.toml` in the root as `/system/live.toml`.
 
 `mkirf` from the `peiosutils` repository beside `ppk` turns that tree into
 the initramfs, writing the hook into prelude's hook sequence. Pass
 `--mkirf` to use another `mkirf`, `--pekit` to use another `pekit`, and
 `--pkgs` to use another recipe workspace. QEMU then starts in the
-terminal. The kernel command line names the system's packages, busybox and
-`ppk`, as `ppk.system=<package>,<package>`, and has `rd.shell`.
+terminal, with `rd.shell` on the kernel command line.
 
 At boot:
 
@@ -90,11 +94,11 @@ At boot:
    descriptors with `seed-sd`.
 2. The `ppk-live-root` hook mounts a tmpfs at `/mnt/live` and gives it a
    descriptor with `seed-sd`: a tmpfs refuses all access, even to SYSTEM,
-   until its root has one. It then runs `ppk compose-env` with the
-   `ppk.system=` packages and `--copy-artifacts`, so the system's root has
-   its own copy of them, links `/bin` and `/sbin` to `usr/bin` and
-   `usr/sbin`, and bind-mounts that root onto `/mnt/rootfs`. The root lives
-   on its own tmpfs because prelude deletes what is left on the
+   until its root has one. It then runs `ppk compose-env` with
+   `/system/live.toml` and `--copy-artifacts`, so the system's root has its
+   own copy of its packages, adds `/proc`, `/sys` and `/dev` for prelude to
+   move its mounts onto, and bind-mounts that root onto `/mnt/rootfs`. The
+   root lives on its own tmpfs because prelude deletes what is left on the
    initramfs's filesystem once it hands over.
 3. prelude moves `/proc`, `/sys` and `/dev` into the new root, switches to
    it, and starts its first fallback init that exists, `/sbin/init`, which

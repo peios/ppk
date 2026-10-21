@@ -147,14 +147,42 @@ packed=$(PEIOS_SDK=$sdk "$pekit" package --workspace "$pkgs" --artifact-dir "$ar
 system=("$busybox_package" "$ppk_package")
 initramfs=("$busybox_package" "$ppk_package" "$prelude_package" "$live_root_package")
 
+# Writes an environment profile's [packages] table for the packages given,
+# each as <name>@<version>.
+packages_table() {
+    echo '[packages]'
+    for package in "$@"; do
+        printf '"%s" = "%s"\n' "${package%@*}" "${package#*@}"
+    done
+}
+
+# The live system's profile, which the hook reads from the initramfs.
+{
+    echo 'dirs = ["tmp"]'
+    echo
+    packages_table "${system[@]}"
+    echo
+    echo '[symlinks]'
+    echo '"bin" = ":bin"'
+    echo '"sbin" = ":sbin"'
+} >"$work/live.toml"
+
 # The initramfs environment: the packages as /usr, with their artifacts for
 # the hook and for ppk in the recovery shell. prelude is init, and mounts
 # /proc and /sys on these directories; mkirf turns the hook into prelude's
 # hook sequence.
+{
+    echo 'dirs = ["proc", "sys", "tmp"]'
+    echo
+    packages_table "${initramfs[@]}"
+    echo
+    echo '[symlinks]'
+    echo '"init" = ":sbin/prelude"'
+} >"$work/initramfs.toml"
 root=$work/root
-"$ppk" compose-env "${initramfs[@]}" --artifact-dir "$artifacts" --out "$root" \
-    --include-artifacts --symlink init::sbin/prelude \
-    --dir proc --dir sys --dir tmp >/dev/null
+"$ppk" compose-env "$work/initramfs.toml" --artifact-dir "$artifacts" --out "$root" \
+    --include-artifacts >/dev/null
+install -m 644 -- "$work/live.toml" "$root/system/live.toml"
 
 # mkirf reports what it wrote; show its output only when it fails.
 if ! built=$("$mkirf" "$root" "$work/initramfs.cpio.zst" 2>&1); then
@@ -174,12 +202,10 @@ Run 'poweroff -f' to power off, or press Ctrl-A then X.
 
 HINT
 
-# The hook reads the system's packages from ppk.system=, and rd.shell makes
-# prelude open its recovery shell if boot fails.
-system_arg=$(IFS=,; echo "${system[*]}")
+# rd.shell makes prelude open its recovery shell if boot fails.
 qemu-system-x86_64 \
     -enable-kvm -cpu host -m "$memory" \
     -nographic -no-reboot \
     -kernel "$kernel" \
     -initrd "$work/initramfs.cpio.zst" \
-    -append "console=ttyS0 panic=-1 quiet rd.shell ppk.system=$system_arg"
+    -append "console=ttyS0 panic=-1 quiet rd.shell"

@@ -3,44 +3,37 @@
 # provides = ["rootfs-ready"]
 # ///
 #
-# Live boot: compose the system's root from packages in the initramfs's
-# store, on a fresh tmpfs, and offer it to prelude at /mnt/rootfs.
+# Live boot: compose the system's root, as the environment profile
+# /system/live.toml describes it, from packages in the initramfs's store, on
+# a fresh tmpfs, and offer it to prelude at /mnt/rootfs.
 #
-# The packages are named on the kernel command line as
-# ppk.system=<package>,<package>... The root lives on its own tmpfs because
-# prelude deletes what is left on the initramfs's filesystem once it hands
-# over; --copy-artifacts gives it a store of its own there.
+# The root lives on its own tmpfs because prelude deletes what is left on
+# the initramfs's filesystem once it hands over; --copy-artifacts gives it a
+# store of its own there.
 
 . /usr/libexec/prelude/hook-log.sh
 hook_log_init ppk-live-root
 
+profile=/system/live.toml
 live=/mnt/live
 rootfs=/mnt/rootfs
 
-read -r cmdline </proc/cmdline
-system=
-for word in $cmdline; do
-    case $word in
-        ppk.system=*) system=${word#ppk.system=} ;;
-    esac
-done
-if [ -z "$system" ]; then
+if [ ! -f "$profile" ]; then
     # This hook is the image's root strategy, so a missing input is a
     # failure, not a reason to decline.
-    log_fail "no ppk.system= on the kernel command line"
+    log_fail "no live system profile at $profile"
     exit 1
 fi
-packages=$(echo "$system" | tr , ' ')
 
-log "composing the system root from $packages"
+log "composing the system root from $profile"
 mkdir -p "$live" || exit 1
 mount -t tmpfs tmpfs "$live" || exit 1
 # A tmpfs has no security descriptor until its mounter gives it one, and
 # until then refuses everyone.
 seed-sd "$live" || exit 1
-# shellcheck disable=SC2086 # one word per package
-ppk compose-env $packages --out "$live/root" --copy-artifacts \
-    --symlink bin::bin --symlink sbin::sbin --dir proc --dir sys --dir dev --dir tmp \
-    >/dev/null || exit 1
+# prelude moves /proc, /sys and /dev into the new root, so the root has
+# them whatever the profile says.
+ppk compose-env "$profile" --out "$live/root" --copy-artifacts \
+    --dir proc --dir sys --dir dev >/dev/null || exit 1
 mount --bind "$live/root" "$rootfs" || exit 1
 log_ok "system root composed at $rootfs"

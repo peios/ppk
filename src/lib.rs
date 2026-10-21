@@ -33,6 +33,7 @@
 //! will cover the manifest's bytes, so those bytes must say which package
 //! they are.
 
+mod access;
 mod closure;
 mod fetch;
 mod id;

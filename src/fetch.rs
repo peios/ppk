@@ -75,7 +75,7 @@ pub fn fetch(id: &PackageId, source: &Path, artifact_dir: &Path) -> Result<Fetch
     }
 
     let blob_dir = to.blob_dir();
-    fs::create_dir_all(&blob_dir).with_context(|| format!("{}", blob_dir.display()))?;
+    store::create_dirs(&blob_dir)?;
     let mut copied = HashSet::new();
     for (_, entry) in &manifest.entries {
         let Entry::Blob { hex, exec } = entry else {
@@ -92,14 +92,14 @@ pub fn fetch(id: &PackageId, source: &Path, artifact_dir: &Path) -> Result<Fetch
     }
 
     let manifest_dir = to.manifest_dir();
-    fs::create_dir_all(&manifest_dir).with_context(|| format!("{}", manifest_dir.display()))?;
+    store::create_dirs(&manifest_dir)?;
     let manifest_path = to.manifest_path(&identity);
     if !store::write_new(&manifest_dir, &manifest_path, &bytes)? {
         bail!("{}: does not match its hash", manifest_path.display());
     }
 
     let ref_dir = to.ref_dir(id);
-    fs::create_dir_all(&ref_dir).with_context(|| format!("{}", ref_dir.display()))?;
+    store::create_dirs(&ref_dir)?;
     if !store::write_new(
         &ref_dir,
         &ref_path,

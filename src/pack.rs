@@ -95,7 +95,7 @@ pub fn pack(id: &PackageId, input: &Path, artifact_dir: &Path) -> Result<Packed>
     }
 
     let blob_dir = layout.blob_dir();
-    fs::create_dir_all(&blob_dir).with_context(|| format!("{}", blob_dir.display()))?;
+    store::create_dirs(&blob_dir)?;
     let mut blobs_written = 0;
     for (hex, exec, path) in &sources {
         let blob = layout.blob_path(hex, *exec);
@@ -108,13 +108,13 @@ pub fn pack(id: &PackageId, input: &Path, artifact_dir: &Path) -> Result<Packed>
     }
 
     let manifest_dir = layout.manifest_dir();
-    fs::create_dir_all(&manifest_dir).with_context(|| format!("{}", manifest_dir.display()))?;
+    store::create_dirs(&manifest_dir)?;
     let manifest_path = layout.manifest_path(&identity);
     if !store::write_new(&manifest_dir, &manifest_path, manifest.as_bytes())? {
         bail!("{}: does not match its hash", manifest_path.display());
     }
 
-    fs::create_dir_all(&ref_dir).with_context(|| format!("{}", ref_dir.display()))?;
+    store::create_dirs(&ref_dir)?;
     if !store::write_new(
         &ref_dir,
         &ref_path,

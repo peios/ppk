@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use crate::access;
 use crate::manifest::toml_string;
 use crate::store::{self, ArtifactDir};
 use crate::{Entry, Identity, PackageId, parse_manifest};
@@ -78,7 +79,7 @@ pub fn closure(packages: &[PackageId], artifact_dir: &Path, closure_dir: &Path) 
 
     let merged = merge(&layout, &identities)?;
 
-    fs::create_dir_all(closure_dir).with_context(|| format!("{}", closure_dir.display()))?;
+    store::create_dirs(closure_dir)?;
     check_same_filesystem(&layout, artifact_dir, closure_dir)?;
     write_manifest(closure_dir, &manifest_path, &manifest)?;
 
@@ -92,6 +93,9 @@ pub fn closure(packages: &[PackageId], artifact_dir: &Path, closure_dir: &Path) 
                 closure_dir.display()
             )
         })?;
+    // Directories and symlinks created in the tree inherit this; its files are
+    // hardlinks, and keep their blobs' descriptor.
+    access::protect_dir(tmp.path())?;
     for (path, (entry, _)) in &merged {
         build_entry(&layout, tmp.path(), path, entry)?;
     }

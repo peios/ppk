@@ -30,7 +30,10 @@ the artifact directory is read-only: a change made through one closure
 would change the file in every closure that links it.
 
 Symbolic links and directories aren't shared. `ppk closure` creates them
-afresh in each tree.
+afresh in each tree. The root of the tree grants everyone read and execute,
+and the directories and links inside it inherit that, so any user can reach
+and run what a closure holds. Its files have the access their blobs grant,
+described in [Packages](~peios/packaging/packages).
 
 ## Naming a closure
 

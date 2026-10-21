@@ -35,6 +35,7 @@
 
 mod access;
 mod closure;
+mod compose;
 pub mod environment;
 mod fetch;
 mod id;
@@ -44,6 +45,7 @@ mod pack;
 mod store;
 
 pub use closure::{Closed, closure};
+pub use compose::{Composed, EnvDir, EnvSymlink, Extras, compose_env};
 pub use fetch::{Fetched, fetch};
 pub use id::{HOST_ARCH, PackageId};
 pub use identity::Identity;

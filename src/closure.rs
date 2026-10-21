@@ -48,20 +48,8 @@ pub struct Closed {
 /// directory and renamed into place, so a closure that exists is complete.
 /// `closure_dir` must be on the same filesystem as `artifact_dir`.
 pub fn closure(packages: &[PackageId], artifact_dir: &Path, closure_dir: &Path) -> Result<Closed> {
-    if packages.is_empty() {
-        bail!("a closure needs at least one package");
-    }
     let layout = ArtifactDir::new(artifact_dir);
-    let mut identities = Vec::with_capacity(packages.len());
-    for id in packages {
-        let Some(identity) = store::read_ref(&layout.ref_path(id))? else {
-            bail!("{id}: no such package in {}", artifact_dir.display());
-        };
-        identities.push(identity);
-    }
-    identities.sort_by(|a, b| a.hex().cmp(b.hex()));
-    identities.dedup();
-
+    let identities = package_identities(&layout, packages, artifact_dir)?;
     let manifest = render_closure_manifest(&identities);
     let identity = Identity::of(manifest.as_bytes());
     let tree_path = closure_dir.join(identity.hex());
@@ -124,10 +112,32 @@ pub fn closure(packages: &[PackageId], artifact_dir: &Path, closure_dir: &Path) 
     }
 }
 
+/// The identities of `packages`, sorted and without duplicates, as a closure
+/// of them lists them.
+pub(crate) fn package_identities(
+    layout: &ArtifactDir,
+    packages: &[PackageId],
+    artifact_dir: &Path,
+) -> Result<Vec<Identity>> {
+    if packages.is_empty() {
+        bail!("a closure needs at least one package");
+    }
+    let mut identities = Vec::with_capacity(packages.len());
+    for id in packages {
+        let Some(identity) = store::read_ref(&layout.ref_path(id))? else {
+            bail!("{id}: no such package in {}", artifact_dir.display());
+        };
+        identities.push(identity);
+    }
+    identities.sort_by(|a, b| a.hex().cmp(b.hex()));
+    identities.dedup();
+    Ok(identities)
+}
+
 /// The manifest naming a closure of `identities`, which must be sorted and
 /// without duplicates. Each identity is on its own line, so that the closure
 /// manifest has exactly one spelling.
-fn render_closure_manifest(identities: &[Identity]) -> String {
+pub(crate) fn render_closure_manifest(identities: &[Identity]) -> String {
     let mut out = String::from("packages = [\n");
     for identity in identities {
         out.push_str(&format!("    \"{identity}\",\n"));
@@ -145,7 +155,7 @@ fn write_manifest(closure_dir: &Path, manifest_path: &Path, manifest: &str) -> R
 
 /// Every path in the packages `identities`, with its entry and the package
 /// that provides it, checked for conflicts before anything is written.
-fn merge(
+pub(crate) fn merge(
     layout: &ArtifactDir,
     identities: &[Identity],
 ) -> Result<BTreeMap<String, (Entry, PackageId)>> {
@@ -194,7 +204,7 @@ fn merge(
 }
 
 /// Hardlinks fail across filesystems, so refuse before writing anything.
-fn check_same_filesystem(
+pub(crate) fn check_same_filesystem(
     layout: &ArtifactDir,
     artifact_dir: &Path,
     closure_dir: &Path,
@@ -221,7 +231,12 @@ fn check_same_filesystem(
     Ok(())
 }
 
-fn build_entry(layout: &ArtifactDir, root: &Path, path: &str, entry: &Entry) -> Result<()> {
+pub(crate) fn build_entry(
+    layout: &ArtifactDir,
+    root: &Path,
+    path: &str,
+    entry: &Entry,
+) -> Result<()> {
     let dest = root.join(path);
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).with_context(|| format!("{}", parent.display()))?;

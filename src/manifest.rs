@@ -123,7 +123,7 @@ fn parse_entry(value: &toml::Value) -> Result<Entry> {
     bail!("not a blob, symlink or directory")
 }
 
-fn check_path(path: &str) -> Result<()> {
+pub(crate) fn check_path(path: &str) -> Result<()> {
     let safe = !path.contains('\0')
         && path
             .split('/')

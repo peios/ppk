@@ -7,6 +7,7 @@ description: What an environment is, covering the closure mounted at /usr,
 related:
   - peios/packaging/closures
   - peios/packaging/running-a-command-in-an-environment
+  - peios/packaging/composing-an-environment
 ---
 
 An environment is a view of the filesystem in which a closure is `/usr`.
@@ -38,6 +39,15 @@ and when the last of them ends, the environment ends with it.
 
 Each `ppk run` creates a new environment, even for the same closure. The
 closure itself is built once and reused.
+
+## Laid out as files
+
+An environment can also be laid out as a directory, as the whole root of a
+filesystem, for a tool such as an image builder to take. `ppk compose-env`
+does this. There is no running system around such a root to borrow the rest
+of the filesystem from, so what lies outside `/usr`, such as links and
+mount points, is given when the root is composed. It belongs to the
+environment, not to any package.
 
 ## Who can create one
 

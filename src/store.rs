@@ -61,6 +61,12 @@ impl<'a> ArtifactDir<'a> {
     }
 }
 
+/// The identity `id` is packed as in `artifact_dir`, or `None` if it is not
+/// packed there.
+pub fn packed(id: &PackageId, artifact_dir: &Path) -> Result<Option<Identity>> {
+    read_ref(&ArtifactDir::new(artifact_dir).ref_path(id))
+}
+
 /// The identity a ref names, or `None` if there is no ref at `path`. A ref
 /// holds exactly one identity and a newline; anything else is an error.
 pub(crate) fn read_ref(path: &Path) -> Result<Option<Identity>> {

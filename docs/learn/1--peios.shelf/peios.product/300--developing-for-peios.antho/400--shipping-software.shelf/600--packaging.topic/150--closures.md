@@ -9,11 +9,11 @@ related:
   - peios/packaging/building-a-closure
 ---
 
-A closure is a set of packages composed into one directory tree, laid out
-as a system root. Each package keeps its ordinary paths, such as
-`/usr/bin/hello`, so software runs from a closure without any changes to
-where it looks for its files. Different closures can hold different
-versions of the same package side by side.
+A closure is a set of packages composed into one directory tree: the
+contents of a `/usr`. Mounted at `/usr`, each package's files are at their
+ordinary paths, such as `/usr/bin/hello`, so software runs from a closure
+without any changes to where it looks for its files. Different closures
+can hold different versions of the same package side by side.
 
 ## A tree of hardlinks
 
@@ -42,8 +42,8 @@ packages:
 
 ```toml
 packages = [
-    "sha256:3eeece7f77f6140977b3b906292d9d30c6595d9c3b2bdad4c333a50745795309",
-    "sha256:5d843b03aa4090b4d375f1c91f001aba9d5af2aaa03bab4ee2b49abc315c8845",
+    "sha256:044f86f4999c008042cb80ea46ee1f468457702cfe8426c7edf50997f79e420c",
+    "sha256:a8365e28be69277a8d88766c04cd901d603d82be7dc85bac0f24c55ef2e84381",
 ]
 ```
 

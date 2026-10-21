@@ -8,8 +8,8 @@ related:
   - peios/packaging/fetching-a-package
 ---
 
-Building a closure composes packages into one directory tree that is laid
-out as a system root. Do this when you want a set of packages together in
+Building a closure composes packages into one directory tree, the contents
+of a `/usr`. Do this when you want a set of packages together in
 one place, for example to check that they fit together without conflicts.
 For how closures work, see [Closures](~peios/packaging/closures).
 
@@ -33,7 +33,7 @@ ppk closure 'dev.peios.hello@1.0?arch=noarch' 'dev.peios.greetings@2.0?arch=noar
 `ppk` prints the closure's identity:
 
 ```text
-sha256:fc893f180b8bdbb4604098a845d2b5006e84caf1336ab07239867bc8ec1b7ac5
+sha256:854cb23deb27e55765ee2a3138a745efb7cbc2a4cf2e3e0d53e8106fc308a8c6
 ```
 
 ## Check the result
@@ -42,10 +42,11 @@ The closure's tree is in the `closures` directory of the artifact
 directory, named by the hash in the identity:
 
 ```sh
-ls artifacts/closures/fc893f180b8bdbb4604098a845d2b5006e84caf1336ab07239867bc8ec1b7ac5/usr/bin
+ls artifacts/closures/854cb23deb27e55765ee2a3138a745efb7cbc2a4cf2e3e0d53e8106fc308a8c6/bin
 ```
 
-The tree holds the files of every package, at their usual paths:
+The tree holds the files of every package, laid out as they appear under
+`/usr`:
 
 ```text
 hello
@@ -61,7 +62,7 @@ If two packages give the same path different contents, `ppk closure`
 refuses and names both packages:
 
 ```text
-ppk: "usr/bin/hello": dev.peios.clash@1.0?arch=noarch and dev.peios.hello@1.0?arch=noarch provide different entries
+ppk: "bin/hello": dev.peios.hello@1.0?arch=noarch and dev.peios.clash@1.0?arch=noarch provide different entries
 ```
 
 Nothing is written. Decide which package should provide the path, and

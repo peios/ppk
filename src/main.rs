@@ -106,9 +106,9 @@ enum Command {
         #[arg(long, value_name = "dir")]
         closure_dir: Option<PathBuf>,
     },
-    /// Run a command with the closure of packages at /usr
+    /// Run a command, or a shell, with the closure of packages at /usr
     #[command(
-        override_usage = "ppk run [options] <package>... -- <command> [<argument>...]",
+        override_usage = "ppk run [options] <package>... [-- <command> [<argument>...]]",
         after_help = SEE_ALSO
     )]
     Run {
@@ -126,8 +126,9 @@ enum Command {
         /// Use closures in <dir> (default: <artifact-dir>/closures)
         #[arg(long, value_name = "dir")]
         closure_dir: Option<PathBuf>,
-        /// Command to run, and its arguments
-        #[arg(value_name = "command", last = true, required = true)]
+        /// Command to run, and its arguments (default: /usr/bin/sh)
+        // Angle brackets in the name, as for help's optional argument below.
+        #[arg(value_name = "<command>", last = true)]
         command: Vec<OsString>,
     },
     /// Print help for ppk or one of its commands
@@ -195,6 +196,11 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             let closure_dir = closure_dir.unwrap_or_else(|| artifact_dir.join(ppk::CLOSURE_SUBDIR));
             let closed = ppk::closure(&packages, &artifact_dir, &closure_dir)?;
             ppk::environment::enter(&closed.tree_path)?;
+            let command = if command.is_empty() {
+                vec![OsString::from(ppk::environment::SHELL)]
+            } else {
+                command
+            };
             return Ok(exec(program, &command));
         }
         Command::Help { .. } => unreachable!("help is handled before run"),
@@ -207,7 +213,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
 fn exec(program: &str, command: &[OsString]) -> ExitCode {
     let (name, args) = command
         .split_first()
-        .expect("clap requires a command after --");
+        .expect("run supplies the shell when no command is given");
     let err = std::process::Command::new(name).args(args).exec();
     let status = match err.kind() {
         io::ErrorKind::NotFound => EXIT_NOT_FOUND,

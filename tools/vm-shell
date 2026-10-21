@@ -1,6 +1,8 @@
 #!/bin/bash
-# Boot a Peios kernel with a busybox shell and ppk on its serial console, for
-# trying ppk by hand. The guest is a throwaway: nothing in it survives.
+# Boot a Peios kernel straight into a ppk environment, for trying ppk by
+# hand. The guest holds ppk and an artifact directory with busybox packed in
+# it, and nothing else: ppk is PID 1, and runs busybox's shell with the
+# busybox package at /usr. The guest is a throwaway: nothing in it survives.
 set -euo pipefail
 
 readonly MUSL_TARGET=x86_64-unknown-linux-musl
@@ -9,7 +11,7 @@ readonly DEFAULT_KERNEL="$HOME/.cache/provium/builds/peinit/image/root/usr/lib/m
 
 usage() {
     cat <<'EOF'
-Boot a Peios kernel with a busybox shell and ppk
+Boot a Peios kernel into a busybox shell that ppk runs as PID 1
 
 Usage: tools/vm-shell [options]
 
@@ -19,7 +21,7 @@ Options:
   --memory <size>  Give the guest this much memory (default: 1G)
   -h, --help       Print help
 
-Exit the shell to power the guest off, or press Ctrl-A then X.
+Run 'poweroff -f' in the guest to power it off, or press Ctrl-A then X.
 EOF
 }
 
@@ -64,51 +66,52 @@ busybox=$(command -v busybox) || fail "busybox: not found on PATH"
 if ldd "$busybox" >/dev/null 2>&1; then
     fail "$busybox: not statically linked"
 fi
+# The first line of busybox's help is "BusyBox v1.37.0 (...) multi-call binary."
+busybox_version=$("$busybox" | sed -n '1s/^BusyBox v\([0-9][0-9.]*\).*/\1/p')
+[[ -n $busybox_version ]] || fail "$busybox: cannot read its version"
+package=dev.peios.busybox@$busybox_version
 
 repo=$(cd -- "$(dirname -- "$0")/.." && pwd)
 cargo build --quiet --release --target "$MUSL_TARGET" --manifest-path "$repo/Cargo.toml"
+ppk=$repo/target/$MUSL_TARGET/release/ppk
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/ppk-vm-shell.XXXXXXXX")
 trap 'rm -rf -- "$work"' EXIT HUP INT TERM
 
+# The busybox package: the binary, and a link to it for each applet.
+content=$work/busybox
+mkdir -p -- "$content/bin"
+cp -- "$busybox" "$content/bin/busybox"
+"$busybox" --list | while read -r applet; do
+    # Some builds list busybox itself as an applet.
+    [[ $applet == busybox ]] || ln -s busybox "$content/bin/$applet"
+done
+
 root=$work/root
 # An environment mounts its closure over /usr, so the guest needs one.
-mkdir -p -- "$root"/{bin,dev,proc,sys,tmp,usr} "$root/demo/busybox/bin"
-cp -- "$busybox" "$root/bin/busybox"
-ln -s busybox "$root/bin/sh"
-cp -- "$repo/target/$MUSL_TARGET/release/ppk" "$root/bin/ppk"
-# A directory to pack straight away.
-cp -- "$busybox" "$root/demo/busybox/bin/busybox"
-
-cat >"$root/init" <<'INIT'
-#!/bin/sh
-/bin/busybox --install -s /bin
-mount -t proc proc /proc
-mount -t sysfs sysfs /sys
-mount -t devtmpfs devtmpfs /dev
-mount -t tmpfs tmpfs /tmp
-cat <<'HINT'
-
-ppk is /bin/ppk, and /demo/busybox is a directory to pack. Try:
-
-  ppk pack dev.peios.busybox@1.0 /demo/busybox --artifact-dir /artifacts
-  ppk closure dev.peios.busybox@1.0 --artifact-dir /artifacts
-  ppk run dev.peios.busybox@1.0 --artifact-dir /artifacts -- /usr/bin/busybox ls /usr/bin
-
-Exit the shell to power off.
-
-HINT
-setsid cttyhack sh
-poweroff -f
-INIT
-chmod 755 -- "$root/init"
+mkdir -p -- "$root/system/bin" "$root/usr"
+cp -- "$ppk" "$root/system/bin/ppk"
+"$ppk" pack "$package" "$content" --artifact-dir "$root/system/artifacts" >/dev/null
 
 (cd -- "$root" && find . -print0 | cpio --null --create --format=newc --owner=0:0 --quiet) |
     gzip -1 >"$work/initramfs.cpio.gz"
 
+cat <<HINT
+
+The guest starts in busybox's shell, which ppk runs as PID 1 with
+$package at /usr. ppk is /system/bin/ppk, and the
+package is in /system/artifacts. Nothing has mounted /proc, /sys or /dev,
+and the shell has no controlling terminal, so Ctrl-C does nothing.
+
+Run 'poweroff -f' to power off, or press Ctrl-A then X.
+
+HINT
+
+# The kernel passes the words after its own `--` to init, but stops at a
+# second `--`, so `ppk run` is given no command and starts the closure's shell.
 qemu-system-x86_64 \
     -enable-kvm -cpu host -m "$memory" \
     -nographic -no-reboot \
     -kernel "$kernel" \
     -initrd "$work/initramfs.cpio.gz" \
-    -append "console=ttyS0 rdinit=/init panic=-1 quiet"
+    -append "console=ttyS0 rdinit=/system/bin/ppk panic=-1 quiet -- run $package"

@@ -26,9 +26,9 @@ ppk \- create and manage Peios packages
 .RB [ \-\-closure\-dir
 .IR dir ]
 .IR package ...
-.B \-\-
+.RB [ \-\-
 .I command
-.RI [ argument ...]
+.RI [ argument ...]]
 .br
 .B ppk help
 .RI [ command ]
@@ -170,9 +170,12 @@ if a path lies beneath a file or symbolic link of another package, or if
 the closure directory is not on the same filesystem as the artifact
 directory.
 .TP
-.BI run " package\fR...\fP " \-\- " command \fR[\fPargument\fR...]\fP"
+.BI run " package\fR...\fP \fR[\fP" \-\- " command \fR[\fPargument\fR...]]\fP"
 Run
-.I command
+.IR command ,
+or
+.I /usr/bin/sh
+when no command is given,
 in an environment: the caller's own view of the filesystem, in a mount
 namespace of its own, with the closure of the packages mounted at
 .IR /usr .
@@ -192,6 +195,9 @@ whose exit status becomes
 is looked up through
 .B PATH
 inside the environment, unless it contains a slash.
+The default shell is the closure's own, not the caller's, so it is only
+there if one of the packages provides
+.IR bin/sh .
 The mount stays inside the environment: nothing outside it sees the
 closure at
 .IR /usr ,
@@ -355,5 +361,11 @@ Run
 from the package, in an environment whose
 .I /usr
 is the package's closure.
+.TP
+.B ppk run dev.peios.busybox@1.37.0
+Start the shell that the busybox package provides, in an environment
+whose
+.I /usr
+is that package's closure.
 .SH SEE ALSO
 https://learn.peios.org/peios/developing-for-peios/packaging/creating-a-package

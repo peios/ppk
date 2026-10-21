@@ -36,22 +36,31 @@ Add `--json` to see each test's `t:log` output.
 
 ## An interactive shell
 
-`tools/vm-shell` boots the same kernel with a busybox shell and `ppk` on
-the serial console, so you can try commands by hand:
+`tools/vm-shell` boots the same kernel straight into a `ppk` environment,
+with a busybox shell on the serial console, so you can try commands by hand:
 
 ```sh
 tools/vm-shell
 ```
 
-It builds the static `ppk`, packs it with busybox into an initramfs, and
-starts QEMU in the terminal. `/demo/busybox` in the guest is a directory to
-pack, and the shell prints commands to try. Exit the shell to power the
-guest off, or press <kbd>Ctrl</kbd>+<kbd>A</kbd> then <kbd>X</kbd>. Nothing in
-the guest survives. Pass `--kernel` or set `PPK_VM_KERNEL` to boot another
-kernel; `--help` lists the options.
+It builds the static `ppk`, packs the host's busybox on the host as
+`dev.peios.busybox@<version>`, with a link for each applet, and starts QEMU
+in the terminal. The initramfs holds only `/system/bin/ppk`, the artifact
+directory `/system/artifacts` and an empty `/usr`. The kernel starts `ppk`
+as PID 1 with `run dev.peios.busybox@<version>` and no command, so `ppk`
+builds the closure and replaces itself with the closure's `/usr/bin/sh`.
+
+Nothing in the guest mounts `/proc`, `/sys` or `/dev`, and the shell has no
+controlling terminal, so <kbd>Ctrl</kbd>+<kbd>C</kbd> does nothing. Run
+`poweroff -f` to power the guest off, or press <kbd>Ctrl</kbd>+<kbd>A</kbd>
+then <kbd>X</kbd>; exiting the shell ends PID 1, which panics the kernel and
+also ends QEMU. Nothing in the guest survives. Pass `--kernel` or set
+`PPK_VM_KERNEL` to boot another kernel; `--help` lists the options.
 
 The shell runs as SYSTEM on `rootfs`, so every access check passes for it.
-To see what an ordinary user can do, use the VM tests.
+The store has no descriptors of its own, because it was packed on the host
+and cpio doesn't carry extended attributes; its files inherit `rootfs`'s
+SYSTEM-only one. To see what an ordinary user can do, use the VM tests.
 
 ### What the tests do and don't show
 
@@ -71,7 +80,8 @@ Two tests cover `ppk run`, as SYSTEM and as the same ordinary user, who
 runs a copy of `ppk` packed into its own closure. Both first make the
 guest's root mount shared, because a private root would hide a mount
 leaking out of the environment, and then check that the guest's own `/usr`
-is still empty after the command has seen the closure there.
+is still empty after the command has seen the closure there. A third
+checks that `ppk run` with no command starts the closure's own shell.
 
 The syscall and token helpers come from provium's and the kernel's
 integration suites, so the VM tests need the `provium` and `kernel`

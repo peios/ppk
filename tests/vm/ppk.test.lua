@@ -50,6 +50,7 @@ local function build_closure(t, vm)
     t:assert(vm:mkdir("/content/bin", { parents = true }) == nil)
     busybox(vm, { "cp", BUSYBOX, "/content/bin/busybox" }):assert_ok()
     make_executable(t, vm, "/content/bin/busybox")
+    busybox(vm, { "ln", "-s", "busybox", "/content/bin/sh" }):assert_ok()
 
     local packed = ppk(vm, {
         "pack", "dev.peios.busybox@1.0", "/content", "--artifact-dir", "/build",
@@ -170,7 +171,7 @@ test("run shows the closure at /usr to its command alone", function(t)
 
     local listed = ppk(vm, run_args({ "/usr/bin/busybox", "ls", "/usr/bin" }))
     listed:assert_ok()
-    t:assert_eq(listed.stdout, "busybox\n")
+    t:assert_eq(listed.stdout, "busybox\nsh\n")
     t:assert_eq(#vm:listdir("/usr"), 0, "the mount stays inside the environment")
 
     local failed = ppk(vm, run_args({ "/usr/bin/busybox", "false" }))
@@ -197,7 +198,21 @@ test("an ordinary user can run a command in an environment", function(t)
     token.as_principal(t, vm, user, function(w)
         local r = w:run(user_ppk, { args = run_args({ "/usr/bin/busybox", "ls", "/usr/bin" }) })
         t:assert_eq(r.exit_code, 0, r.stderr)
-        t:assert_eq(r.stdout, "busybox\n")
+        t:assert_eq(r.stdout, "busybox\nsh\n")
     end)
     t:assert_eq(#vm:listdir("/usr"), 0, "the user's mount stays inside the environment")
+end)
+
+test("run with no command starts the closure's shell", function(t)
+    local vm = boot(t)
+    build_closure(t, vm)
+    t:assert(vm:mkdir("/usr") == nil)
+
+    local r = vm:run(PPK, {
+        args = { "run", "dev.peios.busybox@1.0", "--artifact-dir", "/system" },
+        stdin = "echo $0; ls /usr/bin; exit 3\n",
+        timeout = "30s",
+    })
+    t:assert_eq(r.exit_code, 3, r.stderr)
+    t:assert_eq(r.stdout, "/usr/bin/sh\nbusybox\nsh\n")
 end)

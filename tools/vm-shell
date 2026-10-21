@@ -1,9 +1,10 @@
 #!/bin/bash
-# Boot a Peios kernel with an initramfs built from a ppk closure, for trying
-# ppk by hand. The host packs busybox, ppk and prelude, composes their
-# closure, lays it out as the image's /usr, and has mkirf turn that into the
-# initramfs. prelude is init; with no hook to mount a root, it opens its
-# recovery shell. The guest is a throwaway: nothing in it survives.
+# Live-boot a Peios kernel into a system composed from ppk packages, for
+# trying ppk by hand. The host packs busybox, ppk, prelude and a prelude
+# hook, composes them into the initramfs's root, and has mkirf turn that
+# into the initramfs. At boot, prelude runs the hook, which composes the
+# system's root from packages on a tmpfs, and hands over to it. The guest
+# is a throwaway: nothing in it survives.
 set -euo pipefail
 
 readonly MUSL_TARGET=x86_64-unknown-linux-musl
@@ -133,7 +134,8 @@ trap 'rm -rf -- "$work"' EXIT HUP INT TERM
 # The packages, staged with paths relative to /usr. busybox gets a link to
 # itself for each applet.
 mkdir -p -- "$work/busybox/bin" "$work/ppk/bin" \
-    "$work/prelude/bin" "$work/prelude/sbin" "$work/prelude/libexec/prelude"
+    "$work/prelude/bin" "$work/prelude/sbin" "$work/prelude/libexec/prelude" \
+    "$work/live-root/libexec/prelude/hooks.d"
 cp -- "$busybox" "$work/busybox/bin/busybox"
 "$busybox" --list | while read -r applet; do
     # Some builds list busybox itself as an applet.
@@ -145,22 +147,32 @@ cp -- "$ppk" "$work/ppk/bin/ppk"
 cp -- "$prelude/target/$MUSL_TARGET/release/prelude" "$work/prelude/sbin/prelude"
 cp -- "$prelude/target/$MUSL_TARGET/release/seed-sd" "$work/prelude/bin/seed-sd"
 install -m 644 -- "$prelude/src/hook-log.sh" "$work/prelude/libexec/prelude/hook-log.sh"
+# The live-boot root strategy: a prelude hook that composes the system's
+# root at boot.
+install -m 755 -- "$repo/boot/ppk-live-root" "$work/live-root/libexec/prelude/hooks.d/ppk-live-root"
 
 artifacts=$work/artifacts
-packages=(
-    "dev.peios.busybox@$busybox_version"
-    "dev.peios.ppk@$ppk_version"
-    "dev.peios.prelude@$prelude_version"
-)
-"$ppk" pack "${packages[0]}" "$work/busybox" --artifact-dir "$artifacts" >/dev/null
-"$ppk" pack "${packages[1]}" "$work/ppk" --artifact-dir "$artifacts" >/dev/null
-"$ppk" pack "${packages[2]}" "$work/prelude" --artifact-dir "$artifacts" >/dev/null
+busybox_package=dev.peios.busybox@$busybox_version
+ppk_package=dev.peios.ppk@$ppk_version
+prelude_package=dev.peios.prelude@$prelude_version
+live_root_package=dev.peios.live-root@$ppk_version
+"$ppk" pack "$busybox_package" "$work/busybox" --artifact-dir "$artifacts" >/dev/null
+"$ppk" pack "$ppk_package" "$work/ppk" --artifact-dir "$artifacts" >/dev/null
+"$ppk" pack "$prelude_package" "$work/prelude" --artifact-dir "$artifacts" >/dev/null
+"$ppk" pack "$live_root_package" "$work/live-root" --artifact-dir "$artifacts" >/dev/null
 
-# The initramfs environment: the packages as /usr, with their artifacts so
-# ppk in the guest can use them. prelude is init, and mounts /proc and /sys
-# on these directories; mkirf adds prelude's empty hook sequence.
+# The system that runs after prelude hands over. The hook composes its root
+# from the initramfs's store, which holds only the initramfs's own packages,
+# so these must be among them.
+system=("$busybox_package" "$ppk_package")
+initramfs=("$busybox_package" "$ppk_package" "$prelude_package" "$live_root_package")
+
+# The initramfs environment: the packages as /usr, with their artifacts for
+# the hook and for ppk in the recovery shell. prelude is init, and mounts
+# /proc and /sys on these directories; mkirf turns the hook into prelude's
+# hook sequence.
 root=$work/root
-"$ppk" compose-env "${packages[@]}" --artifact-dir "$artifacts" --out "$root" \
+"$ppk" compose-env "${initramfs[@]}" --artifact-dir "$artifacts" --out "$root" \
     --include-artifacts --symlink init::sbin/prelude \
     --dir proc --dir sys --dir tmp >/dev/null
 
@@ -172,22 +184,22 @@ fi
 
 cat <<HINT
 
-The initramfs is the closure of
-${packages[*]},
-laid out as /usr, and its init is prelude. prelude mounts /proc, /sys and
-/dev, finds no hook to mount a root, and opens its recovery shell. ppk is
-/usr/bin/ppk, and the packages are in /system/artifacts. The shell has no
-controlling terminal, so Ctrl-C does nothing.
+prelude, the initramfs's init, runs the ppk-live-root hook, which composes
+the system's root from ${system[*]}
+on a tmpfs and hands it to prelude. The system's init is busybox's: press
+Enter for a shell. ppk is /usr/bin/ppk, and the system's packages are in
+/system/artifacts. If boot fails, prelude opens a recovery shell instead.
 
-Run 'poweroff -f' to power off, or press Ctrl-A then X. Exiting the shell
-halts the guest but leaves QEMU running; press Ctrl-A then X after it.
+Run 'poweroff -f' to power off, or press Ctrl-A then X.
 
 HINT
 
-# rd.shell makes prelude open its recovery shell when boot fails.
+# The hook reads the system's packages from ppk.system=, and rd.shell makes
+# prelude open its recovery shell if boot fails.
+system_arg=$(IFS=,; echo "${system[*]}")
 qemu-system-x86_64 \
     -enable-kvm -cpu host -m "$memory" \
     -nographic -no-reboot \
     -kernel "$kernel" \
     -initrd "$work/initramfs.cpio.zst" \
-    -append "console=ttyS0 panic=-1 quiet rd.shell"
+    -append "console=ttyS0 panic=-1 quiet rd.shell ppk.system=$system_arg"

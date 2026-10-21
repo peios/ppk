@@ -73,6 +73,48 @@ fn fetch_without_a_source_is_a_usage_error() {
 }
 
 #[test]
+fn closures_default_to_inside_the_artifact_directory() {
+    let content = content_dir();
+    let store = tempfile::tempdir().unwrap();
+    let packed = ppk(&[
+        "pack",
+        "dev.peios.hello@1.0",
+        path(content.path()),
+        "--artifact-dir",
+        path(store.path()),
+    ]);
+    assert_eq!(packed.status.code(), Some(0), "{}", stderr(&packed));
+
+    let output = ppk(&[
+        "closure",
+        "dev.peios.hello@1.0",
+        "--artifact-dir",
+        path(store.path()),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let identity = stdout(&output);
+    let hex = identity.trim_end().strip_prefix("sha256:").unwrap();
+    assert!(
+        store
+            .path()
+            .join("closures")
+            .join(hex)
+            .join("bin/hello")
+            .is_file()
+    );
+}
+
+#[test]
+fn closure_without_packages_is_a_usage_error() {
+    let output = ppk(&["closure"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        stderr(&output),
+        "ppk: missing argument <package>...\nTry 'ppk --help' for more information.\n"
+    );
+}
+
+#[test]
 fn malformed_package_is_a_usage_error() {
     let content = content_dir();
     let output = ppk(&["pack", "dev.peios.hello", path(content.path())]);
@@ -146,6 +188,7 @@ fn help_lines_fit_in_80_columns() {
         vec!["--help"],
         vec!["help", "pack"],
         vec!["help", "fetch"],
+        vec!["help", "closure"],
         vec!["help", "help"],
     ] {
         let text = stdout(&ppk(&args));

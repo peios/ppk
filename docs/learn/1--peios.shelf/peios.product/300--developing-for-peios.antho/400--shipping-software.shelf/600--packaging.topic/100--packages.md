@@ -20,7 +20,7 @@ no extra space.
 A package has two kinds of part:
 
 - **Blobs.** A blob is the content of one file, named by its SHA-256 hash.
-  It records nothing else: not the file's path, name, or permissions.
+  It doesn't record the file's path or name.
 - **The manifest.** A manifest names the package and lists every path in
   it. Each path is a file, given by its blob and whether it is executable;
   a symbolic link, given by its target; or an empty directory.
@@ -78,13 +78,19 @@ listed in `ppk(1)`.
 ## The artifact directory
 
 `ppk` stores packages in an artifact directory, which is
-`/system/artifacts` unless you name another. It holds three kinds of file:
+`/system/artifacts` unless you name another. It holds these kinds of file:
 
 | Path | Contents |
 |---|---|
-| `blobs/sha256/<hash>` | The content of one file |
+| `blobs/sha256/<hash>` | The content of one file that isn't executable |
+| `blobs/sha256/<hash>.exec` | The content of one executable file |
 | `manifests/sha256/<hash>` | One manifest, named by its hash |
 | `refs/<name>/<version>/<arch>` | The identity of the package with that name, version, and architecture |
+
+A blob is stored in the form its manifest entries need: plain, executable,
+or both if the same content is shipped both ways. The form is part of the
+stored file, not of the blob's name, so a package's identity doesn't depend
+on it.
 
 A ref is an index. It lets you find a package by name, but every manifest
 records its own name, version, and architecture, so the manifests remain

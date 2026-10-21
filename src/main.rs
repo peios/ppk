@@ -12,6 +12,9 @@ const EXIT_USAGE: u8 = 2;
 /// The help's closing pointer to the full documentation.
 const SEE_ALSO: &str = "See ppk(1).";
 
+/// PSC keeps help within 80 columns; clap wraps to the terminal up to this.
+const HELP_WIDTH: usize = 80;
+
 /// Create and manage Peios packages
 #[derive(Parser)]
 #[command(
@@ -19,6 +22,7 @@ const SEE_ALSO: &str = "See ppk(1).";
     version,
     arg_required_else_help = true,
     disable_help_subcommand = true,
+    max_term_width = HELP_WIDTH,
     subcommand_value_name = "command",
     after_help = SEE_ALSO
 )]
@@ -68,6 +72,27 @@ enum Command {
         #[arg(long, value_name = "dir")]
         from: PathBuf,
     },
+    /// Compose packages into a closure
+    #[command(
+        override_usage = "ppk closure [options] <package>...",
+        after_help = SEE_ALSO
+    )]
+    Closure {
+        /// Packages to compose, each as <name>@<version>[?arch=<arch>]
+        #[arg(value_name = "package", required = true)]
+        packages: Vec<PackageId>,
+        /// Read packages from <dir> (default: /system/artifacts)
+        #[arg(
+            long,
+            value_name = "dir",
+            default_value = ppk::DEFAULT_ARTIFACT_DIR,
+            hide_default_value = true,
+        )]
+        artifact_dir: PathBuf,
+        /// Store closures in <dir> (default: <artifact-dir>/closures)
+        #[arg(long, value_name = "dir")]
+        closure_dir: Option<PathBuf>,
+    },
     /// Print help for ppk or one of its commands
     #[command(override_usage = "ppk help [<command>]", after_help = SEE_ALSO)]
     Help {
@@ -114,6 +139,15 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         } => {
             let fetched = ppk::fetch(&package, &from, &artifact_dir)?;
             println!("{}", fetched.identity);
+        }
+        Command::Closure {
+            packages,
+            artifact_dir,
+            closure_dir,
+        } => {
+            let closure_dir = closure_dir.unwrap_or_else(|| artifact_dir.join(ppk::CLOSURE_SUBDIR));
+            let closed = ppk::closure(&packages, &artifact_dir, &closure_dir)?;
+            println!("{}", closed.identity);
         }
         Command::Help { .. } => unreachable!("help is handled before run"),
     }

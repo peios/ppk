@@ -78,15 +78,15 @@ pub fn fetch(id: &PackageId, source: &Path, artifact_dir: &Path) -> Result<Fetch
     fs::create_dir_all(&blob_dir).with_context(|| format!("{}", blob_dir.display()))?;
     let mut copied = HashSet::new();
     for (_, entry) in &manifest.entries {
-        let Entry::Blob { hex, .. } = entry else {
+        let Entry::Blob { hex, exec } = entry else {
             continue;
         };
-        let blob = blob_dir.join(hex);
-        if blob.exists() || !copied.insert(hex) {
+        let blob = to.blob_path(hex, *exec);
+        if blob.exists() || !copied.insert((hex, exec)) {
             continue;
         }
-        let source_blob = from.blob_dir().join(hex);
-        if !store::copy_blob(&source_blob, hex, &blob_dir, &blob)? {
+        let source_blob = from.blob_path(hex, *exec);
+        if !store::copy_blob(&source_blob, &blob, hex, *exec)? {
             bail!("{}: does not match its hash", source_blob.display());
         }
     }

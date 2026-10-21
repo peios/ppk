@@ -13,6 +13,13 @@ ppk \- create and manage Peios packages
 .B \-\-from
 .I dir package
 .br
+.B ppk closure
+.RB [ \-\-artifact\-dir
+.IR dir ]
+.RB [ \-\-closure\-dir
+.IR dir ]
+.IR package ...
+.br
 .B ppk help
 .RI [ command ]
 .br
@@ -20,8 +27,8 @@ ppk \- create and manage Peios packages
 .RB [ \-h | \-\-help | \-V | \-\-version ]
 .SH DESCRIPTION
 .B ppk
-creates Peios packages, stores them in an artifact directory, and copies
-them from one artifact directory to another.
+creates Peios packages, stores them in an artifact directory, copies them
+from one artifact directory to another, and composes them into closures.
 .PP
 A package is a manifest that lists every path in it, with each file's
 content stored separately as a blob named by its SHA-256 hash.
@@ -126,6 +133,26 @@ fails and writes nothing.
 These checks prove that the package matches the source's ref.
 They do not prove who published it, so fetch only from sources you trust.
 .TP
+.BI closure " package\fR...\fP"
+Compose the packages, each already in the artifact directory, into a
+closure: one directory tree laid out as a system root.
+Print the closure's identity on standard output.
+.IP
+Every file in the tree is a hard link to its blob, in the form its entry
+needs; symbolic links and directories are created in the tree.
+The closure's manifest lists the identities of its packages, sorted and
+without duplicates, and the closure's identity is the SHA-256 hash of that
+manifest, so the order and repetition of the arguments do not matter.
+An existing closure is reused.
+A tree is built in a temporary directory and renamed into place when
+complete.
+.IP
+.B ppk closure
+fails, writing nothing, if two packages give one path different entries,
+if a path lies beneath a file or symbolic link of another package, or if
+the closure directory is not on the same filesystem as the artifact
+directory.
+.TP
 .BI help " \fR[\fPcommand\fR]\fP"
 Print help for
 .B ppk
@@ -139,6 +166,17 @@ instead of
 .IR /system/artifacts .
 .B ppk
 creates the directory if it does not exist.
+.TP
+.BI \-\-closure\-dir " dir"
+For
+.BR closure ,
+store closures in
+.I dir
+instead of the
+.I closures
+directory of the artifact directory.
+.I dir
+must be on the same filesystem as the artifact directory.
 .TP
 .BI \-\-from " dir"
 For
@@ -177,7 +215,14 @@ Paths are relative to the artifact directory,
 by default.
 .TP
 .IR blobs/sha256/ hash
-The content of one file, uncompressed, named by the SHA-256 hash of that content.
+The content of one file that is not executable, uncompressed, named by the
+SHA-256 hash of that content.
+Mode 0444.
+.TP
+.IR blobs/sha256/ hash .exec
+The same for an executable file.
+Mode 0555.
+Content shipped both as executable and not is stored in both forms.
 .TP
 .IR manifests/sha256/ hash
 A manifest, named by the SHA-256 hash of its bytes.
@@ -185,6 +230,14 @@ A manifest, named by the SHA-256 hash of its bytes.
 .IR refs/ name / version / arch
 The identity of the package with that name, version, and architecture,
 followed by a newline.
+.TP
+.IR closures/ hash
+The tree of the closure with that identity, unless
+.B \-\-closure\-dir
+names another directory.
+.TP
+.IR closures/ hash .manifest
+The manifest of that closure.
 .SH EXAMPLES
 .TP
 .B ppk pack 'dev.peios.hello@1.0?arch=noarch' hello \-\-artifact\-dir artifacts
@@ -205,5 +258,10 @@ into
 and print its identity, which is the one
 .B ppk pack
 printed.
+.TP
+.B ppk closure 'dev.peios.hello@1.0?arch=noarch' 'dev.peios.greetings@2.0?arch=noarch'
+Compose the two packages into a closure in
+.I /system/artifacts/closures
+and print its identity.
 .SH SEE ALSO
 https://learn.peios.org/peios/developing-for-peios/packaging/creating-a-package

@@ -59,13 +59,19 @@ fn parse_files(manifest: &Path) -> toml::Table {
     files
 }
 
+/// Where the form of the blob that `entry` needs is stored.
 fn blob_path(out: &Path, entry: &toml::Value) -> PathBuf {
     let hex = entry["blob"]
         .as_str()
         .unwrap()
         .strip_prefix("sha256:")
         .unwrap();
-    out.join("blobs/sha256").join(hex)
+    let suffix = if entry.get("exec").is_some() {
+        ".exec"
+    } else {
+        ""
+    };
+    out.join("blobs/sha256").join(format!("{hex}{suffix}"))
 }
 
 /// Every file under `dir`, relative to it, sorted.
@@ -113,18 +119,32 @@ fn round_trips_every_file() {
 
 #[test]
 fn artifacts_are_read_only() {
-    let input = tree(&[("bin/hello", b"binary")]);
+    let input = tree(&[("bin/hello", b"binary"), ("README", b"docs")]);
+    set_mode(&input.path().join("bin/hello"), 0o755);
     let out = tempfile::tempdir().unwrap();
     let packed = pack(input.path(), out.path()).unwrap();
     let manifest = parse_files(&packed.manifest_path);
-    for path in [
-        blob_path(out.path(), &manifest["bin/hello"]),
-        packed.manifest_path,
-        packed.ref_path,
+    for (path, expected) in [
+        (blob_path(out.path(), &manifest["README"]), 0o444),
+        (blob_path(out.path(), &manifest["bin/hello"]), 0o555),
+        (packed.manifest_path, 0o444),
+        (packed.ref_path, 0o444),
     ] {
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o7777;
-        assert_eq!(mode, 0o444, "{}", path.display());
+        assert_eq!(mode, expected, "{}", path.display());
     }
+}
+
+#[test]
+fn executables_are_stored_in_their_executable_form() {
+    let input = tree(&[("bin/hello", b"binary")]);
+    set_mode(&input.path().join("bin/hello"), 0o755);
+    let out = tempfile::tempdir().unwrap();
+    pack(input.path(), out.path()).unwrap();
+    let hex = format!("{:x}", Sha256::digest(b"binary"));
+    let blobs = out.path().join("blobs/sha256");
+    assert!(blobs.join(format!("{hex}.exec")).exists());
+    assert!(!blobs.join(&hex).exists(), "no plain form is needed");
 }
 
 #[test]
@@ -435,7 +455,10 @@ fn any_execute_bit_marks_a_file_exec() {
     }
     let out = tempfile::tempdir().unwrap();
     let packed = pack(input.path(), out.path()).unwrap();
-    assert_eq!(packed.blobs_written, 1, "mode never affects the blob");
+    assert_eq!(
+        packed.blobs_written, 2,
+        "one plain and one executable form of the same content"
+    );
     let manifest = parse_files(&packed.manifest_path);
     for (name, mode, exec) in modes {
         let recorded = manifest[name].get("exec").is_some();
@@ -444,14 +467,16 @@ fn any_execute_bit_marks_a_file_exec() {
 }
 
 #[test]
-fn exec_bit_is_part_of_identity_but_not_of_the_blob() {
+fn exec_bit_is_part_of_identity_and_selects_the_stored_form() {
     let input = tree(&[("bin/hello", b"binary")]);
     let out = tempfile::tempdir().unwrap();
     let plain = pack_as("dev.peios.hello@1.0?arch=x86_64", input.path(), out.path()).unwrap();
     set_mode(&input.path().join("bin/hello"), 0o755);
     let exec = pack_as("dev.peios.hello@1.1?arch=x86_64", input.path(), out.path()).unwrap();
-    assert_eq!(exec.blobs_written, 0);
+    assert_eq!(exec.blobs_written, 1, "the executable form is stored too");
     assert_ne!(plain.identity, exec.identity);
+    let again = pack_as("dev.peios.hello@1.2?arch=x86_64", input.path(), out.path()).unwrap();
+    assert_eq!(again.blobs_written, 0, "each form is stored once");
 }
 
 #[test]

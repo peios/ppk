@@ -5,7 +5,9 @@
 //!
 //! ```text
 //! <artifact-dir>/blobs/sha256/<hex>
-//!     file content, uncompressed, named by its SHA-256
+//!     file content, uncompressed, named by its SHA-256 (mode 0444)
+//! <artifact-dir>/blobs/sha256/<hex>.exec
+//!     the same content in executable form (mode 0555), for exec entries
 //! <artifact-dir>/manifests/sha256/<hex>
 //!     a manifest, named by the SHA-256 of its bytes
 //! <artifact-dir>/refs/<name>/<version>/<arch>
@@ -31,6 +33,7 @@
 //! will cover the manifest's bytes, so those bytes must say which package
 //! they are.
 
+mod closure;
 mod fetch;
 mod id;
 mod identity;
@@ -38,6 +41,7 @@ mod manifest;
 mod pack;
 mod store;
 
+pub use closure::{Closed, closure};
 pub use fetch::{Fetched, fetch};
 pub use id::{HOST_ARCH, PackageId};
 pub use identity::Identity;
@@ -49,3 +53,7 @@ pub const ALGORITHM: &str = "sha256";
 
 /// Where packages are stored unless told otherwise.
 pub const DEFAULT_ARTIFACT_DIR: &str = "/system/artifacts";
+
+/// Where closures are built unless told otherwise: this directory inside the
+/// artifact directory, so that they are on the same filesystem as its blobs.
+pub const CLOSURE_SUBDIR: &str = "closures";

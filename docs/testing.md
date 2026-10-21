@@ -44,24 +44,31 @@ commands by hand:
 tools/vm-shell
 ```
 
-It needs the `peiosutils` and `prelude` repositories beside `ppk`, and a
-static musl Peios SDK for building `seed-sd`. Prepare the SDK once with
+It needs the `peiosutils`, `pekit`, `pkgs` and `prelude` repositories
+beside `ppk`, and a static musl Peios SDK for building `seed-sd`. Prepare
+the SDK once with
 prelude's `tools/prepare-sdk.py`, as prelude's `docs/building.md`
 describes, into `~/.cache/peios/prelude-sdk-musl`, or pass `--sdk` or set
 `PEIOS_SDK` to use another. The script needs `peios-sdk` checked out at the
 commit it names; a temporary worktree at that commit keeps your own
 checkout as it is.
 
-On the host, it builds the static `ppk`, prelude and `seed-sd`, and packs
-four packages:
+On the host, `pekit` builds four packages from their recipes in `pkgs`,
+into a store of the run's own:
 
-- `dev.peios.busybox@<version>`, the host's busybox with a link for each
-  applet;
-- `dev.peios.ppk@<version>`, with `bin/ppk`;
-- `dev.peios.prelude@<version>`, with `sbin/prelude`, `bin/seed-sd` and
+- `net.busybox.busybox`, busybox built statically from its release
+  tarball, with a link for each applet in `bin` and `sbin`;
+- `dev.peios.ppk`, with the static `bin/ppk`;
+- `dev.peios.prelude`, with `sbin/prelude`, `bin/seed-sd` and
   `libexec/prelude/hook-log.sh`, as prelude installs them;
-- `dev.peios.live-root@<version>`, with the prelude hook
+- `dev.peios.live-root`, with the prelude hook
   `libexec/prelude/hooks.d/ppk-live-root`, from `boot/ppk-live-root`.
+
+The recipes for `ppk`, live-root and prelude build from the checkouts
+beside `pkgs`, uncommitted changes included, so what boots is what you
+have checked out. Their versions do not change with their contents, which
+is why each run packs into a store of its own. prelude's recipe takes the
+SDK from `PEIOS_SDK`, which the script sets from `--sdk`.
 
 `ppk compose-env` then lays out the initramfs's root, with the four
 packages' closure as its `/usr` and, around it:
@@ -72,8 +79,8 @@ packages' closure as its `/usr` and, around it:
 
 `mkirf` from the `peiosutils` repository beside `ppk` turns that tree into
 the initramfs, writing the hook into prelude's hook sequence. Pass
-`--mkirf` to use another `mkirf`, and `--prelude` to build prelude from
-another checkout than the one beside `ppk`. QEMU then starts in the
+`--mkirf` to use another `mkirf`, `--pekit` to use another `pekit`, and
+`--pkgs` to use another recipe workspace. QEMU then starts in the
 terminal. The kernel command line names the system's packages, busybox and
 `ppk`, as `ppk.system=<package>,<package>`, and has `rd.shell`.
 
@@ -85,11 +92,12 @@ At boot:
    descriptor with `seed-sd`: a tmpfs refuses all access, even to SYSTEM,
    until its root has one. It then runs `ppk compose-env` with the
    `ppk.system=` packages and `--copy-artifacts`, so the system's root has
-   its own copy of them, and bind-mounts that root onto `/mnt/rootfs`. The
-   root lives on its own tmpfs because prelude deletes what is left on the
+   its own copy of them, links `/bin` and `/sbin` to `usr/bin` and
+   `usr/sbin`, and bind-mounts that root onto `/mnt/rootfs`. The root lives
+   on its own tmpfs because prelude deletes what is left on the
    initramfs's filesystem once it hands over.
 3. prelude moves `/proc`, `/sys` and `/dev` into the new root, switches to
-   it, and starts its first fallback init that exists, `/bin/init`, which
+   it, and starts its first fallback init that exists, `/sbin/init`, which
    is busybox's `init`.
 
 busybox's `init` complains that `/etc/init.d/rcS` is missing, then offers a

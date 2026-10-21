@@ -40,6 +40,7 @@ mount -t tmpfs tmpfs "$live" || exit 1
 seed-sd "$live" || exit 1
 # shellcheck disable=SC2086 # one word per package
 ppk compose-env $packages --out "$live/root" --copy-artifacts \
-    --symlink bin::bin --dir proc --dir sys --dir dev --dir tmp >/dev/null || exit 1
+    --symlink bin::bin --symlink sbin::sbin --dir proc --dir sys --dir dev --dir tmp \
+    >/dev/null || exit 1
 mount --bind "$live/root" "$rootfs" || exit 1
 log_ok "system root composed at $rootfs"

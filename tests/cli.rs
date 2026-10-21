@@ -73,6 +73,88 @@ fn fetch_without_a_source_is_a_usage_error() {
 }
 
 #[test]
+fn compose_env_prints_the_identity_and_lays_out_the_root() {
+    let content = content_dir();
+    let store = tempfile::tempdir().unwrap();
+    let artifacts = store.path().join("artifacts");
+    let packed = ppk(&[
+        "pack",
+        "dev.peios.hello@1.0",
+        path(content.path()),
+        "--artifact-dir",
+        path(&artifacts),
+    ]);
+    assert_eq!(packed.status.code(), Some(0), "{}", stderr(&packed));
+
+    let out = store.path().join("root");
+    let output = ppk(&[
+        "compose-env",
+        "dev.peios.hello@1.0",
+        "--artifact-dir",
+        path(&artifacts),
+        "--out",
+        path(&out),
+        "--symlink",
+        "init::bin/hello",
+        "--dir",
+        "proc",
+        "--include-artifacts",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        stdout(&output).starts_with("sha256:"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(
+        fs::read_link(out.join("init")).unwrap(),
+        Path::new("usr/bin/hello")
+    );
+    assert!(out.join("proc").is_dir());
+    assert!(out.join("system/artifacts/refs/dev.peios.hello").is_dir());
+}
+
+#[test]
+fn compose_env_needs_an_output_directory_and_well_formed_extras() {
+    for (args, message) in [
+        (
+            vec!["compose-env", "dev.peios.hello@1.0"],
+            "missing option --out <dir>",
+        ),
+        (
+            vec![
+                "compose-env",
+                "dev.peios.hello@1.0",
+                "--out",
+                "o",
+                "--symlink",
+                "init",
+            ],
+            "init: not <path>:<target>",
+        ),
+        (
+            vec![
+                "compose-env",
+                "dev.peios.hello@1.0",
+                "--out",
+                "o",
+                "--dir",
+                "usr/x",
+            ],
+            "\"usr/x\": inside usr, which the packages provide",
+        ),
+    ] {
+        let output = ppk(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert_eq!(
+            stderr(&output),
+            format!("ppk: {message}\nTry 'ppk --help' for more information.\n"),
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
 fn closures_default_to_inside_the_artifact_directory() {
     let content = content_dir();
     let store = tempfile::tempdir().unwrap();
@@ -205,6 +287,7 @@ fn help_lines_fit_in_80_columns() {
         vec!["help", "pack"],
         vec!["help", "fetch"],
         vec!["help", "closure"],
+        vec!["help", "compose-env"],
         vec!["help", "run"],
         vec!["help", "help"],
     ] {

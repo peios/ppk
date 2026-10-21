@@ -20,6 +20,18 @@ ppk \- create and manage Peios packages
 .IR dir ]
 .IR package ...
 .br
+.B ppk compose\-env
+.RB [ \-\-artifact\-dir
+.IR dir ]
+.RB [ \-\-symlink
+.IR link ]...
+.RB [ \-\-dir
+.IR path ]...
+.RB [ \-\-include\-artifacts ]
+.B \-\-out
+.I dir package\c
+\&...
+.br
 .B ppk run
 .RB [ \-\-artifact\-dir
 .IR dir ]
@@ -38,7 +50,10 @@ ppk \- create and manage Peios packages
 .SH DESCRIPTION
 .B ppk
 creates Peios packages, stores them in an artifact directory, copies them
-from one artifact directory to another, and composes them into closures.
+from one artifact directory to another, composes them into closures, and
+lays closures out as the root of an environment or runs commands with them
+at
+.IR /usr .
 .PP
 A package is a manifest that lists every path in it, with each file's
 content stored separately as a blob named by its SHA-256 hash.
@@ -170,6 +185,42 @@ if a path lies beneath a file or symbolic link of another package, or if
 the closure directory is not on the same filesystem as the artifact
 directory.
 .TP
+.BI compose\-env " package\fR...\fP"
+Lay out the root of an environment in the new directory named by
+.BR \-\-out ,
+for a tool such as an image builder to take, and print the identity of the
+packages' closure on standard output.
+The root's
+.I usr
+is the closure of the packages, built in place as
+.B closure
+builds it: every file is a hard link to its blob.
+Nothing is written to the artifact directory.
+.IP
+What lies outside
+.I usr
+belongs to the environment, not to any package, and comes from
+.BR \-\-symlink ,
+.BR \-\-dir ,
+and
+.BR \-\-include\-artifacts .
+Their paths are relative to the root, must not contain an empty,
+.BR . ,
+or
+.B ..
+component, and must not be
+.I usr
+or lie under it.
+.IP
+The root is built in a temporary directory beside it and renamed into
+place when complete.
+.B ppk compose\-env
+fails, writing nothing, if the directory already exists, if the packages
+clash as they would for
+.BR closure ,
+if a path given lies under a symbolic link given, or if the directory is
+not on the same filesystem as the artifact directory.
+.TP
 .BI run " package\fR...\fP \fR[\fP" \-\- " command \fR[\fPargument\fR...]]\fP"
 Run
 .IR command ,
@@ -239,6 +290,60 @@ For
 copy from the artifact directory
 .IR dir .
 Required.
+.TP
+.BI \-\-out " dir"
+For
+.BR compose\-env ,
+create the root at
+.IR dir ,
+which must not exist.
+Required.
+.TP
+.BI \-\-symlink " link"
+For
+.BR compose\-env ,
+create a symbolic link, with
+.I link
+given as
+.IB path : target\c
+\&.
+.I path
+is where the link goes, and may not contain a colon.
+.I target
+is written into the link exactly as given, unless it starts with a second
+colon, which stands for
+.IR /usr :
+.B init::sbin/prelude
+links
+.I init
+to
+.IR usr/sbin/prelude .
+Such a target is relative, climbing back to the root from a link in a
+subdirectory, so
+.B a/b::bin/sh
+links
+.I a/b
+to
+.IR ../usr/bin/sh .
+Missing parent directories are created.
+Can be given more than once.
+.TP
+.BI \-\-dir " path"
+For
+.BR compose\-env ,
+create the empty directory
+.IR path .
+Can be given more than once.
+.TP
+.B \-\-include\-artifacts
+For
+.BR compose\-env ,
+also give the root its own artifact directory,
+.IR system/artifacts ,
+holding the packages' refs, manifests, and blobs as hard links, so that
+.B ppk
+inside the environment finds them by default.
+Only the packages composed are included, and not their closure.
 .TP
 .BR \-h ", " \-\-help
 Print help and exit.
@@ -361,6 +466,20 @@ Run
 from the package, in an environment whose
 .I /usr
 is the package's closure.
+.TP
+.B ppk compose\-env dev.peios.busybox@1.37.0 dev.peios.prelude@0.0.7 \-\-out initramfs \-\-symlink init::sbin/prelude \-\-dir proc \-\-dir sys
+Lay out the root of an initramfs in
+.IR initramfs ,
+with the two packages as its
+.IR usr ,
+.I init
+linked to
+.IR usr/sbin/prelude ,
+and empty
+.I proc
+and
+.I sys
+directories.
 .TP
 .B ppk run dev.peios.busybox@1.37.0
 Start the shell that the busybox package provides, in an environment

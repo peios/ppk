@@ -106,6 +106,36 @@ enum Command {
         #[arg(long, value_name = "dir")]
         closure_dir: Option<PathBuf>,
     },
+    /// Lay out a root with the closure of packages as its usr
+    #[command(
+        override_usage = "ppk compose-env [options] --out <dir> <package>...",
+        after_help = SEE_ALSO
+    )]
+    ComposeEnv {
+        /// Packages to compose, each as <name>@<version>[?arch=<arch>]
+        #[arg(value_name = "package", required = true)]
+        packages: Vec<PackageId>,
+        /// Read packages from <dir> (default: /system/artifacts)
+        #[arg(
+            long,
+            value_name = "dir",
+            default_value = ppk::DEFAULT_ARTIFACT_DIR,
+            hide_default_value = true,
+        )]
+        artifact_dir: PathBuf,
+        /// Create the root at <dir>, which must not exist
+        #[arg(long, value_name = "dir")]
+        out: PathBuf,
+        /// Create a symlink, given as <path>:<target>
+        #[arg(long, value_name = "link")]
+        symlink: Vec<ppk::EnvSymlink>,
+        /// Create the empty directory <path>
+        #[arg(long, value_name = "path")]
+        dir: Vec<ppk::EnvDir>,
+        /// Add the packages' own artifacts at system/artifacts
+        #[arg(long)]
+        include_artifacts: bool,
+    },
     /// Run a command, or a shell, with the closure of packages at /usr
     #[command(
         override_usage = "ppk run [options] <package>... [-- <command> [<argument>...]]",
@@ -186,6 +216,22 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             let closure_dir = closure_dir.unwrap_or_else(|| artifact_dir.join(ppk::CLOSURE_SUBDIR));
             let closed = ppk::closure(&packages, &artifact_dir, &closure_dir)?;
             println!("{}", closed.identity);
+        }
+        Command::ComposeEnv {
+            packages,
+            artifact_dir,
+            out,
+            symlink,
+            dir,
+            include_artifacts,
+        } => {
+            let extras = ppk::Extras {
+                symlinks: symlink,
+                dirs: dir,
+                include_artifacts,
+            };
+            let composed = ppk::compose_env(&packages, &artifact_dir, &out, &extras)?;
+            println!("{}", composed.identity);
         }
         Command::Run {
             packages,

@@ -44,13 +44,21 @@ by hand:
 tools/vm-shell
 ```
 
-On the host, it builds the static `ppk` and prelude, and packs three
-packages:
+It needs the `peiosutils` and `prelude` repositories beside `ppk`, and a
+static musl Peios SDK for building `seed-sd`. Prepare the SDK once with
+prelude's `tools/prepare-sdk.py`, as prelude's `docs/building.md`
+describes, into `~/.cache/peios/prelude-sdk-musl`, or pass `--sdk` or set
+`PEIOS_SDK` to use another. The script needs `peios-sdk` checked out at the
+commit it names; a temporary worktree at that commit keeps your own
+checkout as it is.
+
+On the host, it builds the static `ppk`, prelude and `seed-sd`, and packs
+three packages:
 
 - `dev.peios.busybox@<version>`, the host's busybox with a link for each
   applet;
 - `dev.peios.ppk@<version>`, with `bin/ppk`;
-- `dev.peios.prelude@<version>`, with `sbin/prelude` and
+- `dev.peios.prelude@<version>`, with `sbin/prelude`, `bin/seed-sd` and
   `libexec/prelude/hook-log.sh`, as prelude installs them.
 
 `ppk compose-env` then lays out the initramfs's root, with the packages'
@@ -67,10 +75,12 @@ another `mkirf`, and `--prelude` to build prelude from another checkout
 than the one beside `ppk`. QEMU then starts in the terminal, with `rd.shell`
 on the kernel command line.
 
-prelude mounts `/proc`, `/sys` and `/dev`, and warns that `seed-sd` is
-missing: the box leaves it out for now, because it needs the static
-libpeios SDK. With no hook to mount a root, boot fails and prelude opens its
-recovery shell. That shell has no controlling terminal, so
+prelude mounts `/proc`, `/sys` and `/dev`, and gives `/dev` its security
+descriptors with `seed-sd`. With no hook to mount a root, boot fails and
+prelude opens its recovery shell.
+
+A tmpfs you mount in the shell refuses all access, even to SYSTEM, until
+its root has a descriptor: run `seed-sd` on it after mounting it. That shell has no controlling terminal, so
 <kbd>Ctrl</kbd>+<kbd>C</kbd> does nothing. Run `poweroff -f` to power the
 guest off, or press <kbd>Ctrl</kbd>+<kbd>A</kbd> then <kbd>X</kbd>. Exiting
 the shell halts the guest but leaves QEMU running, so press

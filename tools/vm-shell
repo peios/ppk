@@ -9,6 +9,7 @@ set -euo pipefail
 readonly MUSL_TARGET=x86_64-unknown-linux-musl
 readonly DEFAULT_KERNEL_RELEASE=7.0.9-peios-0.21.0-alpha11
 readonly DEFAULT_KERNEL="$HOME/.cache/provium/builds/peinit/image/root/usr/lib/modules/$DEFAULT_KERNEL_RELEASE/vmlinuz-$DEFAULT_KERNEL_RELEASE"
+readonly DEFAULT_PEIOS_SDK="$HOME/.cache/peios/prelude-sdk-musl"
 
 usage() {
     cat <<'EOF'
@@ -23,6 +24,8 @@ Options:
                    from the peiosutils repository beside ppk)
   --prelude <dir>  Build prelude from this checkout (default: the prelude
                    repository beside ppk)
+  --sdk <dir>      Build seed-sd against this static musl Peios SDK
+                   (default: $PEIOS_SDK, or ~/.cache/peios/prelude-sdk-musl)
   --memory <size>  Give the guest this much memory (default: 1G)
   -h, --help       Print help
 
@@ -45,6 +48,7 @@ fail() {
 kernel=${PPK_VM_KERNEL:-$DEFAULT_KERNEL}
 mkirf=
 prelude=
+sdk=${PEIOS_SDK:-$DEFAULT_PEIOS_SDK}
 memory=1G
 while (($#)); do
     case $1 in
@@ -61,6 +65,11 @@ while (($#)); do
         --prelude)
             (($# >= 2)) || usage_error "missing argument for '--prelude'"
             prelude=$2
+            shift 2
+            ;;
+        --sdk)
+            (($# >= 2)) || usage_error "missing argument for '--sdk'"
+            sdk=$2
             shift 2
             ;;
         --memory)
@@ -103,8 +112,18 @@ fi
 
 prelude=${prelude:-$repo/../prelude}
 [[ -f $prelude/Cargo.toml ]] || fail "$prelude: No such repository; pass --prelude"
+# seed-sd links the static libpeios; prelude's docs/building.md says how to
+# prepare the SDK with its tools/prepare-sdk.py.
+[[ -f $sdk/TARGET && $(<"$sdk/TARGET") == "$MUSL_TARGET" ]] ||
+    fail "$sdk: not a prepared $MUSL_TARGET Peios SDK; pass --sdk"
 # Build from inside the checkout, so that its own pinned toolchain is used.
-(cd -- "$prelude" && cargo build --quiet --release --target "$MUSL_TARGET" --package prelude)
+(
+    cd -- "$prelude"
+    export PEIOS_LIB_DIR=$sdk/lib PEIOS_INCLUDE=$sdk/include PKM_UAPI=$sdk/include
+    gcc_include=$(cc -print-file-name=include)
+    export BINDGEN_EXTRA_CLANG_ARGS="-isystem $gcc_include"
+    cargo build --quiet --release --target "$MUSL_TARGET" --package prelude --package seed-sd
+)
 prelude_version=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' "$prelude/Cargo.toml")
 [[ -n $prelude_version ]] || fail "$prelude/Cargo.toml: cannot read the version"
 
@@ -114,15 +133,17 @@ trap 'rm -rf -- "$work"' EXIT HUP INT TERM
 # The packages, staged with paths relative to /usr. busybox gets a link to
 # itself for each applet.
 mkdir -p -- "$work/busybox/bin" "$work/ppk/bin" \
-    "$work/prelude/sbin" "$work/prelude/libexec/prelude"
+    "$work/prelude/bin" "$work/prelude/sbin" "$work/prelude/libexec/prelude"
 cp -- "$busybox" "$work/busybox/bin/busybox"
 "$busybox" --list | while read -r applet; do
     # Some builds list busybox itself as an applet.
     [[ $applet == busybox ]] || ln -s busybox "$work/busybox/bin/$applet"
 done
 cp -- "$ppk" "$work/ppk/bin/ppk"
-# prelude's own install layout. Its hooks source the logging helper.
+# prelude's own install layout. prelude runs seed-sd on /dev, and its hooks
+# source the logging helper.
 cp -- "$prelude/target/$MUSL_TARGET/release/prelude" "$work/prelude/sbin/prelude"
+cp -- "$prelude/target/$MUSL_TARGET/release/seed-sd" "$work/prelude/bin/seed-sd"
 install -m 644 -- "$prelude/src/hook-log.sh" "$work/prelude/libexec/prelude/hook-log.sh"
 
 artifacts=$work/artifacts

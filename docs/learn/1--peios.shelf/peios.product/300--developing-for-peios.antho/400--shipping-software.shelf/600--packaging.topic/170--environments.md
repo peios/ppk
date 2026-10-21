@@ -3,7 +3,7 @@ title: Environments
 type: concept
 description: What an environment is, covering the closure mounted at /usr,
   what stays as it was, how an environment is kept to the processes inside
-  it, and who can create one.
+  it, how a profile describes one, and who can create one.
 related:
   - peios/packaging/closures
   - peios/packaging/running-a-command-in-an-environment
@@ -48,6 +48,34 @@ does this. There is no running system around such a root to borrow the rest
 of the filesystem from, so what lies outside `/usr`, such as links and
 mount points, is given when the root is composed. It belongs to the
 environment, not to any package.
+
+## Described by a profile
+
+An environment profile is a TOML file that describes an environment
+exactly, so that it can be named and reused rather than spelt out on the
+command line each time:
+
+```toml
+dirs = ["proc", "sys", "tmp"]
+
+[packages]
+"net.busybox.busybox" = "1.37.0-1"
+"dev.peios.prelude" = "0.0.7-1"
+
+[symlinks]
+"init" = ":sbin/prelude"
+```
+
+`packages` maps each package's name to its exact version, so a profile
+holds one version of each package and always describes the same
+environment. Whatever chooses the versions, such as a tool that picks the
+newest, does so when it writes the profile. `symlinks` and `dirs` are what
+the root holds outside `/usr`, where a leading `:` in a link's target
+stands for `usr`. Every key is optional. `arch` sets the architecture of
+every package, the one `ppk` was built for by default.
+
+`ppk compose-env` and `ppk run` both take a profile. A run keeps the rest
+of the filesystem as it is, so it uses only the profile's packages.
 
 ## Who can create one
 

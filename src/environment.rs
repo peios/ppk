@@ -13,6 +13,10 @@ use anyhow::{Context, Result, bail};
 /// it, so a package's `bin/hello` is `/usr/bin/hello`.
 pub const MOUNT_POINT: &str = "/usr";
 
+/// What an environment runs when given no command: the shell its own closure
+/// provides, rather than the caller's, which need not exist inside it.
+pub const SHELL: &str = "/usr/bin/sh";
+
 /// Move this process into a new mount namespace in which `tree`, a closure's
 /// tree, is mounted at [`MOUNT_POINT`]. Everything else is as it was. The
 /// process's later children see the same view; nothing outside it changes.

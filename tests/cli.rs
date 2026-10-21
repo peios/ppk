@@ -105,14 +105,9 @@ fn closures_default_to_inside_the_artifact_directory() {
 }
 
 #[test]
-fn run_needs_packages_and_a_command_after_the_separator() {
+fn run_needs_packages() {
     for (args, missing) in [
-        (vec!["run"], "arguments <package>... <command>..."),
-        (vec!["run", "dev.peios.hello@1.0"], "argument <command>..."),
-        (
-            vec!["run", "dev.peios.hello@1.0", "--"],
-            "argument <command>...",
-        ),
+        (vec!["run"], "argument <package>..."),
         (vec!["run", "--", "true"], "argument <package>..."),
     ] {
         let output = ppk(&args);

@@ -1,8 +1,8 @@
 ---
 title: Running a Command in an Environment
 type: how-to
-description: Run a command with ppk run so that a set of packages is its
-  /usr, pass arguments to it, and read its exit status.
+description: Run a command or a shell with ppk run so that a set of packages
+  is its /usr, pass arguments to it, and read its exit status.
 related:
   - peios/packaging/environments
   - peios/packaging/building-a-closure
@@ -38,6 +38,18 @@ Hello from Peios
 Everything after `--` is the command, so its own options aren't read as
 `ppk`'s. A command without a `/` is looked up through `PATH` inside the
 environment.
+
+## Start a shell instead
+
+Leave out `--` and the command, and `ppk run` starts `/usr/bin/sh` in the
+environment:
+
+```sh
+ppk run dev.peios.busybox@1.37.0
+```
+
+The shell is the closure's own, not yours, so one of the packages must
+provide `bin/sh`. Commands you run from it share its environment.
 
 ## Check the result
 

@@ -71,8 +71,10 @@ holds one version of each package and always describes the same
 environment. Whatever chooses the versions, such as a tool that picks the
 newest, does so when it writes the profile. `symlinks` and `dirs` are what
 the root holds outside `/usr`, where a leading `:` in a link's target
-stands for `usr`. Every key is optional. `arch` sets the architecture of
-every package, the one `ppk` was built for by default.
+stands for `usr`. `include_artifacts = true` gives a composed root its
+packages in an artifact directory of its own. Every key is optional.
+`arch` sets the architecture of every package, the one `ppk` was built for
+by default.
 
 `ppk compose-env` and `ppk run` both take a profile. A run keeps the rest
 of the filesystem as it is, so it uses only the profile's packages.

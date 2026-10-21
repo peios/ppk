@@ -140,8 +140,8 @@ enum Command {
         /// Hardlink the packages into system/artifacts
         #[arg(long)]
         include_artifacts: bool,
-        /// Copy the packages into system/artifacts
-        #[arg(long, conflicts_with = "include_artifacts")]
+        /// Copy the packages into system/artifacts, rather than hardlink them
+        #[arg(long)]
         copy_artifacts: bool,
     },
     /// Run a command, or a shell, with the closure of packages at /usr
@@ -258,9 +258,10 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
         } => {
             let mut env = environment(profile.as_deref(), packages)?;
             env.add_extras(symlink, dir)?;
+            // Copying is a way of including them, and wins over hardlinking.
             let artifacts = if copy_artifacts {
                 ppk::RootArtifacts::Copy
-            } else if include_artifacts {
+            } else if include_artifacts || env.include_artifacts {
                 ppk::RootArtifacts::Include
             } else {
                 ppk::RootArtifacts::None

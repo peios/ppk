@@ -1,19 +1,23 @@
 #!/bin/bash
-# Live-boot a Peios kernel into a system composed from ppk packages, for
-# trying ppk by hand. pekit builds busybox, ppk, prelude and a prelude hook
-# from their recipes in pkgs, ppk composes them into the initramfs's root,
-# and mkirf turns that into the initramfs. At boot, prelude runs the hook, which composes the
-# system's root from packages on a tmpfs, and hands over to it. The guest
-# is a throwaway: nothing in it survives.
+# Live-boot a Peios ISO into a system composed from ppk packages, for trying
+# ppk by hand. pekit builds busybox, ppk, prelude and a prelude hook from
+# their recipes in pkgs, and peiso builds an ISO from them, which QEMU boots
+# under UEFI. At boot, prelude runs the hook, which composes the system's
+# root from packages on a tmpfs, and hands over to it. The guest is a
+# throwaway: nothing in it survives.
 set -euo pipefail
 
 readonly DEFAULT_KERNEL_RELEASE=7.0.9-peios-0.21.0-alpha11
 readonly DEFAULT_KERNEL="$HOME/.cache/provium/builds/peinit/image/root/usr/lib/modules/$DEFAULT_KERNEL_RELEASE/vmlinuz-$DEFAULT_KERNEL_RELEASE"
 readonly DEFAULT_PEIOS_SDK="$HOME/.cache/peios/prelude-sdk-musl"
+# UEFI firmware for QEMU, from the host's OVMF package: its code, and the
+# variables each boot starts from.
+readonly OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
+readonly OVMF_VARS=/usr/share/OVMF/OVMF_VARS_4M.fd
 
 usage() {
     cat <<'EOF'
-Boot a Peios kernel with an initramfs built from a ppk closure
+Boot a Peios ISO built from ppk packages
 
 Usage: tools/vm-shell [options]
 
@@ -22,6 +26,10 @@ Options:
                    full-system test image's kernel)
   --mkirf <file>   Build the initramfs with this mkirf (default: one built
                    from the peiosutils repository beside ppk)
+  --mkuki <file>   Build the UKI with this mkuki (default: one built from
+                   the peiosutils repository beside ppk)
+  --peiso <file>   Build the ISO with this peiso (default: one built from
+                   the peiso repository beside ppk)
   --pkgs <dir>     Build the packages from the recipes in this workspace
                    (default: the pkgs repository beside ppk); its recipes
                    build ppk and prelude from the checkouts beside it
@@ -50,40 +58,18 @@ fail() {
 
 kernel=${PPK_VM_KERNEL:-$DEFAULT_KERNEL}
 mkirf=
+mkuki=
+peiso=
 pkgs=
 pekit=
 sdk=${PEIOS_SDK:-$DEFAULT_PEIOS_SDK}
 memory=1G
 while (($#)); do
     case $1 in
-        --kernel)
-            (($# >= 2)) || usage_error "missing argument for '--kernel'"
-            kernel=$2
-            shift 2
-            ;;
-        --mkirf)
-            (($# >= 2)) || usage_error "missing argument for '--mkirf'"
-            mkirf=$2
-            shift 2
-            ;;
-        --pkgs)
-            (($# >= 2)) || usage_error "missing argument for '--pkgs'"
-            pkgs=$2
-            shift 2
-            ;;
-        --pekit)
-            (($# >= 2)) || usage_error "missing argument for '--pekit'"
-            pekit=$2
-            shift 2
-            ;;
-        --sdk)
-            (($# >= 2)) || usage_error "missing argument for '--sdk'"
-            sdk=$2
-            shift 2
-            ;;
-        --memory)
-            (($# >= 2)) || usage_error "missing argument for '--memory'"
-            memory=$2
+        --kernel | --mkirf | --mkuki | --peiso | --pkgs | --pekit | --sdk | --memory)
+            (($# >= 2)) || usage_error "missing argument for '$1'"
+            option=${1#--}
+            printf -v "$option" '%s' "$2"
             shift 2
             ;;
         -h | --help)
@@ -97,30 +83,29 @@ while (($#)); do
 done
 
 [[ -f $kernel ]] || fail "$kernel: No such file"
+[[ -f $OVMF_CODE && -f $OVMF_VARS ]] || fail "$OVMF_CODE: No such file; install OVMF"
 
-# ppk for the host, which composes the initramfs's root. The guest's ppk is
-# the package pekit builds.
 repo=$(cd -- "$(dirname -- "$0")/.." && pwd)
-cargo build --quiet --release --manifest-path "$repo/Cargo.toml"
-ppk=$repo/target/release/ppk
 
-if [[ -z $mkirf ]]; then
-    peiosutils=$repo/../peiosutils
-    [[ -f $peiosutils/Cargo.toml ]] || fail "$peiosutils: No such repository; pass --mkirf"
-    cargo build --quiet --release --package pu_mkirf --manifest-path "$peiosutils/Cargo.toml"
-    mkirf=$peiosutils/target/release/mkirf
-fi
-[[ -x $mkirf ]] || fail "$mkirf: not executable"
+# Builds the tool $1 from the repository $2 beside ppk with cargo's
+# arguments after it, unless it was given, and checks it can be run.
+tool() {
+    local name=$1 dir=$repo/../$2
+    shift 2
+    if [[ -z ${!name} ]]; then
+        [[ -f $dir/Cargo.toml ]] || fail "$dir: No such repository; pass --$name"
+        cargo build --quiet --release --manifest-path "$dir/Cargo.toml" "$@"
+        printf -v "$name" '%s' "$dir/target/release/$name"
+    fi
+    [[ -x ${!name} ]] || fail "${!name}: not executable"
+}
+tool mkirf peiosutils --package pu_mkirf
+tool mkuki peiosutils --package pu_mkuki
+tool peiso peiso
+tool pekit pekit
 
 pkgs=${pkgs:-$repo/../pkgs}
 [[ -f $pkgs/workspace.gcsl ]] || fail "$pkgs: No such recipe workspace; pass --pkgs"
-if [[ -z $pekit ]]; then
-    pekit_repo=$repo/../pekit
-    [[ -f $pekit_repo/Cargo.toml ]] || fail "$pekit_repo: No such repository; pass --pekit"
-    cargo build --quiet --release --manifest-path "$pekit_repo/Cargo.toml"
-    pekit=$pekit_repo/target/release/pekit
-fi
-[[ -x $pekit ]] || fail "$pekit: not executable"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/ppk-vm-shell.XXXXXXXX")
 trap 'rm -rf -- "$work"' EXIT HUP INT TERM
@@ -128,72 +113,53 @@ trap 'rm -rf -- "$work"' EXIT HUP INT TERM
 # The packages, built from their recipes into a store of this run's own.
 # ppk's and prelude's recipes build from local checkouts, whose versions do
 # not change with their contents, so a store kept between runs would refuse
-# what they make next. prelude's recipe takes the SDK seed-sd links from
-# $PEIOS_SDK; prelude's docs/building.md says how to prepare it.
-artifacts=$work/artifacts
-packed=$(PEIOS_SDK=$sdk "$pekit" package --workspace "$pkgs" --artifact-dir "$artifacts" \
-    net.busybox.busybox dev.peios.ppk dev.peios.prelude dev.peios.live-root)
-# pekit prints "<name>@<version> <identity>" for each, in the order asked.
-{
-    read -r busybox_package _
-    read -r ppk_package _
-    read -r prelude_package _
-    read -r live_root_package _
-} <<<"$packed"
+# what they make next; with one version of each, the spec needs none.
+# prelude's recipe takes the SDK seed-sd links from $PEIOS_SDK; prelude's
+# docs/building.md says how to prepare it.
+PEIOS_SDK=$sdk "$pekit" package --workspace "$pkgs" --artifact-dir "$work/artifacts" \
+    net.busybox.busybox dev.peios.ppk dev.peios.prelude dev.peios.live-root >/dev/null
 
-# The system that runs after prelude hands over. The hook composes its root
-# from the initramfs's store, which holds only the initramfs's own packages,
-# so these must be among them.
-system=("$busybox_package" "$ppk_package")
-initramfs=("$busybox_package" "$ppk_package" "$prelude_package" "$live_root_package")
+# The live system is busybox and ppk. The initramfs adds prelude, its
+# init, and the hook that composes the live system; peiso puts the live
+# system's packages there too, for the hook to compose it from. rd.shell
+# makes prelude open its recovery shell if boot fails.
+cat >"$work/spec.toml" <<EOF
+disable_default_repos = true
 
-# Writes an environment profile's [packages] table for the packages given,
-# each as <name>@<version>.
-packages_table() {
-    echo '[packages]'
-    for package in "$@"; do
-        printf '"%s" = "%s"\n' "${package%@*}" "${package#*@}"
-    done
-}
+[[repository]]
+filepath = "artifacts"
 
-# The live system's profile, which the hook reads from the initramfs.
-{
-    echo 'dirs = ["tmp"]'
-    echo
-    packages_table "${system[@]}"
-    echo
-    echo '[symlinks]'
-    echo '"bin" = ":bin"'
-    echo '"sbin" = ":sbin"'
-} >"$work/live.toml"
+[kernel]
+file = "$kernel"
+cmdline = "console=ttyS0 panic=-1 quiet rd.shell"
 
-# The initramfs environment: the packages as /usr, with their artifacts for
-# the hook and for ppk in the recovery shell. prelude is init, and mounts
-# /proc and /sys on these directories; mkirf turns the hook into prelude's
-# hook sequence.
-{
-    echo 'dirs = ["proc", "sys", "tmp"]'
-    echo
-    packages_table "${initramfs[@]}"
-    echo
-    echo '[symlinks]'
-    echo '"init" = ":sbin/prelude"'
-} >"$work/initramfs.toml"
-root=$work/root
-"$ppk" compose-env "$work/initramfs.toml" --artifact-dir "$artifacts" --out "$root" \
-    --include-artifacts >/dev/null
-install -m 644 -- "$work/live.toml" "$root/system/live.toml"
+[[package]]
+name = "net.busybox.busybox"
 
-# mkirf reports what it wrote; show its output only when it fails.
-if ! built=$("$mkirf" "$root" "$work/initramfs.cpio.zst" 2>&1); then
-    printf '%s\n' "$built" >&2
+[[package]]
+name = "dev.peios.ppk"
+
+[[package]]
+name = "dev.peios.prelude"
+liveboot = false
+initramfs = true
+
+[[package]]
+name = "dev.peios.live-root"
+liveboot = false
+initramfs = true
+EOF
+"$peiso" build "$work/spec.toml" --out "$work/peios.iso" --mkirf "$mkirf" --mkuki "$mkuki" \
+    >/dev/null 2>"$work/peiso.log" || {
+    cat "$work/peiso.log" >&2
     exit 1
-fi
+}
+cp -- "$OVMF_VARS" "$work/ovmf-vars.fd"
 
 cat <<HINT
 
-prelude, the initramfs's init, runs the ppk-live-root hook, which composes
-the system's root from ${system[*]}
+QEMU boots the ISO under UEFI. prelude, the initramfs's init, runs the
+ppk-live-root hook, which composes the system's root from busybox and ppk
 on a tmpfs and hands it to prelude. The system's init is busybox's: press
 Enter for a shell. ppk is /usr/bin/ppk, and the system's packages are in
 /system/artifacts. If boot fails, prelude opens a recovery shell instead.
@@ -202,10 +168,9 @@ Run 'poweroff -f' to power off, or press Ctrl-A then X.
 
 HINT
 
-# rd.shell makes prelude open its recovery shell if boot fails.
 qemu-system-x86_64 \
-    -enable-kvm -cpu host -m "$memory" \
+    -enable-kvm -cpu host -m "$memory" -machine q35 \
     -nographic -no-reboot \
-    -kernel "$kernel" \
-    -initrd "$work/initramfs.cpio.zst" \
-    -append "console=ttyS0 panic=-1 quiet rd.shell"
+    -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE" \
+    -drive "if=pflash,format=raw,file=$work/ovmf-vars.fd" \
+    -cdrom "$work/peios.iso"

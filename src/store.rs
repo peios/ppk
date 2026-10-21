@@ -77,6 +77,33 @@ pub fn prepare_artifact_dir(artifact_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The versions of the package `name` packed for `arch` in `artifact_dir`,
+/// sorted by their bytes, which is no order of versions: none is defined.
+pub fn versions(name: &str, arch: &str, artifact_dir: &Path) -> Result<Vec<String>> {
+    let dir = artifact_dir.join("refs").join(name);
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err).with_context(|| format!("{}", dir.display())),
+    };
+    let mut versions = Vec::new();
+    for entry in entries {
+        let entry = entry.with_context(|| format!("{}", dir.display()))?;
+        let Some(version) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        // A version is packed for `arch` when its directory holds that ref.
+        let Ok(id) = PackageId::new(name, &version, arch) else {
+            continue;
+        };
+        if packed(&id, artifact_dir)?.is_some() {
+            versions.push(version);
+        }
+    }
+    versions.sort();
+    Ok(versions)
+}
+
 /// The identity a ref names, or `None` if there is no ref at `path`. A ref
 /// holds exactly one identity and a newline; anything else is an error.
 pub(crate) fn read_ref(path: &Path) -> Result<Option<Identity>> {

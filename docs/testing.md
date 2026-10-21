@@ -36,18 +36,18 @@ Add `--json` to see each test's `t:log` output.
 
 ## An interactive shell
 
-`tools/vm-shell` live-boots the same kernel into a system composed from
-`ppk` packages, with a busybox shell on the serial console, so you can try
-commands by hand:
+`tools/vm-shell` builds a Peios ISO from `ppk` packages and live-boots it
+in QEMU under UEFI, with a busybox shell on the serial console, so you can
+try commands by hand:
 
 ```sh
 tools/vm-shell
 ```
 
-It needs the `peiosutils`, `pekit`, `pkgs` and `prelude` repositories
-beside `ppk`, and a static musl Peios SDK for building `seed-sd`. Prepare
-the SDK once with
-prelude's `tools/prepare-sdk.py`, as prelude's `docs/building.md`
+It needs the `peiosutils`, `peiso`, `pekit`, `pkgs` and `prelude`
+repositories beside `ppk`, OVMF, `mkfs.vfat`, mtools and `xorriso` on the
+host, and a static musl Peios SDK for building `seed-sd`. Prepare the SDK
+once with prelude's `tools/prepare-sdk.py`, as prelude's `docs/building.md`
 describes, into `~/.cache/peios/prelude-sdk-musl`, or pass `--sdk` or set
 `PEIOS_SDK` to use another. The script needs `peios-sdk` checked out at the
 commit it names; a temporary worktree at that commit keeps your own
@@ -70,23 +70,25 @@ have checked out. Their versions do not change with their contents, which
 is why each run packs into a store of its own. prelude's recipe takes the
 SDK from `PEIOS_SDK`, which the script sets from `--sdk`.
 
-The script writes two environment profiles from the versions `pekit`
-reports. The live system's, `live.toml`, names busybox and `ppk`, links
-`/bin` and `/sbin` to `usr/bin` and `usr/sbin`, and gives an empty `/tmp`.
-`ppk compose-env` lays out the initramfs's root from the other: the four
-packages' closure as its `/usr` and, around it:
+The script then writes a spec for `peiso`: the live system is busybox and
+`ppk`, and the initramfs also holds prelude and live-root. `peiso`
+composes the initramfs's root: the closure of its packages and the live
+system's as `/usr` and, around it:
 
 - `/init`, a link to `usr/sbin/prelude`;
 - empty `/proc`, `/sys` and `/tmp`;
-- `/system/artifacts`, holding the four packages (`--include-artifacts`).
+- `/system/artifacts`, holding those packages;
+- `/system/live.toml`, the live system's environment profile, which names
+  busybox and `ppk`, links `/bin` and `/sbin` to `usr/bin` and `usr/sbin`,
+  and gives an empty `/tmp`.
 
-The script then puts `live.toml` in the root as `/system/live.toml`.
-
-`mkirf` from the `peiosutils` repository beside `ppk` turns that tree into
-the initramfs, writing the hook into prelude's hook sequence. Pass
-`--mkirf` to use another `mkirf`, `--pekit` to use another `pekit`, and
-`--pkgs` to use another recipe workspace. QEMU then starts in the
-terminal, with `rd.shell` on the kernel command line.
+`mkirf` turns that tree into the initramfs, writing the hook into prelude's
+hook sequence, and `mkuki` makes the initramfs, the kernel and its command
+line into a unified kernel image. `peiso` writes the ISO with the image as
+its UEFI boot loader and every package in `/artifacts`. Pass `--mkirf`,
+`--mkuki`, `--peiso` or `--pekit` to use another of those tools, and
+`--pkgs` to use another recipe workspace. QEMU then boots the ISO in the
+terminal, under OVMF, with `rd.shell` on the kernel command line.
 
 At boot:
 

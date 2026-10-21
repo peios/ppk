@@ -138,6 +138,10 @@ so that a leading colon stands for
 .IR usr .
 .B dirs
 lists empty directories.
+.B include_artifacts = true
+gives a composed root its packages as
+.B \-\-include\-artifacts
+does.
 Every key is optional, and any other key is an error.
 .PP
 The packages named with
@@ -444,8 +448,10 @@ does, but copy the packages into it, checking each as
 does, so that the root can be on any filesystem.
 The root's own files and its artifact directory then share nothing with
 the artifact directory the packages are read from.
-Cannot be given with
-.BR \-\-include\-artifacts .
+Copying is a way of including the packages, so this wins over
+.B \-\-include\-artifacts
+and a profile's
+.BR include_artifacts .
 .TP
 .BR \-h ", " \-\-help
 Print help and exit.

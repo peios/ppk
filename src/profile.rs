@@ -17,7 +17,9 @@
 //! the resolved answer, so whatever chooses versions does so when writing
 //! it, never when composing. Every package is for `arch`, the host's by
 //! default. A symlink's value is what follows `<path>:` in `--symlink`, so
-//! a leading `:` stands for `usr`. `dirs` are empty directories. Every key
+//! a leading `:` stands for `usr`. `dirs` are empty directories, and
+//! `include_artifacts = true` gives a composed root its packages in an
+//! artifact directory of its own, as `--include-artifacts` does. Every key
 //! is optional, and any other is an error, so that a misspelt one cannot
 //! silently leave something out.
 
@@ -37,6 +39,9 @@ pub struct Profile {
     pub symlinks: Vec<EnvSymlink>,
     /// Empty directories a composed root holds.
     pub dirs: Vec<EnvDir>,
+    /// Whether a composed root holds its packages in an artifact directory
+    /// of its own, as `--include-artifacts` gives it.
+    pub include_artifacts: bool,
 }
 
 impl Profile {
@@ -51,7 +56,9 @@ impl Profile {
         let doc: toml::Table =
             toml::from_str(text).map_err(|err| anyhow!("not valid TOML: {}", err.message()))?;
         for key in doc.keys() {
-            if !["arch", "packages", "symlinks", "dirs"].contains(&key.as_str()) {
+            if !["arch", "packages", "symlinks", "dirs", "include_artifacts"]
+                .contains(&key.as_str())
+            {
                 bail!("unknown key {key:?}");
             }
         }
@@ -91,7 +98,52 @@ impl Profile {
                 profile.dirs.push(dir.parse().context("dirs")?);
             }
         }
+        if let Some(include) = doc.get("include_artifacts") {
+            profile.include_artifacts = include
+                .as_bool()
+                .ok_or_else(|| anyhow!("include_artifacts is not true or false"))?;
+        }
         Ok(profile)
+    }
+
+    /// The profile as TOML, which [`Profile::parse`] reads back as it is.
+    /// Every package must be for one architecture, which a profile names
+    /// once.
+    pub fn render(&self) -> Result<String> {
+        let quote = |s: &str| toml::Value::String(s.to_owned()).to_string();
+        let mut out = String::new();
+        if let Some(first) = self.packages.first() {
+            if let Some(other) = self.packages.iter().find(|id| id.arch() != first.arch()) {
+                bail!("{first} and {other} are for different architectures");
+            }
+            out.push_str(&format!("arch = {}\n", quote(first.arch())));
+        }
+        if self.include_artifacts {
+            out.push_str("include_artifacts = true\n");
+        }
+        if !self.dirs.is_empty() {
+            let dirs: Vec<String> = self.dirs.iter().map(|dir| quote(dir.path())).collect();
+            out.push_str(&format!("dirs = [{}]\n", dirs.join(", ")));
+        }
+        if !self.packages.is_empty() {
+            out.push_str("\n[packages]\n");
+            for id in &self.packages {
+                out.push_str(&format!("{} = {}\n", quote(id.name()), quote(id.version())));
+            }
+        }
+        if !self.symlinks.is_empty() {
+            out.push_str("\n[symlinks]\n");
+            // A target without a leading `:` is written as given, so the
+            // link's own target reads back as itself.
+            for link in &self.symlinks {
+                out.push_str(&format!(
+                    "{} = {}\n",
+                    quote(link.path()),
+                    quote(link.target())
+                ));
+            }
+        }
+        Ok(out)
     }
 
     /// Adds `packages` to the profile's. One it holds already is added

@@ -598,3 +598,16 @@ fn input_must_be_a_directory() {
     let err = pack(&input.path().join("file"), out.path()).unwrap_err();
     assert!(err.to_string().contains("not a directory"), "{err:#}");
 }
+
+#[test]
+fn packed_names_the_identity_a_version_is_packed_as() {
+    let input = tree(&[("a", b"a")]);
+    let out = tempfile::tempdir().unwrap();
+    let id: ppk::PackageId = "dev.peios.hello@1.0?arch=x86_64".parse().unwrap();
+    assert_eq!(ppk::packed(&id, out.path()).unwrap(), None);
+    let packed = pack(input.path(), out.path()).unwrap();
+    let found = ppk::packed(&id, out.path()).unwrap().unwrap();
+    assert_eq!(found.to_string(), packed.identity);
+    let other: ppk::PackageId = "dev.peios.hello@1.0?arch=aarch64".parse().unwrap();
+    assert_eq!(ppk::packed(&other, out.path()).unwrap(), None);
+}

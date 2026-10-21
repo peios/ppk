@@ -53,12 +53,13 @@ packages:
 - `dev.peios.prelude@<version>`, with `sbin/prelude` and
   `libexec/prelude/hook-log.sh`, as prelude installs them.
 
-It composes their closure and lays the closure out as the image's `/usr`.
-The image adds the rest of the root:
+`ppk compose-env` then lays out the initramfs's root, with the packages'
+closure as its `/usr` and, around it:
 
-- `/init`, a link to `usr/sbin/prelude`;
-- empty `/proc`, `/sys` and `/tmp`;
-- `/system/artifacts`, holding the three packages.
+- `/init`, a link to `usr/sbin/prelude` (`--symlink init::sbin/prelude`);
+- empty `/proc`, `/sys` and `/tmp` (`--dir`);
+- `/system/artifacts`, holding the three packages
+  (`--include-artifacts`).
 
 `mkirf` from the `peiosutils` repository beside `ppk` turns that tree into
 the initramfs, writing prelude's empty hook sequence. Pass `--mkirf` to use

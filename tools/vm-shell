@@ -125,8 +125,7 @@ cp -- "$ppk" "$work/ppk/bin/ppk"
 cp -- "$prelude/target/$MUSL_TARGET/release/prelude" "$work/prelude/sbin/prelude"
 install -m 644 -- "$prelude/src/hook-log.sh" "$work/prelude/libexec/prelude/hook-log.sh"
 
-root=$work/root
-artifacts=$root/system/artifacts
+artifacts=$work/artifacts
 packages=(
     "dev.peios.busybox@$busybox_version"
     "dev.peios.ppk@$ppk_version"
@@ -136,16 +135,13 @@ packages=(
 "$ppk" pack "${packages[1]}" "$work/ppk" --artifact-dir "$artifacts" >/dev/null
 "$ppk" pack "${packages[2]}" "$work/prelude" --artifact-dir "$artifacts" >/dev/null
 
-# Build the closure outside the image's store, which then holds only the
-# packages, and lay it out as the image's /usr.
-closures=$work/closures
-closure=$("$ppk" closure "${packages[@]}" --artifact-dir "$artifacts" --closure-dir "$closures")
-cp -al -- "$closures/${closure#sha256:}" "$root/usr"
-
-# The rest of the root comes from the image, not a package. prelude mounts
-# /proc and /sys on these, and mkirf writes its empty hook sequence.
-ln -s usr/sbin/prelude "$root/init"
-mkdir -- "$root/proc" "$root/sys" "$root/tmp"
+# The initramfs environment: the packages as /usr, with their artifacts so
+# ppk in the guest can use them. prelude is init, and mounts /proc and /sys
+# on these directories; mkirf adds prelude's empty hook sequence.
+root=$work/root
+"$ppk" compose-env "${packages[@]}" --artifact-dir "$artifacts" --out "$root" \
+    --include-artifacts --symlink init::sbin/prelude \
+    --dir proc --dir sys --dir tmp >/dev/null
 
 # mkirf reports what it wrote; show its output only when it fails.
 if ! built=$("$mkirf" "$root" "$work/initramfs.cpio.zst" 2>&1); then

@@ -106,6 +106,46 @@ impl Profile {
         Ok(profile)
     }
 
+    /// The profile as TOML, which [`Profile::parse`] reads back as it is.
+    /// Every package must be for one architecture, which a profile names
+    /// once.
+    pub fn render(&self) -> Result<String> {
+        let quote = |s: &str| toml::Value::String(s.to_owned()).to_string();
+        let mut out = String::new();
+        if let Some(first) = self.packages.first() {
+            if let Some(other) = self.packages.iter().find(|id| id.arch() != first.arch()) {
+                bail!("{first} and {other} are for different architectures");
+            }
+            out.push_str(&format!("arch = {}\n", quote(first.arch())));
+        }
+        if self.include_artifacts {
+            out.push_str("include_artifacts = true\n");
+        }
+        if !self.dirs.is_empty() {
+            let dirs: Vec<String> = self.dirs.iter().map(|dir| quote(dir.path())).collect();
+            out.push_str(&format!("dirs = [{}]\n", dirs.join(", ")));
+        }
+        if !self.packages.is_empty() {
+            out.push_str("\n[packages]\n");
+            for id in &self.packages {
+                out.push_str(&format!("{} = {}\n", quote(id.name()), quote(id.version())));
+            }
+        }
+        if !self.symlinks.is_empty() {
+            out.push_str("\n[symlinks]\n");
+            // A target without a leading `:` is written as given, so the
+            // link's own target reads back as itself.
+            for link in &self.symlinks {
+                out.push_str(&format!(
+                    "{} = {}\n",
+                    quote(link.path()),
+                    quote(link.target())
+                ));
+            }
+        }
+        Ok(out)
+    }
+
     /// Adds `packages` to the profile's. One it holds already is added
     /// once; another version of a package it holds is an error, since an
     /// environment holds one version of each.

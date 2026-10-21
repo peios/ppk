@@ -49,6 +49,27 @@ dirs = ["proc", "sys"]
 }
 
 #[test]
+fn a_rendered_profile_reads_back_as_itself() {
+    let mut profile = Profile::parse(
+        "arch = \"aarch64\"\ninclude_artifacts = true\ndirs = [\"proc\", \"a \\\"b\"]\n\n\
+         [packages]\n\"a.b.c\" = \"1.0-1\"\n\n\
+         [symlinks]\n\"init\" = \":sbin/prelude\"\n\"x/y\" = \":bin\"\n\"etc\" = \"/run/etc\"\n",
+    )
+    .unwrap();
+    profile.add_packages([id("d.e.f@2?arch=aarch64")]).unwrap();
+    let rendered = profile.render().unwrap();
+    assert_eq!(Profile::parse(&rendered).unwrap(), profile, "{rendered}");
+    assert_eq!(Profile::default().render().unwrap(), "");
+
+    // A profile names one architecture.
+    profile.add_packages([id("g.h.i@3?arch=x86_64")]).unwrap();
+    assert_eq!(
+        format!("{:#}", profile.render().unwrap_err()),
+        "a.b.c@1.0-1?arch=aarch64 and g.h.i@3?arch=x86_64 are for different architectures"
+    );
+}
+
+#[test]
 fn every_key_is_optional_and_arch_applies_to_every_package() {
     assert_eq!(Profile::parse("").unwrap(), Profile::default());
     let profile = Profile::parse("arch = \"aarch64\"\n[packages]\n\"a.b.c\" = \"1\"\n").unwrap();

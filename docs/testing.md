@@ -36,9 +36,9 @@ Add `--json` to see each test's `t:log` output.
 
 ## An interactive shell
 
-`tools/vm-shell` boots the same kernel with an initramfs built from a `ppk`
-closure, and a busybox shell on the serial console, so you can try commands
-by hand:
+`tools/vm-shell` live-boots the same kernel into a system composed from
+`ppk` packages, with a busybox shell on the serial console, so you can try
+commands by hand:
 
 ```sh
 tools/vm-shell
@@ -53,46 +53,62 @@ commit it names; a temporary worktree at that commit keeps your own
 checkout as it is.
 
 On the host, it builds the static `ppk`, prelude and `seed-sd`, and packs
-three packages:
+four packages:
 
 - `dev.peios.busybox@<version>`, the host's busybox with a link for each
   applet;
 - `dev.peios.ppk@<version>`, with `bin/ppk`;
 - `dev.peios.prelude@<version>`, with `sbin/prelude`, `bin/seed-sd` and
-  `libexec/prelude/hook-log.sh`, as prelude installs them.
+  `libexec/prelude/hook-log.sh`, as prelude installs them;
+- `dev.peios.live-root@<version>`, with the prelude hook
+  `libexec/prelude/hooks.d/ppk-live-root`, from `boot/ppk-live-root`.
 
-`ppk compose-env` then lays out the initramfs's root, with the packages'
-closure as its `/usr` and, around it:
+`ppk compose-env` then lays out the initramfs's root, with the four
+packages' closure as its `/usr` and, around it:
 
 - `/init`, a link to `usr/sbin/prelude` (`--symlink init::sbin/prelude`);
 - empty `/proc`, `/sys` and `/tmp` (`--dir`);
-- `/system/artifacts`, holding the three packages
-  (`--include-artifacts`).
+- `/system/artifacts`, holding the four packages (`--include-artifacts`).
 
 `mkirf` from the `peiosutils` repository beside `ppk` turns that tree into
-the initramfs, writing prelude's empty hook sequence. Pass `--mkirf` to use
-another `mkirf`, and `--prelude` to build prelude from another checkout
-than the one beside `ppk`. QEMU then starts in the terminal, with `rd.shell`
-on the kernel command line.
+the initramfs, writing the hook into prelude's hook sequence. Pass
+`--mkirf` to use another `mkirf`, and `--prelude` to build prelude from
+another checkout than the one beside `ppk`. QEMU then starts in the
+terminal. The kernel command line names the system's packages, busybox and
+`ppk`, as `ppk.system=<package>,<package>`, and has `rd.shell`.
 
-prelude mounts `/proc`, `/sys` and `/dev`, and gives `/dev` its security
-descriptors with `seed-sd`. With no hook to mount a root, boot fails and
-prelude opens its recovery shell.
+At boot:
 
-A tmpfs you mount in the shell refuses all access, even to SYSTEM, until
-its root has a descriptor: run `seed-sd` on it after mounting it. That shell has no controlling terminal, so
-<kbd>Ctrl</kbd>+<kbd>C</kbd> does nothing. Run `poweroff -f` to power the
-guest off, or press <kbd>Ctrl</kbd>+<kbd>A</kbd> then <kbd>X</kbd>. Exiting
-the shell halts the guest but leaves QEMU running, so press
-<kbd>Ctrl</kbd>+<kbd>A</kbd> then <kbd>X</kbd> after it. Nothing in the
-guest survives. Pass `--kernel` or set `PPK_VM_KERNEL` to boot another
-kernel; `--help` lists the options.
+1. prelude mounts `/proc`, `/sys` and `/dev`, and gives `/dev` its security
+   descriptors with `seed-sd`.
+2. The `ppk-live-root` hook mounts a tmpfs at `/mnt/live` and gives it a
+   descriptor with `seed-sd`: a tmpfs refuses all access, even to SYSTEM,
+   until its root has one. It then runs `ppk compose-env` with the
+   `ppk.system=` packages and `--copy-artifacts`, so the system's root has
+   its own copy of them, and bind-mounts that root onto `/mnt/rootfs`. The
+   root lives on its own tmpfs because prelude deletes what is left on the
+   initramfs's filesystem once it hands over.
+3. prelude moves `/proc`, `/sys` and `/dev` into the new root, switches to
+   it, and starts its first fallback init that exists, `/bin/init`, which
+   is busybox's `init`.
 
-The shell runs as SYSTEM on `rootfs`, so every access check passes for it.
-The store has no descriptors of its own, because it was packed on the host
-and the archive doesn't carry extended attributes; its files inherit
-`rootfs`'s SYSTEM-only one. To see what an ordinary user can do, use the VM
-tests.
+busybox's `init` complains that `/etc/init.d/rcS` is missing, then offers a
+shell on the console when you press <kbd>Enter</kbd>. In the system, `/usr`
+is the closure of busybox and `ppk`, and `ppk` finds the system's packages
+in `/system/artifacts`. Run `poweroff -f` to power the guest off, or press
+<kbd>Ctrl</kbd>+<kbd>A</kbd> then <kbd>X</kbd>. Nothing in the guest
+survives. Pass `--kernel` or set `PPK_VM_KERNEL` to boot another kernel;
+`--help` lists the options.
+
+If boot fails, prelude opens its recovery shell in the initramfs instead.
+That shell has no controlling terminal, so <kbd>Ctrl</kbd>+<kbd>C</kbd>
+does nothing, and exiting it halts the guest but leaves QEMU running.
+
+Everything runs as SYSTEM, so every access check passes. The system's
+store gets the descriptors `seed-sd` gave its tmpfs and `ppk` gives what it
+writes. The initramfs's own store has none, because it was packed on the
+host and the archive doesn't carry extended attributes. To see what an
+ordinary user can do, use the VM tests.
 
 ### What the tests do and don't show
 

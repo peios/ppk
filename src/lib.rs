@@ -51,7 +51,7 @@ pub use fetch::{Fetched, fetch};
 pub use id::{HOST_ARCH, PackageId};
 pub use identity::Identity;
 pub use manifest::{Entry, Manifest, parse_manifest, render_manifest};
-pub use pack::{Packed, pack};
+pub use pack::{Packed, pack, pack_replacing};
 pub use profile::Profile;
 pub use store::{packed, prepare_artifact_dir, versions};
 

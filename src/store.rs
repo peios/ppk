@@ -165,6 +165,15 @@ pub(crate) fn write_new(dir: &Path, dest: &Path, bytes: &[u8]) -> Result<bool> {
     }
 }
 
+/// Create or replace `dest` holding `bytes`, via a temporary file in `dir`
+/// so readers never see a partial file.
+pub(crate) fn write_replacing(dir: &Path, dest: &Path, bytes: &[u8]) -> Result<()> {
+    let mut tmp = new_temp(dir, ARTIFACT_MODE)?;
+    tmp.write_all(bytes)
+        .with_context(|| format!("{}", dest.display()))?;
+    persist(tmp, dest)
+}
+
 /// A temporary file in `dir`, already read-only by `mode` and carrying the
 /// store's security descriptor. The handle returned stays writable, because
 /// access is checked when the file is opened.

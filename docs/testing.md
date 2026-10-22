@@ -44,18 +44,21 @@ try commands by hand:
 tools/vm-shell
 ```
 
-It needs the `peiosutils`, `peiso`, `pekit`, `pkgs` and `prelude`
-repositories beside `ppk`, OVMF, `mkfs.vfat`, mtools and `xorriso` on the
-host, and a static musl Peios SDK for building `seed-sd`. Prepare the SDK
+It needs the `kernel`, `peiosutils`, `peiso`, `pekit`, `pkgs` and
+`prelude` repositories beside `ppk`, OVMF, `mkfs.vfat`, mtools and
+`xorriso` on the host, Docker with the kernel build's pinned image, and a
+static musl Peios SDK for building `seed-sd`. Prepare the SDK
 once with prelude's `tools/prepare-sdk.py`, as prelude's `docs/building.md`
 describes, into `~/.cache/peios/prelude-sdk-musl`, or pass `--sdk` or set
 `PEIOS_SDK` to use another. The script needs `peios-sdk` checked out at the
 commit it names; a temporary worktree at that commit keeps your own
 checkout as it is.
 
-On the host, `pekit` builds four packages from their recipes in `pkgs`,
+On the host, `pekit` builds five packages from their recipes in `pkgs`,
 into a store of the run's own:
 
+- `dev.peios.kernel`, the kernel built from the `kernel` checkout beside
+  `pkgs` by its own build, in Docker;
 - `net.busybox.busybox`, busybox built statically from its release
   tarball, with a link for each applet in `bin` and `sbin`;
 - `dev.peios.ppk`, with the static `bin/ppk`;
@@ -64,15 +67,21 @@ into a store of the run's own:
 - `dev.peios.live-root`, with the prelude hook
   `libexec/prelude/hooks.d/ppk-live-root`, from `boot/ppk-live-root`.
 
-The recipes for `ppk`, live-root and prelude build from the checkouts
-beside `pkgs`, uncommitted changes included, so what boots is what you
-have checked out. Their versions do not change with their contents, which
-is why each run packs into a store of its own. prelude's recipe takes the
-SDK from `PEIOS_SDK`, which the script sets from `--sdk`.
+The recipes for the kernel, `ppk`, live-root and prelude build from the
+checkouts beside `pkgs`, uncommitted changes included, so what boots is
+what you have checked out. Their versions do not change with their
+contents, which is why each run packs into a store of its own. `pekit`
+keeps each build in its cache and reruns only those whose recipe or
+source changed, in a work directory it keeps, so they redo only what
+changed. The kernel's first build takes about half an hour, and later ones
+take seconds while the kernel is unchanged. To boot another kernel image
+instead, pass `--kernel` or set `PPK_VM_KERNEL`. prelude's recipe takes
+the SDK from `PEIOS_SDK`, which the script sets from `--sdk`.
 
-The script then writes a spec for `peiso`: the live system is busybox and
-`ppk`, and the initramfs holds those two, which the hook runs, with
-prelude and live-root. `peiso` composes the initramfs's root: the closure
+The script then writes a spec for `peiso`: the kernel is the one in
+`dev.peios.kernel`, the live system is busybox and `ppk`, and the
+initramfs holds those two, which the hook runs, with prelude and
+live-root. `peiso` composes the initramfs's root: the closure
 of its four packages as `/usr` and, around it:
 
 - `/init`, a link to `usr/sbin/prelude`;

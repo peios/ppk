@@ -350,6 +350,27 @@ fn a_packed_version_cannot_be_replaced() {
 }
 
 #[test]
+fn pack_replacing_replaces_the_ref_and_keeps_the_old_manifest() {
+    let out = tempfile::tempdir().unwrap();
+    let id = "dev.peios.hello@1.0?arch=x86_64".parse().unwrap();
+    let original = pack(tree(&[("a", b"original")]).path(), out.path()).unwrap();
+    let changed = tree(&[("a", b"changed")]);
+    let replaced = ppk::pack_replacing(&id, changed.path(), out.path()).unwrap();
+    assert_ne!(replaced.identity, original.identity);
+    assert_eq!(replaced.ref_path, original.ref_path);
+    assert_eq!(
+        ppk::packed(&id, out.path()).unwrap().unwrap().to_string(),
+        replaced.identity
+    );
+    assert!(original.manifest_path.is_file());
+    let tmp = files_under(out.path())
+        .into_iter()
+        .filter(|path| path.to_string_lossy().contains(".tmp-"))
+        .count();
+    assert_eq!(tmp, 0, "no temporary files left behind");
+}
+
+#[test]
 fn arches_of_one_version_coexist() {
     let x86 = tree(&[("bin/hello", b"x86 binary")]);
     let arm = tree(&[("bin/hello", b"arm binary")]);

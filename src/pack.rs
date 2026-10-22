@@ -46,6 +46,21 @@ enum Found {
 /// written first, then the manifest, then the ref, so a ref never names a
 /// manifest that is missing or incomplete.
 pub fn pack(id: &PackageId, input: &Path, artifact_dir: &Path) -> Result<Packed> {
+    pack_as(id, input, artifact_dir, false)
+}
+
+/// Pack `input` into `artifact_dir` as `id`, as [`pack`] does, but replace
+/// whatever is packed as `id` already.
+///
+/// This breaks the rule that a packed version never changes, so it is for
+/// development, when a version is rebuilt from changed source and nothing
+/// else relies on what it was. Only the ref changes: the replaced manifest
+/// and its blobs stay, as does anything composed from them.
+pub fn pack_replacing(id: &PackageId, input: &Path, artifact_dir: &Path) -> Result<Packed> {
+    pack_as(id, input, artifact_dir, true)
+}
+
+fn pack_as(id: &PackageId, input: &Path, artifact_dir: &Path, replace: bool) -> Result<Packed> {
     if !fs::metadata(input)
         .with_context(|| format!("{}", input.display()))?
         .is_dir()
@@ -90,7 +105,9 @@ pub fn pack(id: &PackageId, input: &Path, artifact_dir: &Path) -> Result<Packed>
     let ref_path = layout.ref_path(id);
     // The ref write at the end still refuses to replace a ref that appears
     // after this check.
-    if let Some(existing) = store::read_ref(&ref_path)?.filter(|existing| *existing != identity) {
+    if !replace
+        && let Some(existing) = store::read_ref(&ref_path)?.filter(|existing| *existing != identity)
+    {
         bail!("{id}: already packed as {existing}; a packed version cannot be replaced");
     }
 
@@ -115,7 +132,13 @@ pub fn pack(id: &PackageId, input: &Path, artifact_dir: &Path) -> Result<Packed>
     }
 
     store::create_dirs(&ref_dir)?;
-    if !store::write_new(
+    if replace {
+        store::write_replacing(
+            &ref_dir,
+            &ref_path,
+            store::ref_contents(&identity).as_bytes(),
+        )?;
+    } else if !store::write_new(
         &ref_dir,
         &ref_path,
         store::ref_contents(&identity).as_bytes(),

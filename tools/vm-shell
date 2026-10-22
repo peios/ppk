@@ -1,14 +1,13 @@
 #!/bin/bash
 # Live-boot a Peios ISO into a system composed from ppk packages, for trying
-# ppk by hand. pekit builds busybox, ppk, prelude and a prelude hook from
-# their recipes in pkgs, and peiso builds an ISO from them, which QEMU boots
+# ppk by hand. pekit builds the kernel, busybox, ppk, prelude and a prelude
+# hook from their recipes in pkgs, and peiso builds an ISO from them, which
+# QEMU boots
 # under UEFI. At boot, prelude runs the hook, which composes the system's
 # root from packages on a tmpfs, and hands over to it. The guest is a
 # throwaway: nothing in it survives.
 set -euo pipefail
 
-readonly DEFAULT_KERNEL_RELEASE=7.0.9-peios-0.21.0-alpha11
-readonly DEFAULT_KERNEL="$HOME/.cache/provium/builds/peinit/image/root/usr/lib/modules/$DEFAULT_KERNEL_RELEASE/vmlinuz-$DEFAULT_KERNEL_RELEASE"
 readonly DEFAULT_PEIOS_SDK="$HOME/.cache/peios/prelude-sdk-musl"
 # UEFI firmware for QEMU, from the host's OVMF package: its code, and the
 # variables each boot starts from.
@@ -22,8 +21,8 @@ Boot a Peios ISO built from ppk packages
 Usage: tools/vm-shell [options]
 
 Options:
-  --kernel <file>  Boot this kernel (default: $PPK_VM_KERNEL, or the cached
-                   full-system test image's kernel)
+  --kernel <file>  Boot this kernel image rather than the dev.peios.kernel
+                   package (default: $PPK_VM_KERNEL, if set)
   --mkirf <file>   Build the initramfs with this mkirf (default: one built
                    from the peiosutils repository beside ppk)
   --mkuki <file>   Build the UKI with this mkuki (default: one built from
@@ -32,7 +31,8 @@ Options:
                    the peiso repository beside ppk)
   --pkgs <dir>     Build the packages from the recipes in this workspace
                    (default: the pkgs repository beside ppk); its recipes
-                   build ppk and prelude from the checkouts beside it
+                   build the kernel, ppk and prelude from the checkouts
+                   beside it
   --pekit <file>   Build the packages with this pekit (default: one built
                    from the pekit repository beside ppk)
   --sdk <dir>      Build seed-sd against this static musl Peios SDK
@@ -56,7 +56,7 @@ fail() {
     exit 1
 }
 
-kernel=${PPK_VM_KERNEL:-$DEFAULT_KERNEL}
+kernel=${PPK_VM_KERNEL:-}
 mkirf=
 mkuki=
 peiso=
@@ -82,7 +82,7 @@ while (($#)); do
     esac
 done
 
-[[ -f $kernel ]] || fail "$kernel: No such file"
+[[ -z $kernel || -f $kernel ]] || fail "$kernel: No such file"
 [[ -f $OVMF_CODE && -f $OVMF_VARS ]] || fail "$OVMF_CODE: No such file; install OVMF"
 
 repo=$(cd -- "$(dirname -- "$0")/.." && pwd)
@@ -111,13 +111,22 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/ppk-vm-shell.XXXXXXXX")
 trap 'rm -rf -- "$work"' EXIT HUP INT TERM
 
 # The packages, built from their recipes into a store of this run's own.
-# ppk's and prelude's recipes build from local checkouts, whose versions do
-# not change with their contents, so a store kept between runs would refuse
-# what they make next; with one version of each, the spec needs none.
-# prelude's recipe takes the SDK seed-sd links from $PEIOS_SDK; prelude's
-# docs/building.md says how to prepare it.
+# The kernel's, ppk's and prelude's recipes build from local checkouts, whose
+# versions do not change with their contents, so a store kept between runs
+# would refuse what they make next; with one version of each, the spec needs
+# none. pekit's cache keeps each build, so only what changed is built again;
+# the kernel's first build takes a while, and needs Docker. prelude's recipe
+# takes the SDK seed-sd links from $PEIOS_SDK; prelude's docs/building.md
+# says how to prepare it.
+packages=(net.busybox.busybox dev.peios.ppk dev.peios.prelude dev.peios.live-root)
+if [[ -n $kernel ]]; then
+    kernel_spec="file = \"$kernel\""
+else
+    packages+=(dev.peios.kernel)
+    kernel_spec='package = "dev.peios.kernel"'
+fi
 PEIOS_SDK=$sdk "$pekit" package --workspace "$pkgs" --artifact-dir "$work/artifacts" \
-    net.busybox.busybox dev.peios.ppk dev.peios.prelude dev.peios.live-root >/dev/null
+    "${packages[@]}" >/dev/null
 
 # The live system is busybox and ppk. The initramfs holds them too, for
 # the hook that composes the live system from the ISO, which runs them,
@@ -130,7 +139,7 @@ disable_default_repos = true
 filepath = "artifacts"
 
 [kernel]
-file = "$kernel"
+$kernel_spec
 cmdline = "console=ttyS0 panic=-1 quiet rd.shell"
 
 [[package]]

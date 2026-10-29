@@ -51,8 +51,8 @@
       "path": "github.com/gcslib/rust",
       "git": "https://github.com/gcslib/rust",
       "dir": "",
-      "commit": "fc239d98e0f2ed3e359ecc1a7695047cde3f940a",
-      "tree": "f3cc41877888a2e8ab15c0f9c94a70447f7290d7c51d19205c8ec479b98d9f41"
+      "commit": "cf427df4226309f807d14e8e1415546471f1b2eb",
+      "tree": "7d15eed4d7dec56be9fdd1c51e05b76ee350a7671235ef7f337dabf8cb0ac908"
     }
   ]
 }

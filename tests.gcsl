@@ -1,0 +1,23 @@
+# ppk's tests: its unit tests and each integration test, as `cargo test`
+# builds them, its documentation tests, as `cargo test --doc` runs them, and
+# Clippy's checks, as `cargo clippy --all-targets -- -Dwarnings` makes them.
+# None needs the host's own filesystem beyond a writable `/tmp`. The tests
+# on a Peios kernel, `tests/vm`, run under provium, as `docs/testing.md`
+# describes.
+#
+# A test's own code runs in a hermetic step of its own, so what it plans or
+# builds is in its parameters' defaults.
+import "github.com/gcslib/rust"
+
+# Runs each of `tests`.
+fn ran(tests: List<rust.RustTest>) -> {} {
+    let each = for test in tests { = rust.run_test(test) }
+}
+
+def test ppk(tests: List<rust.RustTest> = rust.tests(crates(), "ppk")) {
+    = ran(tests)
+}
+
+def test doctests(ran: List<{}> = rust.doctests(crates(), "ppk")) {}
+
+def test clippy(checked: List<{}> = rust.clippy(crates(), "ppk", flags = ["-Dwarnings"])) {}

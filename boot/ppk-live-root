@@ -17,6 +17,8 @@
 # it hands over; --copy-artifacts gives it a store of its own there, so
 # the medium is unmounted afterwards.
 
+# prelude installs its hook logger at this path on the booted system.
+# shellcheck source=/dev/null
 . /usr/libexec/prelude/hook-log.sh
 hook_log_init ppk-live-root
 

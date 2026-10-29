@@ -1,12 +1,38 @@
 # Testing ppk
 
+## Building
+
+[pekit](https://learn.peios.org/pekit) builds ppk as a static,
+position-independent musl program with full RELRO, which an initramfs runs
+before any C library is there:
+
+```sh
+pekit build ppk
+```
+
+The rust library's pinned Rust and the gcc library's Bootlin toolchain
+build it, so no Rust or C toolchain is needed on the host. `pekit.lock`
+pins the libraries.
+
 ## Host tests
 
 ```sh
-cargo test
+tools/check
 ```
 
-These cover every command on the build host's own filesystem.
+This checks style with the pinned PSC tools, then runs `pekit test`. It
+builds ppk, runs its unit tests, integration tests and documentation
+tests, and checks it with Clippy, with every warning denied. The tests
+cover every command on a writable `/tmp` in a sandbox, not on the host's
+own filesystem. Prepare the style tools once, outside the repository:
+
+```sh
+python3 tools/prepare-style-tools.py ~/.cache/peios/ppk-style
+export PEIOS_STYLE_BIN=~/.cache/peios/ppk-style/bin
+```
+
+GitHub CI checks style only. Builds and tests run with pekit on the build
+server and with `tools/check` locally.
 
 ## Peios VM tests
 
@@ -25,6 +51,9 @@ each test pushes in a static `ppk` and the host's static `busybox`.
 - Install the musl target: `rustup target add x86_64-unknown-linux-musl`.
 
 ### Run the tests
+
+The test takes ppk from Cargo's musl build, where `tests/vm/ppk.test.lua`
+looks for it:
 
 ```sh
 cargo build --release --target x86_64-unknown-linux-musl

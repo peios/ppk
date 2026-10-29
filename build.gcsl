@@ -1,0 +1,23 @@
+# ppk, each crate compiled on its own (see the rust library's `workspace`):
+# a static, position-independent musl program, which an initramfs runs
+# before any C library is there.
+import "github.com/gcslib/rust"
+
+# The ppk workspace, planned for musl, linked with full RELRO. The
+# kernel's `peios-uapi`, which ppk vendors, takes its types from the
+# kernel's sources around it, so it is given the vendored kernel.
+def crates() -> rust.RustWorkspace {
+    let target = "x86_64-unknown-linux-musl"
+    = rust.workspace(
+        dir("."),
+        rust.vendored(file("Cargo.lock")),
+        target = target,
+        rustflags = [...rust.default_rustflags(target), "-Clink-arg=-Wl,-z,relro", "-Clink-arg=-Wl,-z,now"],
+        crates = [{package = "peios-uapi"; data = [{at = "vendor/kernel"; place = dir("vendor/kernel")}]}],
+    )
+}
+
+# The package tool.
+def build ppk() {
+    = rust.bin(crates(), "ppk")
+}

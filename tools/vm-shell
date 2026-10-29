@@ -66,19 +66,19 @@ sdk=${PEIOS_SDK:-$DEFAULT_PEIOS_SDK}
 memory=1G
 while (($#)); do
     case $1 in
-        --kernel | --mkirf | --mkuki | --peiso | --pkgs | --pekit | --sdk | --memory)
-            (($# >= 2)) || usage_error "missing argument for '$1'"
-            option=${1#--}
-            printf -v "$option" '%s' "$2"
-            shift 2
-            ;;
-        -h | --help)
-            usage
-            exit 0
-            ;;
-        *)
-            usage_error "unknown option '$1'"
-            ;;
+    --kernel | --mkirf | --mkuki | --peiso | --pkgs | --pekit | --sdk | --memory)
+        (($# >= 2)) || usage_error "missing argument for '$1'"
+        option=${1#--}
+        printf -v "$option" '%s' "$2"
+        shift 2
+        ;;
+    -h | --help)
+        usage
+        exit 0
+        ;;
+    *)
+        usage_error "unknown option '$1'"
+        ;;
     esac
 done
 

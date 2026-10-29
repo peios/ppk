@@ -14,6 +14,21 @@ The rust library's pinned Rust and the gcc library's Bootlin toolchain
 build it, so no Rust or C toolchain is needed on the host. `pekit.lock`
 pins the libraries.
 
+### Building against ppk
+
+A pekit workspace that takes ppk's crates by git, as peiso does, imports
+ppk's GCSL library at the same commit as its `Cargo.lock` pins, and gives
+its workspace ppk's settings:
+
+```gcsl
+import "github.com/peios/ppk" as ppk
+
+rust.workspace(dir("."), rust.vendored(file("Cargo.lock")), crates = ppk.crate_settings())
+```
+
+`crate_settings()` places the kernel file that the vendored `peios-uapi`
+crate reads through `#[path]` where that path reaches.
+
 ## Host tests
 
 ```sh

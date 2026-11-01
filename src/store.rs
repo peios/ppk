@@ -33,6 +33,10 @@ impl<'a> ArtifactDir<'a> {
         Self { root }
     }
 
+    pub(crate) fn root(&self) -> &Path {
+        self.root
+    }
+
     pub(crate) fn blob_dir(&self) -> PathBuf {
         self.root.join("blobs").join(ALGORITHM)
     }
@@ -126,25 +130,27 @@ pub(crate) fn ref_contents(identity: &Identity) -> String {
     format!("{identity}\n")
 }
 
-/// Copy `path` into `blob`, the form given by [`ArtifactDir::blob_path`], if
-/// its content hashes to `hex`. Returns false, writing nothing, if it does
-/// not; the caller knows what that means.
-pub(crate) fn copy_blob(path: &Path, blob: &Path, hex: &str, exec: bool) -> Result<bool> {
+/// Copy `path` to `dest`, as a blob's form is stored: read-only, executable
+/// if `exec`, and with the store's security descriptor. `dest` is that form
+/// in an artifact directory, as [`ArtifactDir::blob_path`] gives it, or a
+/// file of a tree that copies its blobs. Returns false, writing nothing, if
+/// the content does not hash to `hex`; the caller knows what that means.
+pub(crate) fn copy_blob(path: &Path, dest: &Path, hex: &str, exec: bool) -> Result<bool> {
     let file = File::open(path).with_context(|| format!("{}", path.display()))?;
     let mut reader = HashingReader {
         inner: file,
         hasher: Sha256::new(),
     };
-    let blob_dir = blob
+    let dir = dest
         .parent()
-        .expect("a blob path is inside the blob directory");
+        .expect("a blob's destination is in a directory");
     let mode = if exec { EXEC_BLOB_MODE } else { ARTIFACT_MODE };
-    let mut tmp = new_temp(blob_dir, mode)?;
+    let mut tmp = new_temp(dir, mode)?;
     io::copy(&mut reader, &mut tmp).with_context(|| format!("{}", path.display()))?;
     if Identity::from_digest(reader.hasher.finalize()).hex() != hex {
         return Ok(false);
     }
-    persist(tmp, blob)?;
+    persist(tmp, dest)?;
     Ok(true)
 }
 

@@ -4,7 +4,9 @@
 //! links a stored file shares that file's descriptor, and the store has to
 //! grant what any closure's user needs. For now that is read and execute for
 //! Everyone, with full control for SYSTEM and Administrators; hardening comes
-//! once the core design is proven.
+//! once the core design is proven. A tree that copies its blobs instead gives
+//! each copy this descriptor of its own, so that it grants what a link would
+//! have, but hardening the store will not reach what was copied before.
 //!
 //! This module builds the one descriptor it needs by hand and applies it with
 //! the raw `kacs_set_sd` system call, using only constants from `peios-uapi`.

@@ -1,4 +1,4 @@
-.TH PPK 1 2026-10-21 "Peios ppk 0.1.0"
+.TH PPK 1 2026-11-01 "Peios ppk 0.1.0"
 .SH NAME
 ppk \- create and manage Peios packages
 .SH SYNOPSIS
@@ -18,6 +18,7 @@ ppk \- create and manage Peios packages
 .IR dir ]
 .RB [ \-\-closure\-dir
 .IR dir ]
+.RB [ \-\-copy\-files ]
 .IR package ...
 .br
 .B ppk compose\-env
@@ -29,6 +30,7 @@ ppk \- create and manage Peios packages
 .RB [ \-\-dir
 .IR path ]...
 .RB [ \-\-include\-artifacts | \-\-copy\-artifacts ]
+.RB [ \-\-copy\-files ]
 .RB [ \-p
 .IR package ...]
 .B \-\-out
@@ -40,6 +42,7 @@ ppk \- create and manage Peios packages
 .IR dir ]
 .RB [ \-\-closure\-dir
 .IR dir ]
+.RB [ \-\-copy\-files ]
 .RB [ \-p
 .IR package ...]
 .RB [ \-\-
@@ -246,19 +249,22 @@ closure: one directory tree, the contents of a
 Print the closure's identity on standard output.
 .IP
 Every file in the tree is a hard link to its blob, in the form its entry
-needs; symbolic links and directories are created in the tree.
+needs, or a copy of it with
+.BR \-\-copy\-files ;
+symbolic links and directories are created in the tree.
 The closure's manifest lists the identities of its packages, sorted and
 without duplicates, and the closure's identity is the SHA-256 hash of that
 manifest, so the order and repetition of the arguments do not matter.
-An existing closure is reused.
+An existing closure is reused, however its files were placed.
 A tree is built in a temporary directory and renamed into place when
 complete.
 .IP
 .B ppk closure
 fails, writing nothing, if two packages give one path different entries,
-if a path lies beneath a file or symbolic link of another package, or if
-the closure directory is not on the same filesystem as the artifact
-directory.
+or if a path lies beneath a file or symbolic link of another package.
+It fails, leaving nothing behind, if a hard link cannot be made because the
+closure directory is not on the same mount as the artifact directory, or if
+a blob it copies does not match its hash.
 .TP
 .BI compose\-env " \fR[\fPprofile\fR]\fP"
 Lay out the root of the environment that
@@ -278,7 +284,8 @@ is the closure of the packages, built in place as
 .B closure
 builds it: every file is a hard link to its blob, in the root's own
 artifact directory if it has one and otherwise in the artifact directory
-the packages are read from.
+the packages are read from, or a copy of that blob with
+.BR \-\-copy\-files .
 Nothing is written to that artifact directory.
 .IP
 What lies outside
@@ -307,10 +314,15 @@ place when complete.
 fails, writing nothing, if the directory already exists, if the packages
 clash as they would for
 .BR closure ,
-if a path given lies under a symbolic link given, or, unless
-.B \-\-copy\-artifacts
-is given, if the directory is not on the same filesystem as the artifact
-directory.
+or if a path given lies under a symbolic link given.
+It fails, leaving nothing behind, if a hard link cannot be made because the
+directory is not on the same mount as the artifact directory, or if a blob
+it copies does not match its hash.
+To compose a root on another mount, give
+.BR \-\-copy\-artifacts ,
+or
+.B \-\-copy\-files
+if the root has no artifact directory of its own.
 .TP
 .BI run " \fR[\fPprofile\fR] [\fP" \-\- " command \fR[\fPargument\fR...]]\fP"
 Run
@@ -393,7 +405,24 @@ instead of the
 .I closures
 directory of the artifact directory.
 .I dir
-must be on the same filesystem as the artifact directory.
+must be on the same mount as the artifact directory, unless
+.B \-\-copy\-files
+is given.
+.TP
+.B \-\-copy\-files
+For
+.BR closure ,
+.BR compose\-env ,
+and
+.BR run ,
+copy each file of the tree from its blob rather than hard link it, so that
+the tree can be on any mount.
+A hard link cannot cross a mount, even between two mounts of one filesystem,
+as a sandbox's bind mounts can be.
+Each copy is checked against its hash as it is made, and has the mode and
+security descriptor of its blob, but as a file of its own: it takes its own
+space, and a later change to the store's descriptors does not reach it.
+A closure that already exists is reused as it is.
 .TP
 .BI \-\-from " dir"
 For
@@ -455,7 +484,7 @@ holding the packages' refs, manifests, and blobs as hard links, so that
 .B ppk
 inside the environment finds them by default.
 Only the packages composed are included, and not their closure.
-The root must be on the same filesystem as the artifact directory.
+The root must be on the same mount as the artifact directory.
 .TP
 .B \-\-copy\-artifacts
 For
@@ -464,7 +493,7 @@ give the root its own artifact directory as
 .B \-\-include\-artifacts
 does, but copy the packages into it, checking each as
 .B fetch
-does, so that the root can be on any filesystem.
+does, so that the root can be on any mount.
 The root's own files and its artifact directory then share nothing with
 the artifact directory the packages are read from.
 Copying is a way of including the packages, so this wins over

@@ -295,16 +295,30 @@ fn a_tampered_package_manifest_is_refused() {
     );
 }
 
+/// Whether a hardlink can be made from `from` to `to`. Only trying says: two
+/// mounts of one filesystem have one device number, and refuse links too.
+/// pekit's sandbox gives a test `/tmp` and the build tree that way.
+fn can_link(from: &Path, to: &Path) -> bool {
+    let probe = from.join("probe");
+    fs::write(&probe, b"probe").unwrap();
+    let linked = fs::hard_link(&probe, to.join("probe"));
+    fs::remove_file(&probe).unwrap();
+    let _ = fs::remove_file(to.join("probe"));
+    match linked {
+        Ok(()) => true,
+        Err(err) if err.kind() == std::io::ErrorKind::CrossesDevices => false,
+        Err(err) => panic!("{err}"),
+    }
+}
+
 #[test]
-fn a_closure_directory_on_another_filesystem_is_refused() {
+fn a_closure_directory_on_another_mount_needs_copied_files() {
     // The artifact directory is under the build tree; tempdir() is under the
-    // system temporary directory, which is a separate tmpfs on many hosts.
+    // system temporary directory, which is a separate mount on many hosts.
     let artifacts = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let closures = tempfile::tempdir().unwrap();
-    let same_device = fs::metadata(artifacts.path()).unwrap().dev()
-        == fs::metadata(closures.path()).unwrap().dev();
-    if same_device {
-        eprintln!("skipped: the build tree and the temporary directory share a filesystem");
+    if can_link(artifacts.path(), closures.path()) {
+        eprintln!("skipped: the build tree and the temporary directory share a mount");
         return;
     }
     let content = tempfile::tempdir().unwrap();
@@ -312,12 +326,97 @@ fn a_closure_directory_on_another_filesystem_is_refused() {
     ppk::pack(&id(HELLO), content.path(), artifacts.path()).unwrap();
 
     let err = ppk::closure(&[id(HELLO)], artifacts.path(), closures.path()).unwrap_err();
-    assert!(
-        err.to_string().ends_with(&format!(
-            "not on the same filesystem as the artifact directory {}",
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "{}: not on the same mount as the artifact directory {}; use --copy-files",
+            closures.path().display(),
             artifacts.path().display()
-        )),
-        "{err:#}"
+        ),
     );
     assert_eq!(fs::read_dir(closures.path()).unwrap().count(), 0);
+
+    let closed = ppk::closure_copying(&[id(HELLO)], artifacts.path(), closures.path()).unwrap();
+    assert_eq!(
+        fs::read(closed.tree_path.join("a")).unwrap(),
+        b"a",
+        "the tree holds the file"
+    );
+    assert!(closed.manifest_path.is_file());
+}
+
+#[test]
+fn copied_files_are_stored_as_blobs_are_but_share_nothing_with_them() {
+    let store = Store::new();
+    store.pack(
+        HELLO,
+        &[("bin/hello", b"program", 0o755), ("doc", b"text", 0o644)],
+    );
+    let closed = ppk::closure_copying(&[id(HELLO)], store.artifacts(), &store.closures()).unwrap();
+    assert!(!closed.reused);
+
+    for (path, content, exec, mode) in [
+        ("bin/hello", &b"program"[..], true, 0o555),
+        ("doc", &b"text"[..], false, 0o444),
+    ] {
+        let file = closed.tree_path.join(path);
+        let meta = fs::metadata(&file).unwrap();
+        let blob = fs::metadata(store.blob(content, exec)).unwrap();
+        assert_ne!(meta.ino(), blob.ino(), "{path} is a copy");
+        assert_eq!(blob.nlink(), 1, "{path}'s blob gained no link");
+        assert_eq!(meta.nlink(), 1, "{path} has one link");
+        assert_eq!(meta.mode() & 0o777, mode, "{path}");
+        assert_eq!(fs::read(&file).unwrap(), content, "{path}");
+    }
+    let names: Vec<_> = fs::read_dir(closed.tree_path.join("bin"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["hello"], "no temporary file is left behind");
+}
+
+#[test]
+fn copying_gives_the_same_closure_as_linking() {
+    let copied = Store::new();
+    let linked = Store::new();
+    for store in [&copied, &linked] {
+        store.pack(HELLO, &[("bin/hello", b"program", 0o755)]);
+    }
+    let copy = ppk::closure_copying(&[id(HELLO)], copied.artifacts(), &copied.closures()).unwrap();
+    let link = linked.closure(&[HELLO]).unwrap();
+    assert_eq!(copy.identity, link.identity);
+    assert_eq!(
+        fs::read(&copy.manifest_path).unwrap(),
+        fs::read(&link.manifest_path).unwrap()
+    );
+}
+
+#[test]
+fn a_closure_is_reused_however_it_was_built() {
+    let store = Store::new();
+    store.pack(HELLO, &[("a", b"a", 0o644)]);
+    let linked = store.closure(&[HELLO]).unwrap();
+    let copied = ppk::closure_copying(&[id(HELLO)], store.artifacts(), &store.closures()).unwrap();
+    assert!(copied.reused);
+    assert_eq!(copied.tree_path, linked.tree_path);
+}
+
+#[test]
+fn copying_refuses_a_blob_that_does_not_match_its_hash() {
+    let store = Store::new();
+    store.pack(HELLO, &[("a", b"a", 0o644)]);
+    let blob = store.blob(b"a", false);
+    fs::set_permissions(&blob, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::write(&blob, b"tampered").unwrap();
+
+    let err = ppk::closure_copying(&[id(HELLO)], store.artifacts(), &store.closures()).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!("{}: does not match its hash", blob.display())
+    );
+    assert_eq!(
+        fs::read_dir(store.closures()).unwrap().count(),
+        0,
+        "neither a tree nor a manifest is left behind"
+    );
 }

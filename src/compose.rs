@@ -2,9 +2,9 @@
 //! directory of its own, for something such as an image builder to take.
 //!
 //! The packages' closure becomes the root's `usr`, as hardlinks to their
-//! blobs. What lies outside `/usr` belongs to the environment, not to any
-//! package, so it is given separately: symlinks, empty directories, and
-//! optionally a store holding the packages themselves.
+//! blobs or copies of them. What lies outside `/usr` belongs to the
+//! environment, not to any package, so it is given separately: symlinks,
+//! empty directories, and optionally a store holding the packages themselves.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, Permissions};
@@ -16,7 +16,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::access;
 use crate::closure::{
-    build_entry, merge, package_identities, render_closure_manifest, same_filesystem,
+    UsrFiles, build_entry, link_blob, merge, package_identities, render_closure_manifest,
 };
 use crate::environment::MOUNT_POINT;
 use crate::fetch::fetch;
@@ -109,17 +109,17 @@ impl FromStr for EnvDir {
 
 /// Whether a composed root gets an artifact directory of its own holding the
 /// packages, where ppk inside it looks by default, and how it is filled.
-/// With one, the root's `usr` hardlinks into it; without, into the source.
+/// With one, the root's `usr` is built from it; without, from the source.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RootArtifacts {
     /// No artifact directory of its own.
     #[default]
     None,
     /// Hardlink the packages' refs, manifests and blobs from the source,
-    /// which must be on the root's filesystem.
+    /// which must be on the root's mount.
     Include,
     /// Copy them from the source as `fetch` does, checking every manifest
-    /// and blob, so the source may be on any filesystem.
+    /// and blob, so the source may be on any mount.
     Copy,
 }
 
@@ -129,6 +129,8 @@ pub struct Extras {
     pub symlinks: Vec<EnvSymlink>,
     pub dirs: Vec<EnvDir>,
     pub artifacts: RootArtifacts,
+    /// How `usr` holds the packages' files.
+    pub files: UsrFiles,
 }
 
 /// Compose `packages`, each already in `artifact_dir`, into a new root at
@@ -138,9 +140,10 @@ pub struct Extras {
 /// Everything is checked before anything is written: the packages merge as
 /// for a closure, no extra lies under an extra symlink, and `out` must not
 /// exist. The root is built in a temporary directory beside `out` and
-/// renamed into place, so `out` is complete if it exists. Unless the
-/// packages are copied into the root, `out` must be on the same filesystem
-/// as `artifact_dir`, because its files are hardlinks.
+/// renamed into place, so `out` is complete if it exists. `out` must be on
+/// the same mount as `artifact_dir` wherever a file is hardlinked from it:
+/// unless `extras` copies the packages into the root, or copies `usr`'s files
+/// with no artifact directory in the root.
 pub fn compose_env(
     packages: &[PackageId],
     artifact_dir: &Path,
@@ -159,13 +162,6 @@ pub fn compose_env(
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
     };
-    if extras.artifacts != RootArtifacts::Copy && !same_filesystem(&layout, artifact_dir, parent)? {
-        bail!(
-            "{}: not on the same filesystem as the artifact directory {}; use --copy-artifacts",
-            out.display(),
-            artifact_dir.display()
-        );
-    }
 
     let tmp = tempfile::Builder::new()
         .prefix(".tmp-")
@@ -173,14 +169,14 @@ pub fn compose_env(
         .tempdir_in(parent)
         .with_context(|| format!("{}: cannot create a temporary directory", parent.display()))?;
     // Directories and symlinks created in the root inherit this; its files
-    // are hardlinks, and keep their blobs' descriptor.
+    // have their blobs' descriptor, either way.
     access::protect_dir(tmp.path())?;
 
     let root_store = tmp.path().join(artifacts());
     match extras.artifacts {
         RootArtifacts::None => {}
         RootArtifacts::Include => {
-            include_artifacts(&layout, &root_store, packages, &identities, &merged)?;
+            include_artifacts(&layout, &root_store, packages, &identities, &merged, out)?;
         }
         RootArtifacts::Copy => {
             for id in packages {
@@ -195,7 +191,7 @@ pub fn compose_env(
     let usr = tmp.path().join(usr());
     fs::create_dir(&usr).with_context(|| format!("{}", usr.display()))?;
     for (path, (entry, _)) in &merged {
-        build_entry(&usr_layout, &usr, path, entry)?;
+        build_entry(&usr_layout, &usr, path, entry, extras.files, out)?;
     }
     for dir in &extras.dirs {
         let dest = tmp.path().join(dir.path());
@@ -293,12 +289,14 @@ fn check_extras(extras: &Extras) -> Result<()> {
 
 /// Hardlink what ppk needs to find `packages` into the artifact directory
 /// `dest`: their refs and manifests, and each blob in the forms they use.
+/// `out` is the root it is in, which an error names.
 fn include_artifacts(
     layout: &ArtifactDir,
     dest: &Path,
     packages: &[PackageId],
     identities: &[Identity],
     merged: &BTreeMap<String, (Entry, PackageId)>,
+    out: &Path,
 ) -> Result<()> {
     let dest_layout = ArtifactDir::new(dest);
     let mut links: BTreeSet<(PathBuf, PathBuf)> = BTreeSet::new();
@@ -323,7 +321,7 @@ fn include_artifacts(
         if let Some(parent) = to.parent() {
             fs::create_dir_all(parent).with_context(|| format!("{}", parent.display()))?;
         }
-        fs::hard_link(from, to).with_context(|| format!("{}", from.display()))?;
+        link_blob(layout, from, to, out, "--copy-artifacts")?;
     }
     Ok(())
 }

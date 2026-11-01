@@ -2,7 +2,7 @@ use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use ppk::{EnvDir, EnvSymlink, Extras, Identity, PackageId, RootArtifacts};
+use ppk::{EnvDir, EnvSymlink, Extras, Identity, PackageId, RootArtifacts, UsrFiles};
 use tempfile::TempDir;
 
 /// An artifact directory, and room beside it for composed roots.
@@ -127,7 +127,7 @@ fn extras_are_created_around_usr() {
     let extras = Extras {
         symlinks: symlinks(&["init::bin/hello", "lib/deep/hello::bin/hello", "abs:/x/y"]),
         dirs: dirs(&["proc", "var/lib"]),
-        artifacts: RootArtifacts::None,
+        ..Extras::default()
     };
     store.compose(&[HELLO], &extras).unwrap();
     let out = store.out();
@@ -299,6 +299,7 @@ fn clashing_extras_are_refused_and_nothing_is_written() {
             symlinks: symlinks(&links),
             dirs: dirs(&directories),
             artifacts,
+            ..Extras::default()
         };
         let err = store.compose(&[HELLO], &extras).unwrap_err();
         assert_eq!(err.to_string(), message, "{links:?} {directories:?}");
@@ -362,16 +363,30 @@ fn malformed_symlinks_and_directories_are_refused() {
     }
 }
 
+/// Whether a hardlink can be made from `from` to `to`. Only trying says: two
+/// mounts of one filesystem have one device number, and refuse links too.
+/// pekit's sandbox gives a test `/tmp` and the build tree that way.
+fn can_link(from: &Path, to: &Path) -> bool {
+    let probe = from.join("probe");
+    fs::write(&probe, b"probe").unwrap();
+    let linked = fs::hard_link(&probe, to.join("probe"));
+    fs::remove_file(&probe).unwrap();
+    let _ = fs::remove_file(to.join("probe"));
+    match linked {
+        Ok(()) => true,
+        Err(err) if err.kind() == std::io::ErrorKind::CrossesDevices => false,
+        Err(err) => panic!("{err}"),
+    }
+}
+
 #[test]
-fn a_root_on_another_filesystem_needs_copied_artifacts() {
+fn a_root_on_another_mount_needs_its_files_or_artifacts_copied() {
     // As for closures: the build tree and the system temporary directory are
-    // separate filesystems on many hosts.
+    // separate mounts on many hosts.
     let artifacts = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let parent = tempfile::tempdir().unwrap();
-    let same_device =
-        fs::metadata(artifacts.path()).unwrap().dev() == fs::metadata(parent.path()).unwrap().dev();
-    if same_device {
-        eprintln!("skipped: the build tree and the temporary directory share a filesystem");
+    if can_link(artifacts.path(), parent.path()) {
+        eprintln!("skipped: the build tree and the temporary directory share a mount");
         return;
     }
     let content = tempfile::tempdir().unwrap();
@@ -379,17 +394,26 @@ fn a_root_on_another_filesystem_needs_copied_artifacts() {
     ppk::pack(&id(HELLO), content.path(), artifacts.path()).unwrap();
 
     let out = parent.path().join("root");
-    for artifacts_mode in [RootArtifacts::None, RootArtifacts::Include] {
+    for (artifacts_mode, files, option) in [
+        (RootArtifacts::None, UsrFiles::Hardlink, "--copy-files"),
+        (
+            RootArtifacts::Include,
+            UsrFiles::Hardlink,
+            "--copy-artifacts",
+        ),
+        // The artifacts are hardlinked whatever usr does.
+        (RootArtifacts::Include, UsrFiles::Copy, "--copy-artifacts"),
+    ] {
         let extras = Extras {
             artifacts: artifacts_mode,
+            files,
             ..Extras::default()
         };
         let err = ppk::compose_env(&[id(HELLO)], artifacts.path(), &out, &extras).unwrap_err();
         assert_eq!(
             err.to_string(),
             format!(
-                "{}: not on the same filesystem as the artifact directory {}; \
-                 use --copy-artifacts",
+                "{}: not on the same mount as the artifact directory {}; use {option}",
                 out.display(),
                 artifacts.path().display()
             ),
@@ -409,4 +433,80 @@ fn a_root_on_another_filesystem_needs_copied_artifacts() {
         Identity::of(b"a").hex()
     ));
     assert_eq!(file.ino(), fs::metadata(blob).unwrap().ino());
+    fs::remove_dir_all(&out).unwrap();
+
+    let extras = Extras {
+        files: UsrFiles::Copy,
+        ..Extras::default()
+    };
+    ppk::compose_env(&[id(HELLO)], artifacts.path(), &out, &extras).unwrap();
+    assert_eq!(fs::read(out.join("usr/a")).unwrap(), b"a");
+    assert!(!out.join("system").exists(), "no store comes with it");
+}
+
+#[test]
+fn copied_files_are_stored_as_blobs_are_but_share_nothing_with_them() {
+    let store = Store::new();
+    store.pack(
+        HELLO,
+        &[("bin/hello", b"program", 0o755), ("doc", b"text", 0o644)],
+    );
+    let extras = Extras {
+        files: UsrFiles::Copy,
+        ..Extras::default()
+    };
+    store.compose(&[HELLO], &extras).unwrap();
+
+    for (path, content, exec, mode) in [
+        ("usr/bin/hello", &b"program"[..], true, 0o555),
+        ("usr/doc", &b"text"[..], false, 0o444),
+    ] {
+        let file = store.out().join(path);
+        let meta = fs::metadata(&file).unwrap();
+        let blob = fs::metadata(store.blob(content, exec)).unwrap();
+        assert_ne!(meta.ino(), blob.ino(), "{path} is a copy");
+        assert_eq!(blob.nlink(), 1, "{path}'s blob gained no link");
+        assert_eq!(meta.mode() & 0o777, mode, "{path}");
+        assert_eq!(fs::read(&file).unwrap(), content, "{path}");
+    }
+}
+
+#[test]
+fn copying_refuses_a_blob_that_does_not_match_its_hash() {
+    let store = Store::new();
+    store.pack(HELLO, &[("a", b"a", 0o644)]);
+    let blob = store.blob(b"a", false);
+    fs::set_permissions(&blob, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::write(&blob, b"tampered").unwrap();
+
+    let extras = Extras {
+        files: UsrFiles::Copy,
+        ..Extras::default()
+    };
+    let err = store.compose(&[HELLO], &extras).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!("{}: does not match its hash", blob.display())
+    );
+    assert!(!store.out().exists());
+}
+
+#[test]
+fn copied_files_can_come_from_the_roots_own_artifacts() {
+    let store = Store::new();
+    store.pack(HELLO, &[("a", b"a", 0o644)]);
+    let extras = Extras {
+        artifacts: RootArtifacts::Copy,
+        files: UsrFiles::Copy,
+        ..Extras::default()
+    };
+    store.compose(&[HELLO], &extras).unwrap();
+    let blob = store.out().join(format!(
+        "system/artifacts/blobs/sha256/{}",
+        Identity::of(b"a").hex()
+    ));
+    assert_ne!(
+        fs::metadata(store.out().join("usr/a")).unwrap().ino(),
+        fs::metadata(blob).unwrap().ino()
+    );
 }

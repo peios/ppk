@@ -161,6 +161,38 @@ test("an ordinary user can run a closure but cannot change the store", function(
     end)
 end)
 
+test("an ordinary user can run a copied closure but cannot change it", function(t)
+    local vm = boot(t)
+    local _, blob = build_closure(t, vm)
+    local closed = ppk(vm, {
+        "closure", "dev.peios.busybox@1.0", "--artifact-dir", "/system",
+        "--closure-dir", "/copied", "--copy-files",
+    })
+    closed:assert_ok()
+    local tree = "/copied/" .. closed.stdout:match("^sha256:(%x+)\n$")
+    local copy = tree .. "/bin/busybox"
+
+    t:assert_eq(vm:stat(copy).perm, tonumber("555", 8), "a copy has its blob's mode")
+    local blob_ino, blob_links = inode(vm, blob)
+    t:assert(inode(vm, copy) ~= blob_ino, "the closure file is a copy, not the blob")
+    t:assert_eq(blob_links, 2, "the store's link and the first closure's, and no other")
+
+    -- The same user as above: the copy has to grant what a link would.
+    local bypass_traverse = kacs.PRIV.CHANGE_NOTIFY
+    local user = { privs_present = bypass_traverse, privs_enabled = bypass_traverse }
+    token.as_principal(t, vm, user, function(w)
+        local ran = w:run(copy, { args = { "echo", "run by a user" } })
+        t:assert_eq(ran.stdout, "run by a user\n", ran.stderr)
+
+        local _, write_errno = sys.open(w, copy, sys.O.WRONLY)
+        t:assert_eq(write_errno, sys.E.ACCES, "writing a copy is refused")
+
+        local planted = tree .. "/bin/planted"
+        local _, create_errno = sys.open(w, planted, sys.O.WRONLY | sys.O.CREAT, tonumber("644", 8))
+        t:assert_eq(create_errno, sys.E.ACCES, "adding to a copied closure is refused")
+    end)
+end)
+
 test("run shows the closure at /usr to its command alone", function(t)
     local vm = boot(t)
     build_closure(t, vm)

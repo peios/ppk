@@ -1,9 +1,10 @@
-//! Closures: packages composed into one tree of hardlinks to their blobs.
+//! Closures: packages composed into one tree of their blobs' files, as
+//! hardlinks unless the caller asks for copies.
 
 use std::collections::BTreeMap;
 use std::fs::{self, Permissions};
 use std::io;
-use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -19,6 +20,26 @@ const ROOT_MODE: u32 = 0o755;
 
 /// The suffix of a closure's manifest, beside its tree.
 const MANIFEST_SUFFIX: &str = ".manifest";
+
+/// How a tree holds its packages' files.
+///
+/// A hardlink is the blob: the same file, with the blob's one security
+/// descriptor, taking no space. A hardlink can't cross a mount, even between
+/// two mounts of one filesystem, and the kernel is the only judge of that.
+///
+/// A copy can be made anywhere, and is checked against its hash as it is
+/// made, as `fetch` checks what it copies, so its source need not be trusted.
+/// It has the mode and security descriptor of the blob it came from, but as a
+/// file of its own, so a change to the store's descriptors does not reach it.
+/// That and the space are why copying is asked for, never fallen back on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UsrFiles {
+    /// Hardlink each file to its blob.
+    #[default]
+    Hardlink,
+    /// Copy each file from its blob.
+    Copy,
+}
 
 /// The result of a successful closure.
 #[derive(Debug)]
@@ -46,8 +67,29 @@ pub struct Closed {
 /// packages give one path different entries, or if a path lies under
 /// another package's file or symlink. The tree is built in a temporary
 /// directory and renamed into place, so a closure that exists is complete.
-/// `closure_dir` must be on the same filesystem as `artifact_dir`.
+/// `closure_dir` must be on the same mount as `artifact_dir`.
 pub fn closure(packages: &[PackageId], artifact_dir: &Path, closure_dir: &Path) -> Result<Closed> {
+    closure_as(packages, artifact_dir, closure_dir, UsrFiles::Hardlink)
+}
+
+/// Compose a closure as [`closure`] does, but copy every file from its blob
+/// instead of hardlinking it, so that `closure_dir` can be on any mount. See
+/// [`UsrFiles`] for what that gives up. A closure is named by its packages
+/// alone, so one that exists is reused however it was built.
+pub fn closure_copying(
+    packages: &[PackageId],
+    artifact_dir: &Path,
+    closure_dir: &Path,
+) -> Result<Closed> {
+    closure_as(packages, artifact_dir, closure_dir, UsrFiles::Copy)
+}
+
+fn closure_as(
+    packages: &[PackageId],
+    artifact_dir: &Path,
+    closure_dir: &Path,
+    files: UsrFiles,
+) -> Result<Closed> {
     let layout = ArtifactDir::new(artifact_dir);
     let identities = package_identities(&layout, packages, artifact_dir)?;
     let manifest = render_closure_manifest(&identities);
@@ -79,8 +121,6 @@ pub fn closure(packages: &[PackageId], artifact_dir: &Path, closure_dir: &Path) 
     let merged = merge(&layout, &identities)?;
 
     store::create_dirs(closure_dir)?;
-    check_same_filesystem(&layout, artifact_dir, closure_dir)?;
-    write_manifest(closure_dir, &manifest_path, &manifest)?;
 
     let tmp = tempfile::Builder::new()
         .prefix(".tmp-")
@@ -92,12 +132,14 @@ pub fn closure(packages: &[PackageId], artifact_dir: &Path, closure_dir: &Path) 
                 closure_dir.display()
             )
         })?;
-    // Directories and symlinks created in the tree inherit this; its files are
-    // hardlinks, and keep their blobs' descriptor.
+    // Directories and symlinks created in the tree inherit this; its files
+    // have their blobs' descriptor, either way.
     access::protect_dir(tmp.path())?;
     for (path, (entry, _)) in &merged {
-        build_entry(&layout, tmp.path(), path, entry)?;
+        build_entry(&layout, tmp.path(), path, entry, files, closure_dir)?;
     }
+    // Last, so that a tree that can't be built leaves nothing behind.
+    write_manifest(closure_dir, &manifest_path, &manifest)?;
 
     let built = tmp.keep();
     match fs::rename(&built, &tree_path) {
@@ -203,49 +245,15 @@ pub(crate) fn merge(
     Ok(merged)
 }
 
-/// Hardlinks fail across filesystems, so refuse before writing anything.
-fn check_same_filesystem(
-    layout: &ArtifactDir,
-    artifact_dir: &Path,
-    closure_dir: &Path,
-) -> Result<()> {
-    if !same_filesystem(layout, artifact_dir, closure_dir)? {
-        bail!(
-            "{}: not on the same filesystem as the artifact directory {}",
-            closure_dir.display(),
-            artifact_dir.display()
-        );
-    }
-    Ok(())
-}
-
-/// Whether `dir` is on the filesystem that holds the store's blobs, so that
-/// it can hold hardlinks to them.
-pub(crate) fn same_filesystem(
-    layout: &ArtifactDir,
-    artifact_dir: &Path,
-    dir: &Path,
-) -> Result<bool> {
-    let blob_dir = layout.blob_dir();
-    let store = if blob_dir.is_dir() {
-        blob_dir
-    } else {
-        artifact_dir.to_owned()
-    };
-    let store_device = fs::metadata(&store)
-        .with_context(|| format!("{}", store.display()))?
-        .dev();
-    let device = fs::metadata(dir)
-        .with_context(|| format!("{}", dir.display()))?
-        .dev();
-    Ok(store_device == device)
-}
-
+/// Place `entry` at `path` under `root`, a directory of the tree `dest_name`,
+/// which an error names rather than a temporary directory.
 pub(crate) fn build_entry(
     layout: &ArtifactDir,
     root: &Path,
     path: &str,
     entry: &Entry,
+    files: UsrFiles,
+    dest_name: &Path,
 ) -> Result<()> {
     let dest = root.join(path);
     if let Some(parent) = dest.parent() {
@@ -254,18 +262,40 @@ pub(crate) fn build_entry(
     match entry {
         Entry::Blob { hex, exec } => {
             let blob = layout.blob_path(hex, *exec);
-            match fs::hard_link(&blob, &dest) {
-                Ok(()) => Ok(()),
-                Err(err) if err.kind() == io::ErrorKind::TooManyLinks => bail!(
-                    "{}: has reached the filesystem's limit on hard links",
-                    blob.display()
-                ),
-                Err(err) => Err(err).with_context(|| format!("{}", blob.display())),
+            match files {
+                UsrFiles::Hardlink => link_blob(layout, &blob, &dest, dest_name, "--copy-files"),
+                UsrFiles::Copy if store::copy_blob(&blob, &dest, hex, *exec)? => Ok(()),
+                UsrFiles::Copy => bail!("{}: does not match its hash", blob.display()),
             }
         }
         Entry::Symlink(target) => {
             symlink(target, &dest).with_context(|| format!("{}", dest.display()))
         }
         Entry::Dir => fs::create_dir_all(&dest).with_context(|| format!("{}", dest.display())),
+    }
+}
+
+/// Hardlink `blob`, a file of the artifact directory `layout`, to `dest`, in
+/// the tree `dest_name`. The error for a link across mounts points to
+/// `copy_option`, which avoids it.
+pub(crate) fn link_blob(
+    layout: &ArtifactDir,
+    blob: &Path,
+    dest: &Path,
+    dest_name: &Path,
+    copy_option: &str,
+) -> Result<()> {
+    match fs::hard_link(blob, dest) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::CrossesDevices => bail!(
+            "{}: not on the same mount as the artifact directory {}; use {copy_option}",
+            dest_name.display(),
+            layout.root().display()
+        ),
+        Err(err) if err.kind() == io::ErrorKind::TooManyLinks => bail!(
+            "{}: has reached the filesystem's limit on hard links",
+            blob.display()
+        ),
+        Err(err) => Err(err).with_context(|| format!("{}", blob.display())),
     }
 }

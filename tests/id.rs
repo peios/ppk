@@ -59,6 +59,72 @@ fn malformed_identifiers_are_rejected() {
 }
 
 #[test]
+fn reverse_dns_names_are_accepted() {
+    for name in [
+        "dev.peios.hello",
+        "dev.peios.testing.fixture",
+        "com.amd.amd-ucode",
+        "io.github.eudev-project.eudev",
+        "org.gnu.gcc-c++",
+        "org.gnu.gcc-libstdc++-devel",
+        // A version in the name makes a label of digits.
+        "org.rust-lang.rust-1.83",
+        "org.golang.go-stage0-1.24",
+        "org.7-zip.7zip",
+        // The longest there can be.
+        &format!("dev.peios.{}", "a".repeat(54)),
+    ] {
+        let id = parse(&format!("{name}@1.0")).unwrap();
+        assert_eq!(id.name(), name);
+    }
+}
+
+#[test]
+fn names_that_are_not_reverse_dns_are_rejected() {
+    for name in [
+        // Too few labels: a domain's two and a product.
+        "hello",
+        "peios.hello",
+        // Outside PSPU 5.3's characters, though safe as a path.
+        "Dev.peios.hello",
+        "dev.peios.Hello",
+        "dev.peios.hello_world",
+        "dev.peios.hello~1",
+        // Empty labels.
+        "dev..peios.hello",
+        "dev.peios.hello.",
+        ".dev.peios.hello",
+        // Separators together or at a label's edge.
+        "dev.peios.hello--world",
+        "dev.peios.-hello",
+        "dev.peios.hello-",
+        "dev.peios-.hello",
+        // A plus cannot start a label or be part of the domain.
+        "dev.peios.+hello",
+        "dev.pe+ios.hello",
+        "de+v.peios.hello",
+        // No top-level domain has a digit.
+        "1dev.peios.hello",
+        "de1v.peios.hello",
+        // One too long.
+        &format!("dev.peios.{}", "a".repeat(55)),
+    ] {
+        let input = format!("{name}@1.0");
+        let message = parse(&input).unwrap_err().to_string();
+        assert!(
+            message.starts_with(&format!("{input}: invalid package name '{name}': ")),
+            "{input:?}: {message}"
+        );
+    }
+}
+
+#[test]
+fn the_name_rule_is_for_names_alone() {
+    let id = parse("dev.peios.hello@1.0_rc~1+git.A?arch=x86_64").unwrap();
+    assert_eq!(id.version(), "1.0_rc~1+git.A");
+}
+
+#[test]
 fn unsafe_names_versions_and_arches_are_rejected() {
     for bad in [
         "",

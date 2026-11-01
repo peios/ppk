@@ -77,9 +77,28 @@ argument is an identifier of the form
 .IB name @ version\c
 .RB [ ?arch= \c
 .IR arch ].
+.I name
+is reverse-DNS: the domain of whoever owns the software, backwards, then
+the product, as in
+.BR dev.peios.hello ,
+.BR org.gnu.gcc\-c++ ,
+and
+.BR io.github.eudev\-project.eudev .
+It is at most 64 characters long and has at least three labels, separated by
+dots.
+Each label consists of lowercase ASCII letters, digits, and the characters
+.B +
+and
+.BR \- ,
+starts with a letter or digit, ends with a letter, digit, or
+.BR + ,
+and does not contain
+.BR \-\- .
+The first label consists only of letters, and neither of the first two
+contains a
+.BR + .
 Each of
-.IR name ,
-.IR version ,
+.I version
 and
 .I arch
 consists of ASCII letters, digits, and the characters

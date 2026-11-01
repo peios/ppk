@@ -314,6 +314,26 @@ fn a_profile_can_include_its_artifacts_and_copying_wins() {
 }
 
 #[test]
+fn a_name_that_is_not_reverse_dns_is_a_usage_error() {
+    let content = content_dir();
+    let store = tempfile::tempdir().unwrap();
+    let output = ppk(&[
+        "pack",
+        "hello@1.0",
+        path(content.path()),
+        "--artifact-dir",
+        path(store.path()),
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output).starts_with("ppk: hello@1.0: invalid package name 'hello': "),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(fs::read_dir(store.path()).unwrap().count(), 0);
+}
+
+#[test]
 fn run_needs_packages() {
     for (args, missing) in [
         (vec!["run"], "<profile> or -p <package>..."),

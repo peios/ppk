@@ -2,8 +2,8 @@
 title: Packages
 type: concept
 description: What a Peios package is, covering manifests and blobs, how a
-  package's identity is derived, package identifiers, the layout of the
-  artifact directory, and why a packed version never changes.
+  package's identity is derived, package identifiers and names, the layout
+  of the artifact directory, and why a packed version never changes.
 related:
   - peios/packaging/creating-a-package
 ---
@@ -76,8 +76,35 @@ documentation or scripts.
 
 If you leave out `?arch=`, the architecture is the one `ppk` itself was
 built for. Give it explicitly for any package built for another machine,
-and always for `noarch` packages. The characters each part can contain are
-listed in `ppk(1)`.
+and always for `noarch` packages. The characters a version and an
+architecture can contain are listed in `ppk(1)`.
+
+## Package names
+
+A package's name is reverse-DNS: the domain of whoever owns the software,
+backwards, then the product. `ppk` refuses any other name, wherever one
+reaches it, including in a fetched manifest.
+
+| Software | Name | Example |
+|---|---|---|
+| Peios's own | `dev.peios.<product>` | `dev.peios.hello` |
+| A testing-only Peios product | `dev.peios.testing.<product>` | `dev.peios.testing.fixture` |
+| Anyone else's | The upstream project's domain | `org.gnu.bash`, `io.github.eudev-project.eudev` |
+| Part of a split package | The complete name of the base, with a suffix | `org.gnu.glibc-devel` |
+
+Use the upstream project's own domain for software that Peios only packages.
+A name doesn't rename anything: a program keeps its own executable, service,
+and other externally defined names.
+
+A name has at least three labels, separated by dots, and at most 64
+characters. Each label holds lowercase ASCII letters, digits, `+`, and `-`,
+starts with a letter or digit, ends with a letter, digit, or `+`, and has no
+`--`. The first label holds only letters, as a top-level domain does, and
+neither of the first two holds a `+`.
+
+`ppk` can only check a name's form. It can't tell whether a domain is the
+right one for the software, or whether a split keeps its base's name, so
+those are for whoever writes the package.
 
 ## The artifact directory
 

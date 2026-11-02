@@ -327,15 +327,20 @@ fn metadata_is_part_of_identity_and_checked_when_packing() {
     let same = ppk::pack_with(&hello(), &Metadata::default(), input.path(), out.path()).unwrap();
     assert_eq!(same.identity, bare.identity);
 
-    let refused = ppk::pack_with(&hello(), &full(), input.path(), out.path()).unwrap_err();
+    // full() writes a floor on libc.so.6, which packing refuses because
+    // derivation sets it, so require it for any version here instead.
+    let mut full = full();
+    full.requires
+        .insert("libc.so.6".to_owned(), Constraint::default());
+    let refused = ppk::pack_with(&hello(), &full, input.path(), out.path()).unwrap_err();
     assert!(
         refused.to_string().contains("already packed as"),
         "{refused}"
     );
-    let replaced = ppk::pack_replacing_with(&hello(), &full(), input.path(), out.path()).unwrap();
+    let replaced = ppk::pack_replacing_with(&hello(), &full, input.path(), out.path()).unwrap();
     assert_ne!(replaced.identity, bare.identity);
     let manifest = parse_manifest(&fs::read(&replaced.manifest_path).unwrap()).unwrap();
-    assert_eq!(manifest.metadata, full());
+    assert_eq!(manifest.metadata, full);
 
     let empty = tempfile::tempdir().unwrap();
     let bad = Metadata {

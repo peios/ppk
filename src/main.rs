@@ -348,6 +348,9 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
                 Err(err) => return Ok(report_usage_error(program, &describe(&err))),
             };
             let packed = ppk::pack_with(&package, &metadata, &path, &artifact_dir)?;
+            for warning in &packed.warnings {
+                eprintln!("{program}: warning: {warning}");
+            }
             println!("{}", packed.identity);
         }
         Command::Fetch {

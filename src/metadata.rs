@@ -332,7 +332,7 @@ const CAPABILITY_MAX_BYTES: usize = 128;
 /// namespace is lowercase letters and digits, starting with a letter; its
 /// argument is not empty, and is the plain characters with `:` and `/`, as in
 /// `pkgconfig(gtk+-3.0)` and `perl(Foo::Bar)`.
-fn check_capability(name: &str) -> Result<()> {
+pub(crate) fn check_capability(name: &str) -> Result<()> {
     let plain = |c: u8| c.is_ascii_alphanumeric() || b"-.+_".contains(&c);
     let bytes = name.as_bytes();
     let valid = (2..=CAPABILITY_MAX_BYTES).contains(&bytes.len())

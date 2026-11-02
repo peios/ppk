@@ -36,9 +36,8 @@
 //!
 //! A manifest can also record [`Metadata`]: descriptive fields after the arch,
 //! and `[claims]`, `[dependencies]`, `[provides]` and `[requires]` tables
-//! before `[files]`, each left out when empty. ppk checks and records these,
-//! and acts on none of them yet: nothing resolves dependencies or
-//! requirements, and composing creates no claimed links.
+//! before `[files]`, each left out when empty. Composing creates the links a
+//! package claims; nothing resolves dependencies or requirements yet.
 
 mod access;
 mod closure;

@@ -15,9 +15,8 @@ use crate::{Constraint, Version};
 /// part is optional, and a package with none of them has the manifest it
 /// would have had before they existed.
 ///
-/// ppk records and checks these, and nothing more yet: it does not resolve
-/// dependencies or requirements, and composing does not create claimed
-/// links.
+/// ppk records and checks these, and composing creates the claimed links.
+/// Nothing resolves dependencies or requirements yet.
 ///
 /// The maps are keyed by their names and paths, so they are sorted by bytes,
 /// as the manifest lists them. Check a value with [`Metadata::check`];

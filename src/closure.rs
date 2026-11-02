@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::access;
+use crate::environment::MOUNT_POINT;
 use crate::manifest::toml_string;
 use crate::store::{self, ArtifactDir};
 use crate::{Entry, Identity, PackageId, parse_manifest};
@@ -62,10 +63,14 @@ pub struct Closed {
 /// and repetition of `packages` do not matter. An existing closure is reused.
 ///
 /// Every file in the tree is a hardlink to its blob in the form its entry
-/// needs; symlinks and directories are created afresh. All packages are
-/// merged before anything is written, and the merge is refused if two
-/// packages give one path different entries, or if a path lies under
-/// another package's file or symlink. The tree is built in a temporary
+/// needs; symlinks and directories are created afresh, and so is each link a
+/// package claims under `/usr`. A closure is only `/usr`, so a link claimed
+/// anywhere else is left to [`compose_env`](crate::compose_env). All
+/// packages are merged before anything is written, and the merge is refused
+/// if two packages give one path different entries, if a path lies under
+/// another package's file or symlink. A claim is refused if another
+/// package claims the same path, even with the same target, if it is a
+/// path in a package's files, or if it is `/usr` itself. The tree is built in a temporary
 /// directory and renamed into place, so a closure that exists is complete.
 /// `closure_dir` must be on the same mount as `artifact_dir`.
 pub fn closure(packages: &[PackageId], artifact_dir: &Path, closure_dir: &Path) -> Result<Closed> {
@@ -118,7 +123,8 @@ fn closure_as(
         return Ok(closed(true));
     }
 
-    let merged = merge(&layout, &identities)?;
+    // A closure is only usr, so links claimed outside it have no place.
+    let merged = merge(&layout, &identities)?.usr;
 
     store::create_dirs(closure_dir)?;
 
@@ -195,13 +201,29 @@ fn write_manifest(closure_dir: &Path, manifest_path: &Path, manifest: &str) -> R
     Ok(())
 }
 
-/// Every path in the packages `identities`, with its entry and the package
-/// that provides it, checked for conflicts before anything is written.
-pub(crate) fn merge(
-    layout: &ArtifactDir,
-    identities: &[Identity],
-) -> Result<BTreeMap<String, (Entry, PackageId)>> {
+/// What the packages of a closure or root place: every path under `/usr`,
+/// with its entry and the package that provides or claims it, and the links
+/// they claim outside `/usr`.
+pub(crate) struct Merged {
+    /// Each path, relative to `/usr`.
+    pub(crate) usr: BTreeMap<String, (Entry, PackageId)>,
+    /// Each link claimed outside `/usr`, relative to the root, with its
+    /// target and the package claiming it. Only a composed root has
+    /// somewhere to put these.
+    pub(crate) root_claims: BTreeMap<String, (String, PackageId)>,
+}
+
+/// Every path in the packages `identities`, their files' and the links they
+/// claim, checked for conflicts before anything is written.
+///
+/// A claim under `/usr` is a symlink in the tree. It is an error for two
+/// packages to claim one path, even with one target, since a claim says who
+/// provides a name; for a claim to be a path in a package's files; or for a
+/// path to lie under another's claim. `/usr` itself can't be claimed.
+pub(crate) fn merge(layout: &ArtifactDir, identities: &[Identity]) -> Result<Merged> {
     let mut merged: BTreeMap<String, (Entry, PackageId)> = BTreeMap::new();
+    // Every claim, keyed by its absolute path.
+    let mut claims: BTreeMap<String, (String, PackageId)> = BTreeMap::new();
     for identity in identities {
         let path = layout.manifest_path(identity);
         let bytes = fs::read(&path).with_context(|| format!("{}", path.display()))?;
@@ -222,6 +244,41 @@ pub(crate) fn merge(
                 }
             }
         }
+        for (claim, target) in manifest.metadata.claims {
+            if let Some((_, claimant)) = claims.get(&claim) {
+                bail!(
+                    "{}: claimed by both {claimant} and {}",
+                    toml_string(&claim),
+                    manifest.id
+                );
+            }
+            claims.insert(claim, (target, manifest.id.clone()));
+        }
+    }
+
+    let usr_prefix = format!("{MOUNT_POINT}/");
+    let mut root_claims = BTreeMap::new();
+    let mut usr_claims = BTreeMap::new();
+    for (claim, (target, claimant)) in claims {
+        if claim == MOUNT_POINT {
+            bail!(
+                "{}: claimed by {claimant}, but is usr itself",
+                toml_string(&claim)
+            );
+        }
+        let Some(file) = claim.strip_prefix(&usr_prefix) else {
+            // A claim's path is absolute, so this is relative to the root.
+            root_claims.insert(claim[1..].to_owned(), (target, claimant));
+            continue;
+        };
+        if let Some((_, owner)) = merged.get(file) {
+            bail!(
+                "{}: claimed by {claimant}, but in the files of {owner}",
+                toml_string(&claim)
+            );
+        }
+        usr_claims.insert(file.to_owned(), claimant.clone());
+        merged.insert(file.to_owned(), (Entry::Symlink(target), claimant));
     }
 
     // Checked on the whole merge, so that the result does not depend on the
@@ -231,18 +288,34 @@ pub(crate) fn merge(
         let mut ancestor = file.as_str();
         while let Some(slash) = ancestor.rfind('/') {
             ancestor = &ancestor[..slash];
-            if let Some((entry, ancestor_owner)) = merged.get(ancestor)
-                && *entry != Entry::Dir
-            {
-                bail!(
-                    "{}: in {owner}, but {} is a file or symlink in {ancestor_owner}",
+            let Some((entry, ancestor_owner)) = merged.get(ancestor) else {
+                continue;
+            };
+            if *entry == Entry::Dir {
+                continue;
+            }
+            let what = match usr_claims.contains_key(file) {
+                true => format!("claimed by {owner}"),
+                false => format!("in {owner}"),
+            };
+            match usr_claims.contains_key(ancestor) {
+                true => bail!(
+                    "{}: {what}, but {} is a link claimed by {ancestor_owner}",
                     toml_string(file),
                     toml_string(ancestor)
-                );
+                ),
+                false => bail!(
+                    "{}: {what}, but {} is a file or symlink in {ancestor_owner}",
+                    toml_string(file),
+                    toml_string(ancestor)
+                ),
             }
         }
     }
-    Ok(merged)
+    Ok(Merged {
+        usr: merged,
+        root_claims,
+    })
 }
 
 /// Place `entry` at `path` under `root`, a directory of the tree `dest_name`,

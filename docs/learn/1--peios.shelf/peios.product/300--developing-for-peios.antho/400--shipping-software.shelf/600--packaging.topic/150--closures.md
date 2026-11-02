@@ -3,7 +3,8 @@ title: Closures
 type: concept
 description: What a closure is, covering how packages are composed into one
   tree of hardlinks, how a closure is named, the conflicts that stop a
-  closure being built, and why an existing closure is reused.
+  closure being built, why an existing closure is reused, and what copying
+  a closure's files changes.
 related:
   - peios/packaging/packages
   - peios/packaging/building-a-closure
@@ -17,10 +18,10 @@ can hold different versions of the same package side by side.
 
 ## A tree of hardlinks
 
-Every file in a closure is a hardlink to its blob in the artifact
-directory: the same file on disk, not a copy. Building a closure therefore
-copies no file content, and a file that several closures share is stored
-once.
+Unless you ask for copies, every file in a closure is a hardlink to its
+blob in the artifact directory: the same file on disk, not a copy. Building
+a closure therefore copies no file content, and a file that several
+closures share is stored once.
 
 A hardlink shares everything about the file except its name, including
 whether it is executable. That's why the artifact directory stores an
@@ -75,8 +76,32 @@ path in it. Building a closure fails, before anything is written, when:
 
 A package can put files in an empty directory that another package ships.
 
-## The same filesystem
+## The same mount
 
-A hardlink can't cross from one filesystem to another, so the closure
-directory must be on the same filesystem as the artifact directory.
-`ppk closure` checks this before it writes anything.
+A hardlink can't cross from one mount to another, even between two mounts of
+one filesystem, as the bind mounts of a build sandbox often are. So the
+closure directory must be on the same mount as the artifact directory, and
+`ppk closure` fails with nothing left behind if it isn't.
+
+## Copied files
+
+To build a closure on another mount, ask for copies with `--copy-files`. The
+tree then has the same paths, content, and permissions, and the same
+identity, but each file is a file of its own. `ppk` copies a file only when
+you ask, rather than whenever a link fails, because a copy differs from a
+hardlink in ways you should choose:
+
+- **It takes space.** A copy is stored once per closure, not once per
+  store.
+- **It has a security descriptor of its own.** A hardlink has its blob's one
+  descriptor, so the store controls access to every closure that links it.
+  A copy gets the store's descriptor when it's made, so it grants what a
+  hardlink would, but a later change to the store's descriptors doesn't
+  reach it.
+- **It is checked.** A copy has to read the blob, so `ppk` hashes it as
+  [`ppk fetch`](~peios/packaging/fetching-a-package) does, and a blob that
+  doesn't match its hash stops the build. Hardlinking reads no content, and
+  checks none.
+
+A closure is named by its packages, not by how its files got there, so
+`ppk closure` reuses an existing closure whichever way it was built.

@@ -72,5 +72,21 @@ that the two don't overlap and pack it as a new version.
 ## Using another closure directory
 
 To keep closures somewhere other than the artifact directory, pass
-`--closure-dir`. The directory must be on the same filesystem as the
-artifact directory.
+`--closure-dir`. The directory must be on the same mount as the artifact
+directory, because the closure's files are hardlinks to its blobs. If it
+isn't, `ppk closure` refuses and leaves nothing behind:
+
+```text
+ppk: closures: not on the same mount as the artifact directory artifacts; use --copy-files
+```
+
+To build the closure there anyway, such as in a sandboxed build step that
+has the artifact directory as a read-only input, copy its files:
+
+```sh
+ppk closure 'dev.peios.hello@1.0?arch=noarch' --artifact-dir artifacts --closure-dir closures --copy-files
+```
+
+`ppk` checks each blob against its hash as it copies. To see what a copy
+changes, including for security descriptors, see
+[Copied files](~peios/packaging/closures#copied-files).

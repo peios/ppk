@@ -45,7 +45,7 @@ mod pack;
 mod profile;
 mod store;
 
-pub use closure::{Closed, closure};
+pub use closure::{Closed, UsrFiles, closure, closure_copying};
 pub use compose::{Composed, EnvDir, EnvSymlink, Extras, RootArtifacts, compose_env};
 pub use fetch::{Fetched, fetch};
 pub use id::{HOST_ARCH, PackageId};

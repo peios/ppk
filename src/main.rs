@@ -105,6 +105,9 @@ enum Command {
         /// Store closures in <dir> (default: <artifact-dir>/closures)
         #[arg(long, value_name = "dir")]
         closure_dir: Option<PathBuf>,
+        /// Copy each file from its blob, rather than hardlink it
+        #[arg(long)]
+        copy_files: bool,
     },
     /// Lay out a root with the closure of packages as its usr
     #[command(
@@ -143,6 +146,9 @@ enum Command {
         /// Copy the packages into system/artifacts, rather than hardlink them
         #[arg(long)]
         copy_artifacts: bool,
+        /// Copy each file of usr from its blob, rather than hardlink it
+        #[arg(long)]
+        copy_files: bool,
     },
     /// Run a command, or a shell, with the closure of packages at /usr
     #[command(
@@ -171,6 +177,9 @@ enum Command {
         /// Use closures in <dir> (default: <artifact-dir>/closures)
         #[arg(long, value_name = "dir")]
         closure_dir: Option<PathBuf>,
+        /// Copy each file from its blob, rather than hardlink it
+        #[arg(long)]
+        copy_files: bool,
         /// Command to run, and its arguments (default: /usr/bin/sh)
         // Angle brackets in the name, as for help's optional argument below.
         #[arg(value_name = "<command>", last = true)]
@@ -241,9 +250,10 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             packages,
             artifact_dir,
             closure_dir,
+            copy_files,
         } => {
             let closure_dir = closure_dir.unwrap_or_else(|| artifact_dir.join(ppk::CLOSURE_SUBDIR));
-            let closed = ppk::closure(&packages, &artifact_dir, &closure_dir)?;
+            let closed = closure(&packages, &artifact_dir, &closure_dir, copy_files)?;
             println!("{}", closed.identity);
         }
         Command::ComposeEnv {
@@ -255,6 +265,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             dir,
             include_artifacts,
             copy_artifacts,
+            copy_files,
         } => {
             let mut env = environment(profile.as_deref(), packages)?;
             env.add_extras(symlink, dir)?;
@@ -270,6 +281,11 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
                 symlinks: env.symlinks,
                 dirs: env.dirs,
                 artifacts,
+                files: if copy_files {
+                    ppk::UsrFiles::Copy
+                } else {
+                    ppk::UsrFiles::Hardlink
+                },
             };
             let composed = ppk::compose_env(&env.packages, &artifact_dir, &out, &extras)?;
             println!("{}", composed.identity);
@@ -279,12 +295,13 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             packages,
             artifact_dir,
             closure_dir,
+            copy_files,
             command,
         } => {
             // A run keeps the caller's root, so it takes only the packages.
             let env = environment(profile.as_deref(), packages)?;
             let closure_dir = closure_dir.unwrap_or_else(|| artifact_dir.join(ppk::CLOSURE_SUBDIR));
-            let closed = ppk::closure(&env.packages, &artifact_dir, &closure_dir)?;
+            let closed = closure(&env.packages, &artifact_dir, &closure_dir, copy_files)?;
             ppk::environment::enter(&closed.tree_path)?;
             let command = if command.is_empty() {
                 vec![OsString::from(ppk::environment::SHELL)]
@@ -296,6 +313,20 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Help { .. } => unreachable!("help is handled before run"),
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The closure of `packages`, copying its files if `copy_files`.
+fn closure(
+    packages: &[PackageId],
+    artifact_dir: &Path,
+    closure_dir: &Path,
+    copy_files: bool,
+) -> anyhow::Result<ppk::Closed> {
+    if copy_files {
+        ppk::closure_copying(packages, artifact_dir, closure_dir)
+    } else {
+        ppk::closure(packages, artifact_dir, closure_dir)
+    }
 }
 
 /// Replace ppk with `command`, which then decides the exit status. Returns

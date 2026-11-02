@@ -198,7 +198,9 @@ One test then acts as an ordinary user, through the kernel suite's
 traverse checking, as an ordinary user does; without it, this guest's
 SYSTEM-only `/` would hide every path. The test checks that the user is
 refused a file `ppk` didn't write, can run a closure's program and read a
-blob, and is refused writing a blob or adding a file to a closure.
+blob, and is refused writing a blob or adding a file to a closure. Another
+checks that the same user has the same access to a closure of copied files,
+which aren't the store's files and carry a descriptor of their own.
 
 Two tests cover `ppk run`, as SYSTEM and as the same ordinary user, who
 runs a copy of `ppk` packed into its own closure. Both first make the

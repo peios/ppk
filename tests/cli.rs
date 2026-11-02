@@ -314,6 +314,73 @@ fn a_profile_can_include_its_artifacts_and_copying_wins() {
 }
 
 #[test]
+fn copy_files_copies_a_closure_and_a_roots_usr() {
+    use std::os::unix::fs::MetadataExt;
+
+    let store = tempfile::tempdir().unwrap();
+    let artifacts = store.path().join("artifacts");
+    pack_one("dev.peios.hello@1.0", "hello", &artifacts);
+    let closures = store.path().join("closures");
+    let out = store.path().join("root");
+    let blob = fs::read_dir(artifacts.join("blobs/sha256"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+
+    for args in [
+        vec![
+            "closure",
+            "dev.peios.hello@1.0",
+            "--artifact-dir",
+            path(&artifacts),
+            "--closure-dir",
+            path(&closures),
+            "--copy-files",
+        ],
+        vec![
+            "compose-env",
+            "-p",
+            "dev.peios.hello@1.0",
+            "--artifact-dir",
+            path(&artifacts),
+            "--out",
+            path(&out),
+            "--copy-files",
+        ],
+    ] {
+        let output = ppk(&args);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    }
+    assert_eq!(fs::metadata(&blob).unwrap().nlink(), 1, "nothing linked it");
+    assert_eq!(
+        fs::read(out.join("usr/bin/hello")).unwrap(),
+        fs::read(blob).unwrap()
+    );
+}
+
+#[test]
+fn a_name_that_is_not_reverse_dns_is_a_usage_error() {
+    let content = content_dir();
+    let store = tempfile::tempdir().unwrap();
+    let output = ppk(&[
+        "pack",
+        "hello@1.0",
+        path(content.path()),
+        "--artifact-dir",
+        path(store.path()),
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output).starts_with("ppk: hello@1.0: invalid package name 'hello': "),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(fs::read_dir(store.path()).unwrap().count(), 0);
+}
+
+#[test]
 fn run_needs_packages() {
     for (args, missing) in [
         (vec!["run"], "<profile> or -p <package>..."),

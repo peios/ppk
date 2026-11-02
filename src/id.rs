@@ -12,8 +12,8 @@ pub const HOST_ARCH: &str = std::env::consts::ARCH;
 
 /// Which package something is: its name, version and architecture.
 ///
-/// Every field has passed [`check_component`], so each is safe to use as a
-/// single path component.
+/// The name has passed [`check_name`], and the version and arch
+/// [`check_component`], so each is safe to use as a single path component.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageId {
     name: String,
@@ -23,7 +23,7 @@ pub struct PackageId {
 
 impl PackageId {
     pub fn new(name: &str, version: &str, arch: &str) -> Result<Self> {
-        check_component("package name", name)?;
+        check_name(name)?;
         check_component("version", version)?;
         check_component("arch", arch)?;
         Ok(Self {
@@ -86,8 +86,51 @@ impl fmt::Display for PackageId {
     }
 }
 
-/// Names, versions and arches become path components, so until their syntax
-/// is designed they are limited to a conservative set that cannot escape the
+/// The longest package name, from PSPU 5.3.
+const NAME_MAX_BYTES: usize = 64;
+
+/// The fewest labels a package name can have: a domain's two and a product.
+const NAME_MIN_LABELS: usize = 3;
+
+/// A package name is reverse-DNS: the domain of whoever owns the software,
+/// backwards, then the product, as in `dev.peios.hello`, `org.gnu.gcc-c++`
+/// and `io.github.eudev-project.eudev`. This takes PSPU 5.3's characters and
+/// length and adds the structure, which is all a name can show: nothing here
+/// knows whether the domain is the right one for the software.
+///
+/// Labels split on dots. Each starts with a lowercase letter or digit, ends
+/// with one or with `+`, and holds no `--`. There are at least
+/// [`NAME_MIN_LABELS`], and the first two are a real domain's: the first is
+/// all letters, as a top-level domain is, and neither holds a `+`. A name is
+/// therefore a safe path component, and an identifier splits unambiguously.
+fn check_name(name: &str) -> Result<()> {
+    let labels: Vec<&str> = name.split('.').collect();
+    let valid = name.len() <= NAME_MAX_BYTES
+        && labels.len() >= NAME_MIN_LABELS
+        && labels.iter().copied().all(is_label)
+        && labels[0].chars().all(|c| c.is_ascii_lowercase())
+        && !labels[1].contains('+');
+    if !valid {
+        bail!(
+            "invalid package name '{name}': use a reverse-DNS name such as dev.peios.hello, \
+             of at most {NAME_MAX_BYTES} characters, with at least {NAME_MIN_LABELS} \
+             dot-separated labels of lowercase ASCII letters, digits, - and +"
+        );
+    }
+    Ok(())
+}
+
+fn is_label(label: &str) -> bool {
+    label.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && !label.ends_with('-')
+        && !label.contains("--")
+        && label
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "+-".contains(c))
+}
+
+/// Versions and arches become path components, so until their syntax is
+/// designed they are limited to a conservative set that cannot escape the
 /// artifact directory: ASCII letters, digits and `. _ + - ~`, starting with a
 /// letter or digit. This also keeps `@`, `?`, `&` and `=` out of them, so an
 /// identifier always splits unambiguously.

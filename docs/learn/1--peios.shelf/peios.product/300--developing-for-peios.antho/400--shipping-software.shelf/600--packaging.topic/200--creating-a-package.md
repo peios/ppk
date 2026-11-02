@@ -16,8 +16,9 @@ versioned package. For what a package contains, see
 ## Before you start
 
 - Install `ppk`.
-- Choose the package's name and version, and the architecture its content
-  is built for.
+- Choose the package's version, the architecture its content is built for,
+  and its name, which must follow the
+  [rules for package names](~peios/packaging/packages#package-names).
 - Have write access to the artifact directory. The default is
   `/system/artifacts`; to use a directory of your own, pass
   `--artifact-dir`.

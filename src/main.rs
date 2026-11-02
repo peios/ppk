@@ -114,15 +114,15 @@ enum Command {
     },
     /// Lay out a root with the closure of packages as its usr
     #[command(
-        override_usage = "ppk compose-env [<profile>] [options] [-p <package>...] --out <dir>",
+        override_usage = "ppk compose-env [<profile>...] [options] [-p <package>...] --out <dir>",
         after_help = SEE_ALSO
     )]
     ComposeEnv {
-        /// Environment profile to compose
+        /// Environment profiles to compose, merged into one
         // Angle brackets in the name, as for help's optional argument below.
         #[arg(value_name = "<profile>", required_unless_present = "packages")]
-        profile: Option<PathBuf>,
-        /// Packages to compose besides the profile's, each as
+        profiles: Vec<PathBuf>,
+        /// Packages to compose besides the profiles', each as
         /// <name>@<version>[?arch=<arch>]
         #[arg(short = 'p', long = "package", value_name = "package", num_args = 1..)]
         packages: Vec<PackageId>,
@@ -155,17 +155,17 @@ enum Command {
     },
     /// Run a command, or a shell, with the closure of packages at /usr
     #[command(
-        override_usage = "ppk run [<profile>] [options] [-p <package>...]\n       \
+        override_usage = "ppk run [<profile>...] [options] [-p <package>...]\n       \
                           [-- <command> [<argument>...]]",
         after_help = SEE_ALSO
     )]
     Run {
-        /// Environment profile whose packages to compose; its symlinks and
+        /// Environment profiles whose packages to compose; their symlinks and
         /// directories are for compose-env
         // Angle brackets in the name, as for help's optional argument below.
         #[arg(value_name = "<profile>", required_unless_present = "packages")]
-        profile: Option<PathBuf>,
-        /// Packages to compose besides the profile's, each as
+        profiles: Vec<PathBuf>,
+        /// Packages to compose besides the profiles', each as
         /// <name>@<version>[?arch=<arch>]
         #[arg(short = 'p', long = "package", value_name = "package", num_args = 1..)]
         packages: Vec<PackageId>,
@@ -321,13 +321,10 @@ fn main() -> ExitCode {
     }
 }
 
-/// The environment the profile at `profile`, if any, describes, with
+/// The environment the profiles at `profiles` describe together, with
 /// `packages` added. It must hold a package.
-fn environment(profile: Option<&Path>, packages: Vec<PackageId>) -> anyhow::Result<ppk::Profile> {
-    let mut env = match profile {
-        Some(path) => ppk::Profile::read(path)?,
-        None => ppk::Profile::default(),
-    };
+fn environment(profiles: &[PathBuf], packages: Vec<PackageId>) -> anyhow::Result<ppk::Profile> {
+    let mut env = ppk::Profile::read_all(profiles)?;
     env.add_packages(packages)?;
     if env.packages.is_empty() {
         anyhow::bail!("the environment holds no packages");
@@ -369,7 +366,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             println!("{}", closed.identity);
         }
         Command::ComposeEnv {
-            profile,
+            profiles,
             packages,
             artifact_dir,
             out,
@@ -379,7 +376,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             copy_artifacts,
             copy_files,
         } => {
-            let mut env = environment(profile.as_deref(), packages)?;
+            let mut env = environment(&profiles, packages)?;
             env.add_extras(symlink, dir)?;
             // Copying is a way of including them, and wins over hardlinking.
             let artifacts = if copy_artifacts {
@@ -403,7 +400,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             println!("{}", composed.identity);
         }
         Command::Run {
-            profile,
+            profiles,
             packages,
             artifact_dir,
             closure_dir,
@@ -411,7 +408,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             command,
         } => {
             // A run keeps the caller's root, so it takes only the packages.
-            let env = environment(profile.as_deref(), packages)?;
+            let env = environment(&profiles, packages)?;
             let closure_dir = closure_dir.unwrap_or_else(|| artifact_dir.join(ppk::CLOSURE_SUBDIR));
             let closed = closure(&env.packages, &artifact_dir, &closure_dir, copy_files)?;
             ppk::environment::enter(&closed.tree_path)?;
@@ -534,8 +531,8 @@ fn usage_message(err: &clap::Error) -> String {
             format!("missing option {arg}")
         }
         // Required only without -p, and named with its brackets already.
-        (ErrorKind::MissingRequiredArgument, ["<<profile>>"]) => {
-            "missing <profile> or -p <package>...".to_owned()
+        (ErrorKind::MissingRequiredArgument, ["<<profile>>..."]) => {
+            "missing <profile>... or -p <package>...".to_owned()
         }
         (ErrorKind::MissingRequiredArgument, [_]) => format!("missing argument {}", args[0]),
         (ErrorKind::MissingRequiredArgument, [_, ..]) => {

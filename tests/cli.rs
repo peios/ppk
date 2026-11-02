@@ -501,8 +501,8 @@ fn malformed_metadata_is_a_usage_error() {
 #[test]
 fn run_needs_packages() {
     for (args, missing) in [
-        (vec!["run"], "<profile> or -p <package>..."),
-        (vec!["run", "--", "true"], "<profile> or -p <package>..."),
+        (vec!["run"], "<profile>... or -p <package>..."),
+        (vec!["run", "--", "true"], "<profile>... or -p <package>..."),
     ] {
         let output = ppk(&args);
         assert_eq!(output.status.code(), Some(2), "{args:?}");

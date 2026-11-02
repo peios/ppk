@@ -44,7 +44,7 @@ ppk \- create and manage Peios packages
 .IR package ...
 .br
 .B ppk compose\-env
-.RI [ profile ]
+.RI [ profile ...]
 .RB [ \-\-artifact\-dir
 .IR dir ]
 .RB [ \-\-symlink
@@ -59,7 +59,7 @@ ppk \- create and manage Peios packages
 .I dir
 .br
 .B ppk run
-.RI [ profile ]
+.RI [ profile ...]
 .RB [ \-\-artifact\-dir
 .IR dir ]
 .RB [ \-\-closure\-dir
@@ -198,6 +198,7 @@ and
 .PP
 .RS
 .EX
+include = ["layout.toml"]
 dirs = ["proc", "sys", "tmp"]
 
 [packages]
@@ -231,6 +232,27 @@ gives a composed root its packages as
 .B \-\-include\-artifacts
 does.
 Every key is optional, and any other key is an error.
+.PP
+.B include
+lists other profiles, called fragments, whose contents the profile holds as
+well, such as a root layout that several profiles share.
+Each path is relative to the directory of the file that names it, and a
+fragment can include others.
+A fragment's
+.B arch
+is for its own packages.
+What two of them hold alike is held once.
+It is an error for them to disagree: to give two versions of one package,
+packages for two architectures, two targets for one link, or a link and a
+directory at one path, and the error names both files.
+.B include_artifacts
+is true if any of them says so.
+A profile that includes itself, directly or through others, is an error.
+Several profiles given to
+.B compose\-env
+or
+.B run
+are merged in the same way.
 .PP
 The packages named with
 .B \-p
@@ -399,10 +421,10 @@ It fails, leaving nothing behind, if a hard link cannot be made because the
 closure directory is not on the same mount as the artifact directory, or if
 a blob it copies does not match its hash.
 .TP
-.BI compose\-env " \fR[\fPprofile\fR]\fP"
-Lay out the root of the environment that
+.BI compose\-env " \fR[\fPprofile\fR...]\fP"
+Lay out the root of the environment that the
 .I profile
-and the options describe in the new directory named by
+files and the options describe in the new directory named by
 .BR \-\-out ,
 for a tool such as an image builder to take, and print the identity of the
 packages' closure on standard output.
@@ -457,16 +479,16 @@ or
 .B \-\-copy\-files
 if the root has no artifact directory of its own.
 .TP
-.BI run " \fR[\fPprofile\fR] [\fP" \-\- " command \fR[\fPargument\fR...]]\fP"
+.BI run " \fR[\fPprofile\fR...] [\fP" \-\- " command \fR[\fPargument\fR...]]\fP"
 Run
 .IR command ,
 or
 .I /usr/bin/sh
 when no command is given,
 in an environment: the caller's own view of the filesystem, in a mount
-namespace of its own, with the closure of the packages of
+namespace of its own, with the closure of the packages of the
 .I profile
-and
+files and
 .B \-p
 mounted at
 .IR /usr .
@@ -517,7 +539,7 @@ add every
 .I package
 that follows, up to the next option, to the environment.
 Can be given more than once.
-A profile must come before it, since what follows it is read as packages.
+Profiles must come before it, since what follows it is read as packages.
 .TP
 .BI \-\-artifact\-dir " dir"
 Store packages in

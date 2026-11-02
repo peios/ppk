@@ -67,11 +67,12 @@ pub struct Closed {
 /// package claims under `/usr`. A closure is only `/usr`, so a link claimed
 /// anywhere else is left to [`compose_env`](crate::compose_env). All
 /// packages are merged before anything is written, and the merge is refused
-/// if two packages give one path different entries, if a path lies under
-/// another package's file or symlink. A claim is refused if another
-/// package claims the same path, even with the same target, if it is a
-/// path in a package's files, or if it is `/usr` itself. The tree is built in a temporary
-/// directory and renamed into place, so a closure that exists is complete.
+/// if two packages give one path different entries, or if a path lies under
+/// another package's file, symlink or claimed link. A claim is refused if
+/// another package claims the same path, even with the same target, if it is
+/// a path in a package's files, or if it is `/usr` itself. The tree is built
+/// in a temporary directory and renamed into place, so a closure that exists
+/// is complete.
 /// `closure_dir` must be on the same mount as `artifact_dir`.
 pub fn closure(packages: &[PackageId], artifact_dir: &Path, closure_dir: &Path) -> Result<Closed> {
     closure_as(packages, artifact_dir, closure_dir, UsrFiles::Hardlink)

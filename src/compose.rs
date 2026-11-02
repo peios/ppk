@@ -142,8 +142,9 @@ pub struct Extras {
 /// Nothing is written to the store; the closure is built in `out` itself.
 /// Everything is checked before anything is written: the packages merge as
 /// for a closure, a link claimed outside `usr` is not also an extra, nothing
-/// lies under an extra symlink or a claimed link, and `out` must not exist. The root is built in a temporary directory beside `out` and
-/// renamed into place, so `out` is complete if it exists. `out` must be on
+/// lies under an extra symlink or a claimed link, and `out` must not exist.
+/// The root is built in a temporary directory beside `out` and renamed into
+/// place, so `out` is complete if it exists. `out` must be on
 /// the same mount as `artifact_dir` wherever a file is hardlinked from it:
 /// unless `extras` copies the packages into the root, or copies `usr`'s files
 /// with no artifact directory in the root.

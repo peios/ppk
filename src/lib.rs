@@ -44,6 +44,7 @@ mod manifest;
 mod pack;
 mod profile;
 mod store;
+mod version;
 
 pub use closure::{Closed, UsrFiles, closure, closure_copying};
 pub use compose::{Composed, EnvDir, EnvSymlink, Extras, RootArtifacts, compose_env};
@@ -54,6 +55,7 @@ pub use manifest::{Entry, Manifest, parse_manifest, render_manifest};
 pub use pack::{Packed, pack, pack_replacing};
 pub use profile::Profile;
 pub use store::{packed, prepare_artifact_dir, versions};
+pub use version::{Constraint, Operator, Version};
 
 /// The hash algorithm, as it appears in artifact paths and manifest values.
 pub const ALGORITHM: &str = "sha256";

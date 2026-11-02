@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ppk::{Entry, Identity, PackageId, render_manifest};
+use ppk::{Entry, Identity, Metadata, PackageId, render_manifest};
 use tempfile::TempDir;
 
 const HELLO: &str = "dev.peios.hello@1.0-1?arch=x86_64";
@@ -212,7 +212,10 @@ fn a_manifest_that_does_not_match_its_hash_is_refused() {
     let source = tempfile::tempdir().unwrap();
     let local = tempfile::tempdir().unwrap();
     let id = PackageId::new("dev.peios.hello", "1.0-1", "x86_64").unwrap();
-    let identity = plant_manifest(source.path(), render_manifest::<&str>(&id, &[]).as_bytes());
+    let identity = plant_manifest(
+        source.path(),
+        render_manifest::<&str>(&id, &Metadata::default(), &[]).as_bytes(),
+    );
     let manifest = format!("manifests/sha256/{}", identity.hex());
     fs::write(source.path().join(&manifest), b"tampered").unwrap();
 
@@ -243,7 +246,7 @@ fn a_blob_that_does_not_match_its_hash_is_refused() {
     );
     plant_manifest(
         source.path(),
-        render_manifest(&id, &[("bin/hello", entry.clone())]).as_bytes(),
+        render_manifest(&id, &Metadata::default(), &[("bin/hello", entry.clone())]).as_bytes(),
     );
 
     let err = fetch(HELLO, source.path(), local.path()).unwrap_err();
@@ -265,7 +268,12 @@ fn a_missing_blob_is_reported() {
     let id = PackageId::new("dev.peios.hello", "1.0-1", "x86_64").unwrap();
     plant_manifest(
         source.path(),
-        render_manifest(&id, &[("bin/hello", blob_entry(b"absent"))]).as_bytes(),
+        render_manifest(
+            &id,
+            &Metadata::default(),
+            &[("bin/hello", blob_entry(b"absent"))],
+        )
+        .as_bytes(),
     );
     let err = fetch(HELLO, source.path(), local.path()).unwrap_err();
     assert!(
@@ -285,7 +293,7 @@ fn a_manifest_for_another_package_is_refused() {
     let other = PackageId::new("dev.peios.other", "1.0-1", "x86_64").unwrap();
     let identity = plant_manifest(
         source.path(),
-        render_manifest::<&str>(&other, &[]).as_bytes(),
+        render_manifest::<&str>(&other, &Metadata::default(), &[]).as_bytes(),
     );
 
     let err = fetch(HELLO, source.path(), local.path()).unwrap_err();
@@ -304,11 +312,15 @@ fn a_manifest_for_another_package_is_refused() {
 #[test]
 fn a_malformed_manifest_is_refused() {
     let id = PackageId::new("dev.peios.hello", "1.0-1", "x86_64").unwrap();
-    let canonical = render_manifest(&id, &[("a", blob_entry(b"a"))]);
+    let canonical = render_manifest(&id, &Metadata::default(), &[("a", blob_entry(b"a"))]);
     for (manifest, problem) in [
         (canonical.replace(" = {", "= {"), "not in canonical form"),
         (
-            render_manifest(&id, &[("../escape", blob_entry(b"a"))]),
+            render_manifest(
+                &id,
+                &Metadata::default(),
+                &[("../escape", blob_entry(b"a"))],
+            ),
             "\"../escape\": not a safe relative path",
         ),
     ] {

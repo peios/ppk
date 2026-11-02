@@ -286,7 +286,11 @@ fn a_tampered_package_manifest_is_refused() {
         hex: Identity::of(b"other").hex().to_owned(),
         exec: false,
     };
-    fs::write(&path, render_manifest(&hello, &[("a", blob)])).unwrap();
+    fs::write(
+        &path,
+        render_manifest(&hello, &ppk::Metadata::default(), &[("a", blob)]),
+    )
+    .unwrap();
 
     let err = store.closure(&[HELLO]).unwrap_err();
     assert_eq!(

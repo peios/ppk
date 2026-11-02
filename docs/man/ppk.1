@@ -1,10 +1,32 @@
-.TH PPK 1 2026-11-01 "Peios ppk 0.1.0"
+.TH PPK 1 2026-11-02 "Peios ppk 0.1.0"
 .SH NAME
 ppk \- create and manage Peios packages
 .SH SYNOPSIS
 .B ppk pack
 .RB [ \-\-artifact\-dir
 .IR dir ]
+.RB [ \-\-depends
+.I name constraint\c
+.RB ]...
+.RB [ \-\-requires
+.I name constraint\c
+.RB ]...
+.RB [ \-\-provides
+.I name version\c
+.RB ]...
+.RB [ \-\-claims
+.I path target\c
+.RB ]...
+.RB [ \-\-description
+.IR text ]
+.RB [ \-\-homepage
+.IR url ]
+.RB [ \-\-license
+.IR expression ]
+.RB [ \-\-license\-class
+.IR class ]
+.RB [ \-\-source\-license
+.IR expression ]
 .I package path
 .br
 .B ppk fetch
@@ -100,9 +122,53 @@ and does not contain
 The first label consists only of letters, and neither of the first two
 contains a
 .BR + .
-Each of
+.PP
 .I version
+is
+.RI [ epoch\c
+.BR : ]\c
+.IB upstream \- revision\c
+, as in
+.BR 1.26.2\-3 ,
+.BR 1.0\-rc.1\-1 ,
 and
+.BR 2:0.5.0\-1 .
+.I epoch
+is optional and
+.I revision
+is required; both are decimal numbers without leading zeros, and the
+revision is at least 1.
+.I upstream
+is what follows the epoch, up to the last hyphen.
+It consists of ASCII letters, digits, and the characters
+.BR . ,
+.BR + ,
+.BR \- ,
+and
+.BR ~ ,
+and starts with a letter or digit.
+Versions are ordered by epoch, then upstream version, then revision.
+The upstream versions are compared a run of digits or a run of letters at a
+time: digits as numbers, and letters by byte, except that
+.BR dev ,
+.B alpha
+or
+.BR a ,
+.B beta
+or
+.BR b ,
+.BR pre ,
+and
+.BR rc ,
+in any case, mark a pre-release and sort in that order before the release.
+Anything after a
+.B ~
+is a pre-release too, so
+.B 1.0~rc1\-1
+comes before
+.BR 1.0\-1 .
+This is the grammar and order of PSPU 5.5 and 5.6.
+.PP
 .I arch
 consists of ASCII letters, digits, and the characters
 .BR . ,
@@ -175,6 +241,68 @@ and
 to its own.
 Another version of a package the profile holds, or a link at a path the
 profile links elsewhere, is an error.
+.SH METADATA
+Besides its files, a package's manifest can say what the package needs and
+offers, and describe it.
+.B ppk pack
+records what its options give, and the manifest's identity covers it.
+.PP
+A dependency is on another package, by name.
+A requirement is on a capability: a name that something provides, such as
+the soname
+.BR libc.so.6 ,
+the command
+.BR sh ,
+or
+.BR pkgconfig(zlib) .
+A capability's name is 2 to 128 characters: ASCII letters of either case,
+digits, and the characters
+.BR \- ,
+.BR . ,
+.BR + ,
+and
+.BR _ ,
+starting with a letter or digit and ending with one or with
+.BR + ;
+or a
+.IB namespace ( argument )\c
+, whose namespace is lowercase letters and digits starting with a letter, and
+whose argument may also hold
+.B :
+and
+.BR / .
+.PP
+Each dependency and requirement has a
+.IR constraint :
+one or more expressions separated by commas, all of which must hold.
+An expression is one of
+.BR = ,
+.BR > ,
+.BR >= ,
+.BR < ,
+.BR <= ,
+and
+.BR != ,
+followed by a version, and a version alone means
+.BR = .
+The version may leave out its revision, and then the revision is not
+compared:
+.B >= 2.44
+holds for
+.BR 2.44\-3 .
+An empty constraint holds for any version.
+A provided capability has a version, which may also leave out its revision,
+or none.
+.PP
+A claim is a link, at an absolute path, that the package provides besides
+its files, which are all under
+.IR /usr .
+.PP
+.B ppk
+records and checks these, but nothing in
+.B ppk
+acts on them yet: no command chooses packages to satisfy dependencies, and
+composing does not create claimed links.
 .SH COMMANDS
 .TP
 .BI pack " package path"
@@ -196,12 +324,17 @@ or a path or link target that is not valid UTF-8.
 It also refuses an artifact directory inside
 .IR path .
 .IP
+The manifest also records the metadata the options give, as
+.B METADATA
+describes.
+A broken rule in it is a usage error, and nothing is written.
+.IP
 If
 .I package
-is already packed with the same contents,
+is already packed with the same contents and metadata,
 .B ppk pack
 succeeds without changing anything.
-If it is packed with different contents,
+If it is packed with different contents or metadata,
 .B ppk pack
 fails and writes nothing: a packed version is never replaced.
 .TP
@@ -409,6 +542,95 @@ must be on the same mount as the artifact directory, unless
 .B \-\-copy\-files
 is given.
 .TP
+.BI \-\-depends " name constraint"
+For
+.BR pack ,
+record that the package depends on the package
+.I name
+at versions that satisfy
+.IR constraint ,
+or at any version if
+.I constraint
+is empty.
+.I name
+and
+.I constraint
+are separate arguments.
+Can be given more than once, for different packages.
+.TP
+.BI \-\-requires " name constraint"
+For
+.BR pack ,
+record that the package requires the capability
+.I name
+at versions that satisfy
+.IR constraint ,
+or at any version if it is empty.
+Can be given more than once, for different capabilities.
+.TP
+.BI \-\-provides " name version"
+For
+.BR pack ,
+record that the package provides the capability
+.I name
+at
+.IR version ,
+or at no particular version if it is empty.
+Can be given more than once, for different capabilities.
+.TP
+.BI \-\-claims " path target"
+For
+.BR pack ,
+record that the package claims the absolute
+.I path
+as a symbolic link to
+.IR target ,
+which is written into the link exactly as given.
+.I path
+has no empty,
+.BR . ,
+or
+.B ..
+component and does not end in
+.BR / .
+Can be given more than once, for different paths.
+.TP
+.BI \-\-description " text"
+For
+.BR pack ,
+record a one-line description, in printable ASCII.
+.TP
+.BI \-\-homepage " url"
+For
+.BR pack ,
+record the upstream project's
+.B http
+or
+.B https
+URL.
+.TP
+.BI \-\-license " expression"
+For
+.BR pack ,
+record the package's license, conventionally an SPDX expression.
+.TP
+.BI \-\-license\-class " class"
+For
+.BR pack ,
+record which kind of terms the license is:
+.BR unknown ,
+.BR free ,
+.BR firmware ,
+or
+.BR proprietary .
+.B unknown
+is the default, and is recorded as nothing.
+.TP
+.BI \-\-source\-license " expression"
+For
+.BR pack ,
+record the license of the source the package was built from.
+.TP
 .B \-\-copy\-files
 For
 .BR closure ,
@@ -545,8 +767,11 @@ version that is already present with different contents, or a package that
 is missing from the source or fails a check.
 .TP
 .B 2
-Usage error: an unknown option, a missing argument, or a malformed
-.IR package .
+Usage error: an unknown option, a missing argument, a malformed
+.IR package ,
+or, for
+.BR pack ,
+metadata that breaks a rule.
 .TP
 .B 126
 For
@@ -592,7 +817,7 @@ names another directory.
 The manifest of that closure.
 .SH EXAMPLES
 .TP
-.B ppk pack 'dev.peios.hello@1.0?arch=noarch' hello \-\-artifact\-dir artifacts
+.B ppk pack 'dev.peios.hello@1.0\-1?arch=noarch' hello \-\-artifact\-dir artifacts
 Pack the directory
 .I hello
 into
@@ -602,7 +827,17 @@ The identifier is quoted because some shells treat
 .B ?
 as a wildcard.
 .TP
-.B ppk fetch 'dev.peios.hello@1.0?arch=noarch' \-\-from shared \-\-artifact\-dir artifacts
+.B ppk pack org.git.kernel.dash@0.5.13.5\-1 dash \-\-depends org.gnu.glibc '>= 2.44' \-\-provides sh '' \-\-claims /usr/bin/sh dash
+Pack the directory
+.I dash
+as a package that depends on glibc 2.44 or later, provides the capability
+.BR sh ,
+and claims
+.I /usr/bin/sh
+as a link to
+.IR dash .
+.TP
+.B ppk fetch 'dev.peios.hello@1.0\-1?arch=noarch' \-\-from shared \-\-artifact\-dir artifacts
 Copy the package from the artifact directory
 .I shared
 into
@@ -611,12 +846,12 @@ and print its identity, which is the one
 .B ppk pack
 printed.
 .TP
-.B ppk closure 'dev.peios.hello@1.0?arch=noarch' 'dev.peios.greetings@2.0?arch=noarch'
+.B ppk closure 'dev.peios.hello@1.0\-1?arch=noarch' 'dev.peios.greetings@2.0\-1?arch=noarch'
 Compose the two packages into a closure in
 .I /system/artifacts/closures
 and print its identity.
 .TP
-.B ppk run \-p 'dev.peios.hello@1.0?arch=noarch' \-\- /usr/bin/hello
+.B ppk run \-p 'dev.peios.hello@1.0\-1?arch=noarch' \-\- /usr/bin/hello
 Run
 .I /usr/bin/hello
 from the package, in an environment whose

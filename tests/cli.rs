@@ -381,6 +381,124 @@ fn a_name_that_is_not_reverse_dns_is_a_usage_error() {
 }
 
 #[test]
+fn pack_records_metadata_from_its_options() {
+    let content = content_dir();
+    let store = tempfile::tempdir().unwrap();
+    let output = ppk(&[
+        "pack",
+        "org.git.kernel.dash@0.5.13.5-1?arch=x86_64",
+        path(content.path()),
+        "--artifact-dir",
+        path(store.path()),
+        "--depends",
+        "org.gnu.glibc",
+        ">=2.44",
+        "--requires",
+        "libc.so.6",
+        ">= 2.34",
+        "--requires",
+        "sh",
+        "",
+        "--provides",
+        "sh",
+        "1",
+        "--claims",
+        "/usr/bin/sh",
+        "dash",
+        "--description",
+        "-POSIX shell",
+        "--license",
+        "BSD-3-Clause",
+        "--license-class",
+        "free",
+        "--homepage",
+        "https://git.kernel.org/pub/scm/utils/dash/dash.git",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let identity: ppk::Identity = stdout(&output).trim_end().parse().unwrap();
+    let manifest = fs::read_to_string(
+        store
+            .path()
+            .join(format!("manifests/sha256/{}", identity.hex())),
+    )
+    .unwrap();
+    assert!(
+        manifest.starts_with(
+            "name = \"org.git.kernel.dash\"\nversion = \"0.5.13.5-1\"\narch = \"x86_64\"\n\
+             description = \"-POSIX shell\"\n\
+             homepage = \"https://git.kernel.org/pub/scm/utils/dash/dash.git\"\n\
+             license = \"BSD-3-Clause\"\nlicense_class = \"free\"\n\n\
+             [claims]\n\"/usr/bin/sh\" = \"dash\"\n\n\
+             [dependencies]\n\"org.gnu.glibc\" = \">= 2.44\"\n\n\
+             [provides]\n\"sh\" = \"1\"\n\n\
+             [requires]\n\"libc.so.6\" = \">= 2.34\"\n\"sh\" = \"\"\n\n[files]\n"
+        ),
+        "{manifest}"
+    );
+}
+
+#[test]
+fn malformed_metadata_is_a_usage_error() {
+    for (args, message) in [
+        (
+            vec!["--depends", "org.gnu.glibc", ">= 2.44,"],
+            "--depends org.gnu.glibc: constraint '>= 2.44,' has an empty expression",
+        ),
+        (
+            vec!["--depends", "sh", ""],
+            "dependencies: invalid package name 'sh': ",
+        ),
+        (
+            vec!["--requires", "a", ""],
+            "requires: invalid capability 'a': ",
+        ),
+        (
+            vec!["--provides", "sh", "1.0-0"],
+            "--provides sh: revision in '1.0-0' must be a positive integer",
+        ),
+        (
+            vec!["--claims", "usr/bin/sh", "dash"],
+            "claims: \"usr/bin/sh\": not a normal absolute path",
+        ),
+        (
+            vec!["--requires", "sh", "", "--requires", "sh", ">= 1"],
+            "--requires sh: given more than once",
+        ),
+        (
+            vec!["--depends", "org.gnu.glibc", "--requires", "sh", ""],
+            "2 values required for '--depends <name> <constraint>' but 1 was provided",
+        ),
+        (
+            vec!["--license-class", "gratis"],
+            "invalid license class 'gratis': ",
+        ),
+        (
+            vec!["--homepage", "ftp://example.org"],
+            "homepage: 'ftp://example.org' is not an http or https URL",
+        ),
+    ] {
+        let content = content_dir();
+        let store = tempfile::tempdir().unwrap();
+        let mut all = vec![
+            "pack",
+            "dev.peios.hello@1.0-1",
+            path(content.path()),
+            "--artifact-dir",
+            path(store.path()),
+        ];
+        all.extend(&args);
+        let output = ppk(&all);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(
+            stderr(&output).starts_with(&format!("ppk: {message}")),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert_eq!(fs::read_dir(store.path()).unwrap().count(), 0);
+    }
+}
+
+#[test]
 fn run_needs_packages() {
     for (args, missing) in [
         (vec!["run"], "<profile> or -p <package>..."),

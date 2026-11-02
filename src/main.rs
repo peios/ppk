@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::error::Error as _;
 use std::ffi::OsString;
 use std::io;
@@ -6,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::error::{ContextKind, ContextValue, ErrorKind};
-use clap::{CommandFactory, Parser, Subcommand};
-use ppk::PackageId;
+use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand};
+use ppk::{Constraint, LicenseClass, Metadata, PackageId, Version};
 
 /// Exit status for a failure.
 const EXIT_FAILURE: u8 = 1;
@@ -63,6 +64,8 @@ enum Command {
             hide_default_value = true,
         )]
         artifact_dir: PathBuf,
+        #[command(flatten)]
+        metadata: Box<MetadataArgs>,
     },
     /// Copy a package from another artifact directory
     #[command(
@@ -196,6 +199,110 @@ enum Command {
     },
 }
 
+/// What `ppk pack` records in the manifest besides the files. Each pair
+/// option takes its two values as separate arguments, so that neither needs
+/// quoting or a separator.
+#[derive(Args)]
+struct MetadataArgs {
+    /// Depend on the package <name> at <constraint>
+    #[arg(
+        long,
+        value_names = ["name", "constraint"],
+        num_args = 2,
+        action = ArgAction::Append,
+    )]
+    depends: Vec<String>,
+    /// Require the capability <name> at <constraint>
+    #[arg(
+        long,
+        value_names = ["name", "constraint"],
+        num_args = 2,
+        action = ArgAction::Append,
+    )]
+    requires: Vec<String>,
+    /// Provide the capability <name> at <version>
+    #[arg(
+        long,
+        value_names = ["name", "version"],
+        num_args = 2,
+        action = ArgAction::Append,
+    )]
+    provides: Vec<String>,
+    /// Claim the absolute <path> as a link to <target>
+    #[arg(
+        long,
+        value_names = ["path", "target"],
+        num_args = 2,
+        action = ArgAction::Append,
+    )]
+    claims: Vec<String>,
+    /// Describe the package in one line
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
+    description: Option<String>,
+    /// Give the upstream project's URL
+    #[arg(long, value_name = "url")]
+    homepage: Option<String>,
+    /// Give the package's license
+    #[arg(long, value_name = "expression", allow_hyphen_values = true)]
+    license: Option<String>,
+    /// Classify the license's terms (default: unknown)
+    #[arg(long, value_name = "class")]
+    license_class: Option<String>,
+    /// Give the license of the package's source
+    #[arg(long, value_name = "expression", allow_hyphen_values = true)]
+    source_license: Option<String>,
+}
+
+impl MetadataArgs {
+    /// The metadata the options give, checked.
+    fn metadata(self) -> anyhow::Result<Metadata> {
+        let metadata = Metadata {
+            description: self.description,
+            homepage: self.homepage,
+            license: self.license,
+            license_class: match self.license_class {
+                Some(class) => class.parse()?,
+                None => LicenseClass::Unknown,
+            },
+            source_license: self.source_license,
+            dependencies: pairs("--depends", &self.depends, Constraint::from_manifest_string)?,
+            requires: pairs(
+                "--requires",
+                &self.requires,
+                Constraint::from_manifest_string,
+            )?,
+            provides: pairs("--provides", &self.provides, |version| {
+                if version.is_empty() {
+                    Ok(None)
+                } else {
+                    Version::parse_relaxed(version).map(Some)
+                }
+            })?,
+            claims: pairs("--claims", &self.claims, |target| Ok(target.to_owned()))?,
+        };
+        metadata.check()?;
+        Ok(metadata)
+    }
+}
+
+/// The values of the pair option `option`, as a map from each pair's first
+/// value to its second, parsed by `parse`. A key given twice is an error.
+fn pairs<T>(
+    option: &str,
+    values: &[String],
+    parse: impl Fn(&str) -> anyhow::Result<T>,
+) -> anyhow::Result<BTreeMap<String, T>> {
+    let mut map = BTreeMap::new();
+    // clap gives a pair option's values two at a time.
+    for [key, value] in values.as_chunks::<2>().0 {
+        let parsed = parse(value).map_err(|err| anyhow::anyhow!("{option} {key}: {err}"))?;
+        if map.insert(key.clone(), parsed).is_some() {
+            anyhow::bail!("{option} {key}: given more than once");
+        }
+    }
+    Ok(map)
+}
+
 fn main() -> ExitCode {
     let program = program_name();
     let cli = match Cli::try_parse() {
@@ -234,8 +341,13 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             package,
             path,
             artifact_dir,
+            metadata,
         } => {
-            let packed = ppk::pack(&package, &path, &artifact_dir)?;
+            let metadata = match metadata.metadata() {
+                Ok(metadata) => metadata,
+                Err(err) => return Ok(report_usage_error(program, &describe(&err))),
+            };
+            let packed = ppk::pack_with(&package, &metadata, &path, &artifact_dir)?;
             println!("{}", packed.identity);
         }
         Command::Fetch {

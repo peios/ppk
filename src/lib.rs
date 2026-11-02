@@ -31,7 +31,14 @@
 //! The name, version and arch are written into the manifest as well as its
 //! ref. The ref is only an index, rebuildable from the manifests; a signature
 //! will cover the manifest's bytes, so those bytes must say which package
-//! they are.
+//! they are. A version is a [`Version`]: `[<epoch>:]<upstream>-<revision>`,
+//! ordered as PSPU 5.6 orders it.
+//!
+//! A manifest can also record [`Metadata`]: descriptive fields after the arch,
+//! and `[claims]`, `[dependencies]`, `[provides]` and `[requires]` tables
+//! before `[files]`, each left out when empty. ppk checks and records these,
+//! and acts on none of them yet: nothing resolves dependencies or
+//! requirements, and composing creates no claimed links.
 
 mod access;
 mod closure;

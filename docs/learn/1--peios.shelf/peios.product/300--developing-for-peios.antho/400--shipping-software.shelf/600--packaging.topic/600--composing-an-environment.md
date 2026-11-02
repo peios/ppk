@@ -30,9 +30,11 @@ work, see [Environments](~peios/packaging/environments).
    format, see [Environments](~peios/packaging/environments):
 
    ```toml
+   arch = "noarch"
+
    [packages]
-   "dev.peios.hello" = "1.0"
-   "dev.peios.greetings" = "2.0"
+   "dev.peios.hello" = "1.0-1"
+   "dev.peios.greetings" = "2.0-1"
    ```
 
 2. Run `ppk compose-env` with the profile and `--out`:
@@ -45,7 +47,7 @@ work, see [Environments](~peios/packaging/environments).
 `ppk closure` prints for them:
 
 ```text
-sha256:854cb23deb27e55765ee2a3138a745efb7cbc2a4cf2e3e0d53e8106fc308a8c6
+sha256:fe5cf307f0b70379e1ec36b0d8dca659782446b0d13e7140c1257cd855ba61c4
 ```
 
 `root/usr` holds the packages' files. Nothing is written to the artifact
@@ -56,12 +58,12 @@ them after `-p`. One `-p` takes every package after it, up to the next
 option, so the profile must come first:
 
 ```sh
-ppk compose-env env.toml -p dev.peios.extra@1.0 --artifact-dir artifacts --out root
-ppk compose-env -p dev.peios.hello@1.0 dev.peios.greetings@2.0 --artifact-dir artifacts --out root
+ppk compose-env env.toml -p dev.peios.extra@1.0-1 --artifact-dir artifacts --out root
+ppk compose-env -p dev.peios.hello@1.0-1 dev.peios.greetings@2.0-1 --artifact-dir artifacts --out root
 ```
 
 These packages are all for the architecture `ppk` was built for. To name
-another, give it in the package, as `dev.peios.hello@1.0?arch=noarch`, or
+another, give it in the package, as `dev.peios.hello@1.0-1?arch=noarch`, or
 give `arch` in the profile.
 
 ## Add what lies outside usr
@@ -134,7 +136,7 @@ It refuses another version of a package the profile holds, since an
 environment holds one version of each:
 
 ```text
-ppk: dev.peios.hello@2.0?arch=x86_64: the environment holds dev.peios.hello@1.0?arch=x86_64 already
+ppk: dev.peios.hello@2.0-1?arch=x86_64: the environment holds dev.peios.hello@1.0-1?arch=x86_64 already
 ```
 
 It also refuses packages that conflict, in the same way as

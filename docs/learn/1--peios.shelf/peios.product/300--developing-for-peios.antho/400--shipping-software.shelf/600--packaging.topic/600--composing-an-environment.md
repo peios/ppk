@@ -2,8 +2,9 @@
 title: Composing an Environment
 type: how-to
 description: Lay out an environment's whole root in a directory with ppk
-  compose-env from a profile or a list of packages, add the links and
-  directories it needs outside /usr, and include its packages.
+  compose-env from profiles or a list of packages, add the links and
+  directories it needs outside /usr, share a layout between profiles, and
+  include its packages.
 related:
   - peios/packaging/environments
   - peios/packaging/building-a-closure
@@ -93,6 +94,43 @@ ppk compose-env env.toml --artifact-dir artifacts --out root --symlink bin::bin 
 
 The root then holds `bin`, a link to `usr/bin`, an empty `tmp`, the
 packages' artifacts in `system/artifacts`, and `usr`.
+
+## Share a layout between profiles
+
+When several environments need the same root layout, write it once as a
+fragment, such as `layout.toml`:
+
+```toml
+dirs = ["proc", "sys", "dev", "tmp"]
+
+[symlinks]
+"bin" = ":bin"
+"lib64" = ":lib"
+```
+
+Then include it from each profile. The path is relative to the profile's
+own directory:
+
+```toml
+include = ["layout.toml"]
+
+[packages]
+"dev.peios.hello" = "1.0-1"
+```
+
+You can also give several profiles to `ppk compose-env`, which merges them
+in the same way, so a profile that names only packages can be composed with
+a layout:
+
+```sh
+ppk compose-env packages.toml layout.toml --artifact-dir artifacts --out root
+```
+
+If two of them disagree, `ppk` names both files and composes nothing:
+
+```text
+ppk: other.toml links "bin" to "usr/sbin", but layout.toml links it to "usr/bin"
+```
 
 ## Compose on another mount
 

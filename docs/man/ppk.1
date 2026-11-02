@@ -303,6 +303,81 @@ records and checks these, but nothing in
 .B ppk
 acts on them yet: no command chooses packages to satisfy dependencies, and
 composing does not create claimed links.
+.SH DERIVATION
+.B ppk pack
+also reads each ELF object among the files, and adds to the manifest what it
+needs and provides.
+An object's
+.B DT_NEEDED
+sonames become requirements, for any version, and its
+.B DT_SONAME
+becomes a capability the package provides.
+A soname the package provides is not also required.
+Files under
+.IR src/ ,
+which hold source rather than installed objects, are not read, nor are
+symbolic links, which alias an object packed at its own path.
+Other files that are not ELF are passed over.
+.PP
+For the glibc libraries
+.RB ( ld\-linux\-x86\-64.so.2 ,
+.BR libanl.so.1 ,
+.BR libc.so.6 ,
+.BR libdl.so.2 ,
+.BR libm.so.6 ,
+.BR libmvec.so.1 ,
+.BR libnsl.so.1 ,
+.BR libpthread.so.0 ,
+.BR libresolv.so.2 ,
+.BR librt.so.1
+and
+.BR libutil.so.1 )
+and for
+.BR libgcc_s.so.1 ,
+whose symbol versions are numbered as their package is, the highest symbol
+version that any object needs is a floor.
+An object needing
+.B GLIBC_2.34
+of
+.B libc.so.6
+gives the requirement
+.BR "libc.so.6 >= 2.34" .
+A package that provides one of these libraries provides it at its own
+version, such as
+.BR 2.44\-1 .
+.PP
+The versions of
+.B libstdc++.so.6
+are not numbered as gcc is, so each is an exact capability instead:
+.BI elfver(libstdc++.so.6: version )\c
+\&.
+A package providing
+.B libstdc++.so.6
+provides each version it defines, and an object needing a version requires
+it, unless the need is weak.
+.PP
+What derivation finds joins what the options give.
+Where both name the same capability, the option's entry is kept, unless it
+gives no version or holds for any version, when the derived one is.
+There are two exceptions.
+A requirement on one of the floor libraries for anything but any version is
+refused, because its floor comes only from the payload.
+A provide of one at a version other than the package's is refused.
+Either refusal names the written entry and what the payload gives, and
+nothing is written.
+.PP
+An object that cannot be read, or whose version tables are inconsistent, is
+an error naming it.
+So is a package providing
+.B libstdc++.so.6
+that needs a version of it that it does not define.
+A shared library named
+.BI lib name .so
+with no soname gives a warning on standard error, and nothing can depend on
+it.
+.PP
+The same files give the same requirements and provides, in the same
+manifest.
 .SH COMMANDS
 .TP
 .BI pack " package path"
@@ -328,6 +403,9 @@ The manifest also records the metadata the options give, as
 .B METADATA
 describes.
 A broken rule in it is a usage error, and nothing is written.
+It adds what the files' ELF objects need and provide, as
+.B DERIVATION
+describes.
 .IP
 If
 .I package
@@ -763,8 +841,11 @@ Success, including printing help or the version.
 .TP
 .B 1
 Failure, such as an unreadable file, an unwritable artifact directory, a
-version that is already present with different contents, or a package that
-is missing from the source or fails a check.
+version that is already present with different contents, a package that
+is missing from the source or fails a check, or, for pack, an ELF object
+that cannot be read or a written entry that
+.B DERIVATION
+refuses.
 .TP
 .B 2
 Usage error: an unknown option, a missing argument, a malformed

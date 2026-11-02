@@ -43,6 +43,7 @@
 mod access;
 mod closure;
 mod compose;
+mod derive;
 pub mod environment;
 mod fetch;
 mod id;
@@ -56,6 +57,7 @@ mod version;
 
 pub use closure::{Closed, UsrFiles, closure, closure_copying};
 pub use compose::{Composed, EnvDir, EnvSymlink, Extras, RootArtifacts, compose_env};
+pub use derive::{SYMBOL_CAPABILITIES, SYMBOL_VERSION_FLOORS};
 pub use fetch::{Fetched, fetch};
 pub use id::{HOST_ARCH, PackageId};
 pub use identity::Identity;

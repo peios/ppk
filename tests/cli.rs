@@ -395,7 +395,7 @@ fn pack_records_metadata_from_its_options() {
         ">=2.44",
         "--requires",
         "libc.so.6",
-        ">= 2.34",
+        "",
         "--requires",
         "sh",
         "",
@@ -431,7 +431,7 @@ fn pack_records_metadata_from_its_options() {
              [claims]\n\"/usr/bin/sh\" = \"dash\"\n\n\
              [dependencies]\n\"org.gnu.glibc\" = \">= 2.44\"\n\n\
              [provides]\n\"sh\" = \"1\"\n\n\
-             [requires]\n\"libc.so.6\" = \">= 2.34\"\n\"sh\" = \"\"\n\n[files]\n"
+             [requires]\n\"libc.so.6\" = \"\"\n\"sh\" = \"\"\n\n[files]\n"
         ),
         "{manifest}"
     );

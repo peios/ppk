@@ -8,6 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
+use crate::derive;
 use crate::store::{self, ArtifactDir};
 use crate::{Entry, Identity, Metadata, PackageId, render_manifest};
 
@@ -24,6 +25,9 @@ pub struct Packed {
     pub entries: usize,
     /// Number of blobs written; files whose blob already existed are not counted.
     pub blobs_written: usize,
+    /// What deriving requirements and provides from the files skipped, such
+    /// as a shared library without a soname, in payload order.
+    pub warnings: Vec<String>,
 }
 
 /// Something found while walking the content directory.
@@ -41,6 +45,9 @@ enum Found {
 /// and paths or symlink targets that are not valid UTF-8 are errors rather
 /// than being skipped.
 ///
+/// The package's ELF objects add to what it requires and provides, as
+/// [`pack_with`] describes.
+///
 /// A packed package is immutable: packing the same name, version and arch
 /// again succeeds only if it produces the identical manifest. Blobs are
 /// written first, then the manifest, then the ref, so a ref never names a
@@ -52,6 +59,21 @@ pub fn pack(id: &PackageId, input: &Path, artifact_dir: &Path) -> Result<Packed>
 /// Pack `input` into `artifact_dir` as `id`, as [`pack`] does, with
 /// `metadata` in its manifest. The metadata must pass [`Metadata::check`],
 /// and is part of the package's identity.
+///
+/// The requirements and provides that the files' ELF objects give join
+/// `metadata`'s: each `DT_NEEDED` soname is required, and each `DT_SONAME`
+/// provided, except that a soname the package provides isn't required. For
+/// the libraries in [`SYMBOL_VERSION_FLOORS`](crate::SYMBOL_VERSION_FLOORS),
+/// the highest symbol version needed is the requirement's floor, and a
+/// provide is at the package's version. Each version node of a library in
+/// [`SYMBOL_CAPABILITIES`](crate::SYMBOL_CAPABILITIES) is a capability,
+/// `elfver(<soname>:<node>)`. Files under `src/`, and symlinks, are not
+/// read.
+///
+/// Where `metadata` and the files both name a requirement or provide,
+/// `metadata`'s wins, except for those floor libraries: a requirement on one
+/// for anything but any version is refused, as is a provide of one at a
+/// version other than the package's.
 pub fn pack_with(
     id: &PackageId,
     metadata: &Metadata,
@@ -113,6 +135,18 @@ fn pack_as(
 
     // Hash everything before writing anything, so that a refused pack leaves
     // the artifact directory untouched.
+    let derived = derive::derive(
+        found.iter().filter_map(|(rel, item)| match item {
+            Found::File { path, .. } => Some((rel.as_str(), path.as_path())),
+            _ => None,
+        }),
+        id.parsed_version(),
+    )
+    .context("deriving requirements and provides")?;
+    let warnings = derived.warnings.clone();
+    let metadata = &derive::merge(metadata, derived)?;
+    metadata.check()?;
+
     let mut entries = Vec::with_capacity(found.len());
     let mut sources = Vec::new();
     for (rel, item) in found {
@@ -187,6 +221,7 @@ fn pack_as(
         ref_path,
         entries: entries.len(),
         blobs_written,
+        warnings,
     })
 }
 

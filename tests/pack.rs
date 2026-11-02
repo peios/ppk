@@ -95,7 +95,8 @@ fn files_under(dir: &Path) -> Vec<PathBuf> {
 #[test]
 fn round_trips_every_file() {
     let files: &[(&str, &[u8])] = &[
-        ("bin/hello", b"\x7fELF pretend binary"),
+        // Not ELF: packing reads ELF objects, and refuses a malformed one.
+        ("bin/hello", b"#!/bin/sh\necho hello\n"),
         ("share/man/man1/hello.1", b".TH HELLO 1\n"),
         ("share/licenses/hello/COPYING", b"GPL text"),
         ("empty", b""),

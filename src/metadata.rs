@@ -15,8 +15,8 @@ use crate::{Constraint, Version};
 /// part is optional, and a package with none of them has the manifest it
 /// would have had before they existed.
 ///
-/// ppk records and checks these, and composing creates the claimed links.
-/// Nothing resolves dependencies or requirements yet.
+/// ppk records and checks these. Composing creates the claimed links, and
+/// [`resolve`](crate::resolve) follows the dependencies and requirements.
 ///
 /// The maps are keyed by their names and paths, so they are sorted by bytes,
 /// as the manifest lists them. Check a value with [`Metadata::check`];
@@ -331,7 +331,7 @@ const CAPABILITY_MAX_BYTES: usize = 128;
 /// namespace is lowercase letters and digits, starting with a letter; its
 /// argument is not empty, and is the plain characters with `:` and `/`, as in
 /// `pkgconfig(gtk+-3.0)` and `perl(Foo::Bar)`.
-fn check_capability(name: &str) -> Result<()> {
+pub(crate) fn check_capability(name: &str) -> Result<()> {
     let plain = |c: u8| c.is_ascii_alphanumeric() || b"-.+_".contains(&c);
     let bytes = name.as_bytes();
     let valid = (2..=CAPABILITY_MAX_BYTES).contains(&bytes.len())

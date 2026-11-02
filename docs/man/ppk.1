@@ -71,6 +71,18 @@ ppk \- create and manage Peios packages
 .I command
 .RI [ argument ...]]
 .br
+.B ppk resolve
+.RB [ \-p
+.IR request ...]
+.RB [ \-c
+.IR request ...]
+.RB [ \-\-arch
+.IR arch ]
+.RB [ \-\-out
+.IR file ]
+.B \-\-from
+.IR dir ...
+.br
 .B ppk help
 .RI [ command ]
 .br
@@ -322,9 +334,8 @@ its files, which are all under
 Composing creates it: one package in an environment provides each claimed
 path, so two that claim one path can't be composed together.
 .PP
-Nothing in
-.B ppk
-chooses packages to satisfy dependencies and requirements yet.
+.B ppk resolve
+chooses packages that satisfy them, and writes their profile.
 .SH COMMANDS
 .TP
 .BI pack " package path"
@@ -543,6 +554,57 @@ and the command's children share the environment.
 .I /usr
 must already exist; an environment replaces it rather than creating it.
 .TP
+.B resolve
+Choose an exact version of each package the requests of
+.B \-p
+and
+.B \-c
+need, from the packages for the architecture in the
+.B \-\-from
+directories, and write their profile: an
+.B arch
+and a
+.B packages
+table holding one version of each name, with nothing else, so that a
+fragment can add a layout.
+A request is a name, then optionally a constraint, as one argument:
+.B 'org.gnu.gcc >= 16'
+or
+.BR sh .
+.IP
+A dependency is on a package by its name.
+A requirement is on a capability, which a package provides by its own name,
+at its own version, or by an entry of its
+.B provides
+table, at that entry's version; an entry with no version satisfies any
+constraint.
+.B resolve
+follows the dependencies and requirements of every package it chooses.
+.IP
+The choice is greedy, and nothing chosen is reconsidered.
+Packages are settled before capabilities, at every step: the requests,
+then the dependencies of what they chose, and only when none is left, the
+first capability waiting.
+A package is chosen at the newest version that satisfies what first needs
+it.
+A capability that a package already chosen provides needs nothing more;
+otherwise the one package that provides it is chosen, at its newest
+version that does.
+.IP
+.B resolve
+fails, writing nothing, if a name has no version that satisfies what needs
+it, if no package provides a capability, or if packages of several names
+provide one, in which case a request must choose one of them by name.
+It fails if something needs a version of a package that the one already
+chosen doesn't satisfy, naming the requirement, the choice, and what it was
+chosen for, and saying whether another version would have satisfied both.
+It fails if the version it would choose is spelt two ways, as
+.B 1.0~a\-1
+and
+.B 1.0~alpha\-1
+are, since no constraint can tell them apart, or if one package is
+different in two directories.
+.TP
 .BI help " \fR[\fPcommand\fR]\fP"
 Print help for
 .B ppk
@@ -557,7 +619,26 @@ and
 add every
 .I package
 that follows, up to the next option, to the environment.
+For
+.BR resolve ,
+request each package that follows, with its constraint.
 Can be given more than once.
+.TP
+.BR \-c ", " \-\-capability " \fIrequest\fR..."
+For
+.BR resolve ,
+request a package providing each capability that follows, with its
+constraint.
+Can be given more than once.
+.TP
+.BI \-\-arch " arch"
+For
+.BR resolve ,
+choose packages for
+.IR arch ,
+rather than for the architecture
+.B ppk
+was built for.
 Profiles must come before it, since what follows it is read as packages.
 .TP
 .BI \-\-artifact\-dir " dir"
@@ -692,15 +773,25 @@ For
 .BR fetch ,
 copy from the artifact directory
 .IR dir .
+For
+.BR resolve ,
+choose from the packages in every artifact directory
+.I dir
+that follows, up to the next option.
 Required.
 .TP
-.BI \-\-out " dir"
+.BI \-\-out " path"
 For
 .BR compose\-env ,
 create the root at
-.IR dir ,
+.IR path ,
 which must not exist.
 Required.
+For
+.BR resolve ,
+write the profile to the file
+.IR path ,
+replacing it, rather than to standard output.
 .TP
 .BI \-\-symlink " link"
 For
@@ -804,8 +895,10 @@ Success, including printing help or the version.
 .TP
 .B 1
 Failure, such as an unreadable file, an unwritable artifact directory, a
-version that is already present with different contents, or a package that
-is missing from the source or fails a check.
+version that is already present with different contents, a package that
+is missing from the source or fails a check, or requests that
+.B resolve
+can't satisfy.
 .TP
 .B 2
 Usage error: an unknown option, a missing argument, a malformed
@@ -920,6 +1013,14 @@ directories.
 The same, with
 .B ppk
 added to the profile's packages.
+.TP
+.B ppk resolve \-p org.gnu.make 'org.gnu.gcc >= 16' \-c sh \-\-from stage1 \-\-out root.toml
+Choose make, a gcc of version 16 or later, a package providing
+.BR sh ,
+and everything they need, from the artifact directory
+.IR stage1 ,
+and write their profile to
+.IR root.toml .
 .TP
 .B ppk run \-p net.busybox.busybox@1.37.0\-1
 Start the shell that the busybox package provides, in an environment

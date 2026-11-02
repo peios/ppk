@@ -188,6 +188,35 @@ enum Command {
         #[arg(value_name = "<command>", last = true)]
         command: Vec<OsString>,
     },
+    /// Choose packages and write their profile
+    #[command(
+        override_usage = "ppk resolve [options] [-p <request>...] [-c <request>...]\n       \
+                          --from <dir>...",
+        after_help = SEE_ALSO
+    )]
+    Resolve {
+        /// Packages to choose, with constraints
+        #[arg(
+            short = 'p',
+            long = "package",
+            value_name = "request",
+            num_args = 1..,
+            required_unless_present = "capabilities"
+        )]
+        packages: Vec<String>,
+        /// Capabilities to provide, with constraints
+        #[arg(short = 'c', long = "capability", value_name = "request", num_args = 1..)]
+        capabilities: Vec<String>,
+        /// Choose from the packages in <dir>
+        #[arg(long, value_name = "dir", num_args = 1.., required = true)]
+        from: Vec<PathBuf>,
+        /// Choose for <arch> (default: ppk's own)
+        #[arg(long, value_name = "arch")]
+        arch: Option<String>,
+        /// Write the profile to <file>
+        #[arg(long, value_name = "file")]
+        out: Option<PathBuf>,
+    },
     /// Print help for ppk or one of its commands
     #[command(override_usage = "ppk help [<command>]", after_help = SEE_ALSO)]
     Help {
@@ -419,9 +448,42 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             };
             return Ok(exec(program, &command));
         }
+        Command::Resolve {
+            packages,
+            capabilities,
+            from,
+            arch,
+            out,
+        } => {
+            let requests = match requests(&packages, &capabilities) {
+                Ok(requests) => requests,
+                Err(err) => return Ok(report_usage_error(program, &describe(&err))),
+            };
+            let arch = arch.as_deref().unwrap_or(ppk::HOST_ARCH);
+            let profile = ppk::resolve(&requests, &from, arch)?.profile().render()?;
+            match out {
+                Some(out) => {
+                    std::fs::write(&out, profile).map_err(|err| {
+                        anyhow::Error::new(err).context(out.display().to_string())
+                    })?;
+                }
+                None => print!("{profile}"),
+            }
+        }
         Command::Help { .. } => unreachable!("help is handled before run"),
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The requests `-p` and `-c` give, packages first.
+fn requests(packages: &[String], capabilities: &[String]) -> anyhow::Result<Vec<ppk::Request>> {
+    let packages = packages
+        .iter()
+        .map(|s| ppk::Request::parse_package(s).map_err(|err| err.context("-p")));
+    let capabilities = capabilities
+        .iter()
+        .map(|s| ppk::Request::parse_capability(s).map_err(|err| err.context("-c")));
+    packages.chain(capabilities).collect()
 }
 
 /// The closure of `packages`, copying its files if `copy_files`.
@@ -527,6 +589,10 @@ fn usage_message(err: &clap::Error) -> String {
             Some(ContextValue::String(command)) => format!("unknown command '{command}'"),
             _ => clap_first_line(err),
         },
+        // Required only without -c.
+        (ErrorKind::MissingRequiredArgument, ["--package <request>..."]) => {
+            "missing -p <request>... or -c <request>...".to_owned()
+        }
         (ErrorKind::MissingRequiredArgument, [arg]) if arg.starts_with('-') => {
             format!("missing option {arg}")
         }

@@ -31,7 +31,14 @@
 //! The name, version and arch are written into the manifest as well as its
 //! ref. The ref is only an index, rebuildable from the manifests; a signature
 //! will cover the manifest's bytes, so those bytes must say which package
-//! they are.
+//! they are. A version is a [`Version`]: `[<epoch>:]<upstream>-<revision>`,
+//! ordered as PSPU 5.6 orders it.
+//!
+//! A manifest can also record [`Metadata`]: descriptive fields after the arch,
+//! and `[claims]`, `[dependencies]`, `[provides]` and `[requires]` tables
+//! before `[files]`, each left out when empty. ppk checks and records these,
+//! and acts on none of them yet: nothing resolves dependencies or
+//! requirements, and composing creates no claimed links.
 
 mod access;
 mod closure;
@@ -41,9 +48,11 @@ mod fetch;
 mod id;
 mod identity;
 mod manifest;
+mod metadata;
 mod pack;
 mod profile;
 mod store;
+mod version;
 
 pub use closure::{Closed, UsrFiles, closure, closure_copying};
 pub use compose::{Composed, EnvDir, EnvSymlink, Extras, RootArtifacts, compose_env};
@@ -51,9 +60,11 @@ pub use fetch::{Fetched, fetch};
 pub use id::{HOST_ARCH, PackageId};
 pub use identity::Identity;
 pub use manifest::{Entry, Manifest, parse_manifest, render_manifest};
-pub use pack::{Packed, pack, pack_replacing};
+pub use metadata::{LicenseClass, Metadata};
+pub use pack::{Packed, pack, pack_replacing, pack_replacing_with, pack_with};
 pub use profile::Profile;
 pub use store::{packed, prepare_artifact_dir, versions};
+pub use version::{Constraint, Operator, Version};
 
 /// The hash algorithm, as it appears in artifact paths and manifest values.
 pub const ALGORITHM: &str = "sha256";

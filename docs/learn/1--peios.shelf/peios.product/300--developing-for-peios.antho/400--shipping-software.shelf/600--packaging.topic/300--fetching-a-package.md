@@ -21,20 +21,20 @@ read.
 - Have write access to your artifact directory. The default is
   `/system/artifacts`; to use a directory of your own, pass
   `--artifact-dir`.
-- Know the package's identifier, such as `dev.peios.hello@1.0?arch=noarch`.
+- Know the package's identifier, such as `dev.peios.hello@1.0-1?arch=noarch`.
 
 ## Fetch the package
 
 Run `ppk fetch` with the identifier and the source:
 
 ```sh
-ppk fetch 'dev.peios.hello@1.0?arch=noarch' --from shared --artifact-dir artifacts
+ppk fetch 'dev.peios.hello@1.0-1?arch=noarch' --from shared --artifact-dir artifacts
 ```
 
 `ppk` prints the package's identity:
 
 ```text
-sha256:044f86f4999c008042cb80ea46ee1f468457702cfe8426c7edf50997f79e420c
+sha256:73a137f612f39b8ee1ffcbb7f51b7b9dc370b8662323d72b9e6b73b9d54413f8
 ```
 
 ## Check the result
@@ -68,7 +68,7 @@ package under the same name, version, and architecture, `ppk fetch` refuses
 and writes nothing:
 
 ```text
-ppk: dev.peios.hello@1.0?arch=noarch: already present as sha256:044f86f4999c008042cb80ea46ee1f468457702cfe8426c7edf50997f79e420c, but other has sha256:ebba3ef047137da86f6cdbee1a9282967c738022621c073f79efe09b3543442e
+ppk: dev.peios.hello@1.0-1?arch=noarch: already present as sha256:73a137f612f39b8ee1ffcbb7f51b7b9dc370b8662323d72b9e6b73b9d54413f8, but other has sha256:453a10dad4cb1902912919527452fa61c6420ae9152c1f02b57c1421a6d9d57b
 ```
 
 A packed version never changes, so two different packages under one version

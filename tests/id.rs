@@ -6,16 +6,16 @@ fn parse(s: &str) -> anyhow::Result<PackageId> {
 
 #[test]
 fn arch_defaults_to_the_host() {
-    let id = parse("dev.peios.hello@1.0").unwrap();
+    let id = parse("dev.peios.hello@1.0-1").unwrap();
     assert_eq!(id.name(), "dev.peios.hello");
-    assert_eq!(id.version(), "1.0");
+    assert_eq!(id.version(), "1.0-1");
     assert_eq!(id.arch(), HOST_ARCH);
 }
 
 #[test]
 fn arch_qualifier_sets_the_arch() {
     for arch in ["aarch64", "x86_64", "noarch"] {
-        let id = parse(&format!("dev.peios.hello@1.0?arch={arch}")).unwrap();
+        let id = parse(&format!("dev.peios.hello@1.0-1?arch={arch}")).unwrap();
         assert_eq!(id.arch(), arch);
     }
 }
@@ -37,20 +37,20 @@ fn malformed_identifiers_are_rejected() {
             "dev.peios.hello?arch=x86_64: missing '@<version>'",
         ),
         (
-            "dev.peios.hello@1.0?os=peios",
-            "dev.peios.hello@1.0?os=peios: unknown qualifier 'os'",
+            "dev.peios.hello@1.0-1?os=peios",
+            "dev.peios.hello@1.0-1?os=peios: unknown qualifier 'os'",
         ),
         (
-            "dev.peios.hello@1.0?arch=x86_64&arch=aarch64",
-            "dev.peios.hello@1.0?arch=x86_64&arch=aarch64: arch is given more than once",
+            "dev.peios.hello@1.0-1?arch=x86_64&arch=aarch64",
+            "dev.peios.hello@1.0-1?arch=x86_64&arch=aarch64: arch is given more than once",
         ),
         (
-            "dev.peios.hello@1.0?arch",
-            "dev.peios.hello@1.0?arch: qualifier 'arch' is not of the form <key>=<value>",
+            "dev.peios.hello@1.0-1?arch",
+            "dev.peios.hello@1.0-1?arch: qualifier 'arch' is not of the form <key>=<value>",
         ),
         (
-            "dev.peios.hello@1.0?",
-            "dev.peios.hello@1.0?: qualifier '' is not of the form <key>=<value>",
+            "dev.peios.hello@1.0-1?",
+            "dev.peios.hello@1.0-1?: qualifier '' is not of the form <key>=<value>",
         ),
     ] {
         let err = parse(input).unwrap_err();
@@ -74,7 +74,7 @@ fn reverse_dns_names_are_accepted() {
         // The longest there can be.
         &format!("dev.peios.{}", "a".repeat(54)),
     ] {
-        let id = parse(&format!("{name}@1.0")).unwrap();
+        let id = parse(&format!("{name}@1.0-1")).unwrap();
         assert_eq!(id.name(), name);
     }
 }
@@ -109,7 +109,7 @@ fn names_that_are_not_reverse_dns_are_rejected() {
         // One too long.
         &format!("dev.peios.{}", "a".repeat(55)),
     ] {
-        let input = format!("{name}@1.0");
+        let input = format!("{name}@1.0-1");
         let message = parse(&input).unwrap_err().to_string();
         assert!(
             message.starts_with(&format!("{input}: invalid package name '{name}': ")),
@@ -120,8 +120,33 @@ fn names_that_are_not_reverse_dns_are_rejected() {
 
 #[test]
 fn the_name_rule_is_for_names_alone() {
-    let id = parse("dev.peios.hello@1.0_rc~1+git.A?arch=x86_64").unwrap();
-    assert_eq!(id.version(), "1.0_rc~1+git.A");
+    let id = parse("dev.peios.hello@2:1.0-rc~1+git.A-3?arch=x86_64").unwrap();
+    assert_eq!(id.version(), "2:1.0-rc~1+git.A-3");
+}
+
+#[test]
+fn a_version_is_parsed_and_needs_its_revision() {
+    let id = parse("dev.peios.hello@0.25.0-indev-1").unwrap();
+    assert_eq!(id.parsed_version().upstream(), "0.25.0-indev");
+    assert_eq!(id.parsed_version().revision(), "1");
+    for version in ["1.0", "1.0-0", "1.0-01", "1.0_rc-1", "01:1.0-1", "1.0-rc1"] {
+        let input = format!("dev.peios.hello@{version}");
+        let message = parse(&input).unwrap_err().to_string();
+        assert!(
+            message.starts_with(&format!("{input}: invalid version '{version}': ")),
+            "{input:?}: {message}"
+        );
+    }
+}
+
+/// Identifiers are the same only if they are spelled the same, though their
+/// versions may compare equal.
+#[test]
+fn identifiers_compare_by_spelling() {
+    let alpha = parse("dev.peios.hello@1.0~alpha-1").unwrap();
+    let a = parse("dev.peios.hello@1.0~a-1").unwrap();
+    assert_eq!(alpha.parsed_version(), a.parsed_version());
+    assert_ne!(alpha, a);
 }
 
 #[test]
@@ -141,9 +166,9 @@ fn unsafe_names_versions_and_arches_are_rejected() {
         "a=b",
     ] {
         for (input, what) in [
-            (format!("{bad}@1.0?arch=x86_64"), "package name"),
+            (format!("{bad}@1.0-1?arch=x86_64"), "package name"),
             (format!("dev.peios.hello@{bad}?arch=x86_64"), "version"),
-            (format!("dev.peios.hello@1.0?arch={bad}"), "arch"),
+            (format!("dev.peios.hello@1.0-1?arch={bad}"), "arch"),
         ] {
             let message = parse(&input).unwrap_err().to_string();
             assert!(

@@ -2,10 +2,12 @@
 title: Packages
 type: concept
 description: What a Peios package is, covering manifests and blobs, how a
-  package's identity is derived, package identifiers and names, the layout
-  of the artifact directory, and why a packed version never changes.
+  package's identity is derived, package identifiers, names and versions,
+  what a manifest says besides its files, the layout of the artifact
+  directory, and why a packed version never changes.
 related:
   - peios/packaging/creating-a-package
+  - peios/packaging/recording-dependencies-and-metadata
 ---
 
 A package is how software is shipped on Peios: a set of files, symbolic
@@ -34,7 +36,7 @@ this:
 
 ```toml
 name = "dev.peios.hello"
-version = "1.0"
+version = "1.0-1"
 arch = "noarch"
 
 [files]
@@ -76,8 +78,8 @@ documentation or scripts.
 
 If you leave out `?arch=`, the architecture is the one `ppk` itself was
 built for. Give it explicitly for any package built for another machine,
-and always for `noarch` packages. The characters a version and an
-architecture can contain are listed in `ppk(1)`.
+and always for `noarch` packages. The characters an architecture can
+contain are listed in `ppk(1)`.
 
 ## Package names
 
@@ -105,6 +107,46 @@ neither of the first two holds a `+`.
 `ppk` can only check a name's form. It can't tell whether a domain is the
 right one for the software, or whether a split keeps its base's name, so
 those are for whoever writes the package.
+
+## Package versions
+
+A version has three parts, written `[<epoch>:]<upstream>-<revision>`:
+
+- **Upstream version.** The version the software's own project gave it,
+  such as `2.44` or `1.0-rc.1`. It holds ASCII letters, digits, `.`, `+`,
+  `-`, and `~`, and starts with a letter or digit.
+- **Revision.** Which packaging of that upstream version this is, starting
+  at `1`. Pack a new revision when the package changes but the software
+  doesn't. Every version has one: `2.44-1`, never `2.44`.
+- **Epoch.** An optional number before a colon, as in `1:0.5-1`, that's
+  raised only when an upstream project's versions go backwards, so that the
+  new ones sort after the old.
+
+Versions sort by epoch, then upstream version, then revision. Upstream
+versions compare a run of digits or letters at a time, with digits as
+numbers, so `2.10` comes after `2.9`. A pre-release sorts before its
+release: anything after a `~`, and `dev`, `alpha` or `a`, `beta` or `b`,
+`pre`, and `rc`, in that order, so `1.0~rc1-1` and `1.0-rc.1-1` both come
+before `1.0-1`. This is the order of PSPU 5.6, the same as the earlier
+Peios package tools used.
+
+## What else a manifest says
+
+Besides its files, a manifest can record what the package needs and
+offers, and describe it:
+
+| Part | What it records |
+|---|---|
+| `[dependencies]` | Other packages this one needs, each with the versions it can use |
+| `[requires]` | Capabilities this one needs, such as the library `libc.so.6` or a shell, `sh` |
+| `[provides]` | Capabilities this one offers, each at a version or none |
+| `[claims]` | Links this package provides besides its files, such as `/usr/bin/sh` |
+| `description`, `homepage`, `license`, `license_class`, `source_license` | What the package is and its terms |
+
+They're part of the manifest, so they're part of the package's identity, and
+like the files they have one spelling each. A package that records none of
+them has the same manifest it would have had without them. To record them,
+see [Recording Dependencies and Metadata](~peios/packaging/recording-dependencies-and-metadata).
 
 ## The artifact directory
 

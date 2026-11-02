@@ -27,13 +27,13 @@ For how closures work, see [Closures](~peios/packaging/closures).
 Run `ppk closure` with the identifier of each package:
 
 ```sh
-ppk closure 'dev.peios.hello@1.0?arch=noarch' 'dev.peios.greetings@2.0?arch=noarch' --artifact-dir artifacts
+ppk closure 'dev.peios.hello@1.0-1?arch=noarch' 'dev.peios.greetings@2.0-1?arch=noarch' --artifact-dir artifacts
 ```
 
 `ppk` prints the closure's identity:
 
 ```text
-sha256:854cb23deb27e55765ee2a3138a745efb7cbc2a4cf2e3e0d53e8106fc308a8c6
+sha256:fe5cf307f0b70379e1ec36b0d8dca659782446b0d13e7140c1257cd855ba61c4
 ```
 
 ## Check the result
@@ -42,7 +42,7 @@ The closure's tree is in the `closures` directory of the artifact
 directory, named by the hash in the identity:
 
 ```sh
-ls artifacts/closures/854cb23deb27e55765ee2a3138a745efb7cbc2a4cf2e3e0d53e8106fc308a8c6/bin
+ls artifacts/closures/fe5cf307f0b70379e1ec36b0d8dca659782446b0d13e7140c1257cd855ba61c4/bin
 ```
 
 The tree holds the files of every package, laid out as they appear under
@@ -62,7 +62,7 @@ If two packages give the same path different contents, `ppk closure`
 refuses and names both packages:
 
 ```text
-ppk: "bin/hello": dev.peios.hello@1.0?arch=noarch and dev.peios.clash@1.0?arch=noarch provide different entries
+ppk: "bin/hello": dev.peios.hello@1.0-1?arch=noarch and dev.peios.clash@1.0-1?arch=noarch provide different entries
 ```
 
 Nothing is written. Decide which package should provide the path, and
@@ -84,7 +84,7 @@ To build the closure there anyway, such as in a sandboxed build step that
 has the artifact directory as a read-only input, copy its files:
 
 ```sh
-ppk closure 'dev.peios.hello@1.0?arch=noarch' --artifact-dir artifacts --closure-dir closures --copy-files
+ppk closure 'dev.peios.hello@1.0-1?arch=noarch' --artifact-dir artifacts --closure-dir closures --copy-files
 ```
 
 `ppk` checks each blob against its hash as it copies. To see what a copy

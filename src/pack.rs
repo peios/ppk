@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
 use crate::store::{self, ArtifactDir};
-use crate::{Entry, Identity, PackageId, render_manifest};
+use crate::{Entry, Identity, Metadata, PackageId, render_manifest};
 
 /// The result of a successful pack.
 #[derive(Debug)]
@@ -46,7 +46,19 @@ enum Found {
 /// written first, then the manifest, then the ref, so a ref never names a
 /// manifest that is missing or incomplete.
 pub fn pack(id: &PackageId, input: &Path, artifact_dir: &Path) -> Result<Packed> {
-    pack_as(id, input, artifact_dir, false)
+    pack_as(id, &Metadata::default(), input, artifact_dir, false)
+}
+
+/// Pack `input` into `artifact_dir` as `id`, as [`pack`] does, with
+/// `metadata` in its manifest. The metadata must pass [`Metadata::check`],
+/// and is part of the package's identity.
+pub fn pack_with(
+    id: &PackageId,
+    metadata: &Metadata,
+    input: &Path,
+    artifact_dir: &Path,
+) -> Result<Packed> {
+    pack_as(id, metadata, input, artifact_dir, false)
 }
 
 /// Pack `input` into `artifact_dir` as `id`, as [`pack`] does, but replace
@@ -57,10 +69,29 @@ pub fn pack(id: &PackageId, input: &Path, artifact_dir: &Path) -> Result<Packed>
 /// else relies on what it was. Only the ref changes: the replaced manifest
 /// and its blobs stay, as does anything composed from them.
 pub fn pack_replacing(id: &PackageId, input: &Path, artifact_dir: &Path) -> Result<Packed> {
-    pack_as(id, input, artifact_dir, true)
+    pack_as(id, &Metadata::default(), input, artifact_dir, true)
 }
 
-fn pack_as(id: &PackageId, input: &Path, artifact_dir: &Path, replace: bool) -> Result<Packed> {
+/// Pack `input` into `artifact_dir` as `id` with `metadata`, as
+/// [`pack_with`] does, but replace whatever is packed as `id` already, as
+/// [`pack_replacing`] does.
+pub fn pack_replacing_with(
+    id: &PackageId,
+    metadata: &Metadata,
+    input: &Path,
+    artifact_dir: &Path,
+) -> Result<Packed> {
+    pack_as(id, metadata, input, artifact_dir, true)
+}
+
+fn pack_as(
+    id: &PackageId,
+    metadata: &Metadata,
+    input: &Path,
+    artifact_dir: &Path,
+    replace: bool,
+) -> Result<Packed> {
+    metadata.check()?;
     if !fs::metadata(input)
         .with_context(|| format!("{}", input.display()))?
         .is_dir()
@@ -97,7 +128,7 @@ fn pack_as(id: &PackageId, input: &Path, artifact_dir: &Path, replace: bool) -> 
         entries.push((rel, entry));
     }
 
-    let manifest = render_manifest(id, &entries);
+    let manifest = render_manifest(id, metadata, &entries);
     let identity = Identity::of(manifest.as_bytes());
 
     let layout = ArtifactDir::new(artifact_dir);

@@ -34,7 +34,7 @@ fn pack_prints_the_identity_and_writes_the_ref() {
     let store = tempfile::tempdir().unwrap();
     let output = ppk(&[
         "pack",
-        "dev.peios.hello@1.0?arch=noarch",
+        "dev.peios.hello@1.0-1?arch=noarch",
         path(content.path()),
         "--artifact-dir",
         path(store.path()),
@@ -46,13 +46,13 @@ fn pack_prints_the_identity_and_writes_the_ref() {
         identity.starts_with("sha256:") && identity.ends_with('\n'),
         "{identity}"
     );
-    let ref_path = store.path().join("refs/dev.peios.hello/1.0/noarch");
+    let ref_path = store.path().join("refs/dev.peios.hello/1.0-1/noarch");
     assert_eq!(fs::read_to_string(ref_path).unwrap(), identity);
 
     let local = tempfile::tempdir().unwrap();
     let fetched = ppk(&[
         "fetch",
-        "dev.peios.hello@1.0?arch=noarch",
+        "dev.peios.hello@1.0-1?arch=noarch",
         "--from",
         path(store.path()),
         "--artifact-dir",
@@ -64,7 +64,7 @@ fn pack_prints_the_identity_and_writes_the_ref() {
 
 #[test]
 fn fetch_without_a_source_is_a_usage_error() {
-    let output = ppk(&["fetch", "dev.peios.hello@1.0"]);
+    let output = ppk(&["fetch", "dev.peios.hello@1.0-1"]);
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         stderr(&output),
@@ -79,7 +79,7 @@ fn compose_env_prints_the_identity_and_lays_out_the_root() {
     let artifacts = store.path().join("artifacts");
     let packed = ppk(&[
         "pack",
-        "dev.peios.hello@1.0",
+        "dev.peios.hello@1.0-1",
         path(content.path()),
         "--artifact-dir",
         path(&artifacts),
@@ -90,7 +90,7 @@ fn compose_env_prints_the_identity_and_lays_out_the_root() {
     let output = ppk(&[
         "compose-env",
         "-p",
-        "dev.peios.hello@1.0",
+        "dev.peios.hello@1.0-1",
         "--artifact-dir",
         path(&artifacts),
         "--out",
@@ -119,14 +119,14 @@ fn compose_env_prints_the_identity_and_lays_out_the_root() {
 fn compose_env_needs_an_output_directory_and_well_formed_extras() {
     for (args, message) in [
         (
-            vec!["compose-env", "-p", "dev.peios.hello@1.0"],
+            vec!["compose-env", "-p", "dev.peios.hello@1.0-1"],
             "missing option --out <dir>",
         ),
         (
             vec![
                 "compose-env",
                 "-p",
-                "dev.peios.hello@1.0",
+                "dev.peios.hello@1.0-1",
                 "--out",
                 "o",
                 "--symlink",
@@ -138,7 +138,7 @@ fn compose_env_needs_an_output_directory_and_well_formed_extras() {
             vec![
                 "compose-env",
                 "-p",
-                "dev.peios.hello@1.0",
+                "dev.peios.hello@1.0-1",
                 "--out",
                 "o",
                 "--dir",
@@ -163,7 +163,7 @@ fn closures_default_to_inside_the_artifact_directory() {
     let store = tempfile::tempdir().unwrap();
     let packed = ppk(&[
         "pack",
-        "dev.peios.hello@1.0",
+        "dev.peios.hello@1.0-1",
         path(content.path()),
         "--artifact-dir",
         path(store.path()),
@@ -172,7 +172,7 @@ fn closures_default_to_inside_the_artifact_directory() {
 
     let output = ppk(&[
         "closure",
-        "dev.peios.hello@1.0",
+        "dev.peios.hello@1.0-1",
         "--artifact-dir",
         path(store.path()),
     ]);
@@ -208,13 +208,13 @@ fn pack_one(id: &str, file: &str, artifacts: &Path) {
 fn compose_env_composes_a_profile_and_what_the_options_add() {
     let store = tempfile::tempdir().unwrap();
     let artifacts = store.path().join("artifacts");
-    pack_one("dev.peios.hello@1.0", "hello", &artifacts);
-    pack_one("dev.peios.greet@2.0", "greet", &artifacts);
-    pack_one("dev.peios.wave@3.0", "wave", &artifacts);
+    pack_one("dev.peios.hello@1.0-1", "hello", &artifacts);
+    pack_one("dev.peios.greet@2.0-1", "greet", &artifacts);
+    pack_one("dev.peios.wave@3.0-1", "wave", &artifacts);
     let profile = store.path().join("env.toml");
     fs::write(
         &profile,
-        "dirs = [\"proc\"]\n\n[packages]\n\"dev.peios.hello\" = \"1.0\"\n\n\
+        "dirs = [\"proc\"]\n\n[packages]\n\"dev.peios.hello\" = \"1.0-1\"\n\n\
          [symlinks]\n\"init\" = \":bin/hello\"\n",
     )
     .unwrap();
@@ -225,8 +225,8 @@ fn compose_env_composes_a_profile_and_what_the_options_add() {
         "compose-env",
         path(&profile),
         "-p",
-        "dev.peios.greet@2.0",
-        "dev.peios.wave@3.0",
+        "dev.peios.greet@2.0-1",
+        "dev.peios.wave@3.0-1",
         "--artifact-dir",
         path(&artifacts),
         "--out",
@@ -250,7 +250,7 @@ fn compose_env_composes_a_profile_and_what_the_options_add() {
         "compose-env",
         path(&profile),
         "-p",
-        "dev.peios.hello@2.0",
+        "dev.peios.hello@2.0-1",
         "--artifact-dir",
         path(&artifacts),
         "--out",
@@ -260,8 +260,8 @@ fn compose_env_composes_a_profile_and_what_the_options_add() {
     assert_eq!(
         stderr(&output),
         format!(
-            "ppk: dev.peios.hello@2.0?arch={arch}: the environment holds \
-             dev.peios.hello@1.0?arch={arch} already\n",
+            "ppk: dev.peios.hello@2.0-1?arch={arch}: the environment holds \
+             dev.peios.hello@1.0-1?arch={arch} already\n",
             arch = ppk::HOST_ARCH
         )
     );
@@ -273,11 +273,11 @@ fn a_profile_can_include_its_artifacts_and_copying_wins() {
 
     let store = tempfile::tempdir().unwrap();
     let artifacts = store.path().join("artifacts");
-    pack_one("dev.peios.hello@1.0", "hello", &artifacts);
+    pack_one("dev.peios.hello@1.0-1", "hello", &artifacts);
     let profile = store.path().join("env.toml");
     fs::write(
         &profile,
-        "include_artifacts = true\n\n[packages]\n\"dev.peios.hello\" = \"1.0\"\n",
+        "include_artifacts = true\n\n[packages]\n\"dev.peios.hello\" = \"1.0-1\"\n",
     )
     .unwrap();
     // The links to the one blob, which hardlinking adds to.
@@ -319,7 +319,7 @@ fn copy_files_copies_a_closure_and_a_roots_usr() {
 
     let store = tempfile::tempdir().unwrap();
     let artifacts = store.path().join("artifacts");
-    pack_one("dev.peios.hello@1.0", "hello", &artifacts);
+    pack_one("dev.peios.hello@1.0-1", "hello", &artifacts);
     let closures = store.path().join("closures");
     let out = store.path().join("root");
     let blob = fs::read_dir(artifacts.join("blobs/sha256"))
@@ -332,7 +332,7 @@ fn copy_files_copies_a_closure_and_a_roots_usr() {
     for args in [
         vec![
             "closure",
-            "dev.peios.hello@1.0",
+            "dev.peios.hello@1.0-1",
             "--artifact-dir",
             path(&artifacts),
             "--closure-dir",
@@ -342,7 +342,7 @@ fn copy_files_copies_a_closure_and_a_roots_usr() {
         vec![
             "compose-env",
             "-p",
-            "dev.peios.hello@1.0",
+            "dev.peios.hello@1.0-1",
             "--artifact-dir",
             path(&artifacts),
             "--out",
@@ -366,18 +366,136 @@ fn a_name_that_is_not_reverse_dns_is_a_usage_error() {
     let store = tempfile::tempdir().unwrap();
     let output = ppk(&[
         "pack",
-        "hello@1.0",
+        "hello@1.0-1",
         path(content.path()),
         "--artifact-dir",
         path(store.path()),
     ]);
     assert_eq!(output.status.code(), Some(2));
     assert!(
-        stderr(&output).starts_with("ppk: hello@1.0: invalid package name 'hello': "),
+        stderr(&output).starts_with("ppk: hello@1.0-1: invalid package name 'hello': "),
         "{}",
         stderr(&output)
     );
     assert_eq!(fs::read_dir(store.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn pack_records_metadata_from_its_options() {
+    let content = content_dir();
+    let store = tempfile::tempdir().unwrap();
+    let output = ppk(&[
+        "pack",
+        "org.git.kernel.dash@0.5.13.5-1?arch=x86_64",
+        path(content.path()),
+        "--artifact-dir",
+        path(store.path()),
+        "--depends",
+        "org.gnu.glibc",
+        ">=2.44",
+        "--requires",
+        "libc.so.6",
+        ">= 2.34",
+        "--requires",
+        "sh",
+        "",
+        "--provides",
+        "sh",
+        "1",
+        "--claims",
+        "/usr/bin/sh",
+        "dash",
+        "--description",
+        "-POSIX shell",
+        "--license",
+        "BSD-3-Clause",
+        "--license-class",
+        "free",
+        "--homepage",
+        "https://git.kernel.org/pub/scm/utils/dash/dash.git",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let identity: ppk::Identity = stdout(&output).trim_end().parse().unwrap();
+    let manifest = fs::read_to_string(
+        store
+            .path()
+            .join(format!("manifests/sha256/{}", identity.hex())),
+    )
+    .unwrap();
+    assert!(
+        manifest.starts_with(
+            "name = \"org.git.kernel.dash\"\nversion = \"0.5.13.5-1\"\narch = \"x86_64\"\n\
+             description = \"-POSIX shell\"\n\
+             homepage = \"https://git.kernel.org/pub/scm/utils/dash/dash.git\"\n\
+             license = \"BSD-3-Clause\"\nlicense_class = \"free\"\n\n\
+             [claims]\n\"/usr/bin/sh\" = \"dash\"\n\n\
+             [dependencies]\n\"org.gnu.glibc\" = \">= 2.44\"\n\n\
+             [provides]\n\"sh\" = \"1\"\n\n\
+             [requires]\n\"libc.so.6\" = \">= 2.34\"\n\"sh\" = \"\"\n\n[files]\n"
+        ),
+        "{manifest}"
+    );
+}
+
+#[test]
+fn malformed_metadata_is_a_usage_error() {
+    for (args, message) in [
+        (
+            vec!["--depends", "org.gnu.glibc", ">= 2.44,"],
+            "--depends org.gnu.glibc: constraint '>= 2.44,' has an empty expression",
+        ),
+        (
+            vec!["--depends", "sh", ""],
+            "dependencies: invalid package name 'sh': ",
+        ),
+        (
+            vec!["--requires", "a", ""],
+            "requires: invalid capability 'a': ",
+        ),
+        (
+            vec!["--provides", "sh", "1.0-0"],
+            "--provides sh: revision in '1.0-0' must be a positive integer",
+        ),
+        (
+            vec!["--claims", "usr/bin/sh", "dash"],
+            "claims: \"usr/bin/sh\": not a normal absolute path",
+        ),
+        (
+            vec!["--requires", "sh", "", "--requires", "sh", ">= 1"],
+            "--requires sh: given more than once",
+        ),
+        (
+            vec!["--depends", "org.gnu.glibc", "--requires", "sh", ""],
+            "2 values required for '--depends <name> <constraint>' but 1 was provided",
+        ),
+        (
+            vec!["--license-class", "gratis"],
+            "invalid license class 'gratis': ",
+        ),
+        (
+            vec!["--homepage", "ftp://example.org"],
+            "homepage: 'ftp://example.org' is not an http or https URL",
+        ),
+    ] {
+        let content = content_dir();
+        let store = tempfile::tempdir().unwrap();
+        let mut all = vec![
+            "pack",
+            "dev.peios.hello@1.0-1",
+            path(content.path()),
+            "--artifact-dir",
+            path(store.path()),
+        ];
+        all.extend(&args);
+        let output = ppk(&all);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(
+            stderr(&output).starts_with(&format!("ppk: {message}")),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert_eq!(fs::read_dir(store.path()).unwrap().count(), 0);
+    }
 }
 
 #[test]
@@ -430,7 +548,7 @@ fn unknown_option_is_a_usage_error() {
 
 #[test]
 fn missing_path_is_a_usage_error() {
-    let output = ppk(&["pack", "dev.peios.hello@1.0"]);
+    let output = ppk(&["pack", "dev.peios.hello@1.0-1"]);
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         stderr(&output),
@@ -530,7 +648,7 @@ fn failure_is_one_line_without_an_os_error_number() {
     let missing = store.path().join("missing");
     let output = ppk(&[
         "pack",
-        "dev.peios.hello@1.0",
+        "dev.peios.hello@1.0-1",
         path(&missing),
         "--artifact-dir",
         path(store.path()),
@@ -550,7 +668,7 @@ fn an_os_error_number_is_removed_from_the_middle_of_a_message() {
     let artifacts = dir.path().join("artifacts");
     let packed = ppk(&[
         "pack",
-        "dev.peios.hello@1.0",
+        "dev.peios.hello@1.0-1",
         path(content.path()),
         "--artifact-dir",
         path(&artifacts),
@@ -561,7 +679,7 @@ fn an_os_error_number_is_removed_from_the_middle_of_a_message() {
     let output = ppk(&[
         "compose-env",
         "-p",
-        "dev.peios.hello@1.0",
+        "dev.peios.hello@1.0-1",
         "--artifact-dir",
         path(&artifacts),
         "--out",
@@ -585,7 +703,7 @@ fn replacing_a_packed_version_fails() {
     let pack = |content: &Path| {
         ppk(&[
             "pack",
-            "dev.peios.hello@1.0?arch=noarch",
+            "dev.peios.hello@1.0-1?arch=noarch",
             path(content),
             "--artifact-dir",
             path(store.path()),
@@ -598,7 +716,7 @@ fn replacing_a_packed_version_fails() {
     assert_eq!(output.status.code(), Some(1));
     let message = stderr(&output);
     assert!(
-        message.starts_with("ppk: dev.peios.hello@1.0?arch=noarch: already packed as sha256:"),
+        message.starts_with("ppk: dev.peios.hello@1.0-1?arch=noarch: already packed as sha256:"),
         "{message}"
     );
     assert_eq!(message.lines().count(), 1, "{message}");

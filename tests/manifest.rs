@@ -1,7 +1,7 @@
-use ppk::{Entry, Identity, Manifest, PackageId, parse_manifest, render_manifest};
+use ppk::{Entry, Identity, Manifest, Metadata, PackageId, parse_manifest, render_manifest};
 
 fn hello() -> PackageId {
-    PackageId::new("dev.peios.hello", "1.0", "x86_64").unwrap()
+    PackageId::new("dev.peios.hello", "1.0-1", "x86_64").unwrap()
 }
 
 fn hex(content: &[u8]) -> String {
@@ -30,11 +30,12 @@ fn a_rendered_manifest_parses_back() {
     ];
     let mut sorted = entries.clone();
     sorted.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
-    let text = render_manifest(&hello(), &sorted);
+    let text = render_manifest(&hello(), &Metadata::default(), &sorted);
     assert_eq!(
         parse_manifest(text.as_bytes()).unwrap(),
         Manifest {
             id: hello(),
+            metadata: Metadata::default(),
             entries: sorted,
         }
     );
@@ -44,6 +45,7 @@ fn a_rendered_manifest_parses_back() {
 fn any_other_spelling_is_refused() {
     let canonical = render_manifest(
         &hello(),
+        &Metadata::default(),
         &[
             (
                 "a",
@@ -69,7 +71,11 @@ fn any_other_spelling_is_refused() {
 
 #[test]
 fn unsorted_entries_are_refused() {
-    let unsorted = render_manifest(&hello(), &[("b", Entry::Dir), ("a", Entry::Dir)]);
+    let unsorted = render_manifest(
+        &hello(),
+        &Metadata::default(),
+        &[("b", Entry::Dir), ("a", Entry::Dir)],
+    );
     assert_eq!(problem(&unsorted), "not in canonical form");
 }
 
@@ -77,7 +83,7 @@ fn unsorted_entries_are_refused() {
 fn exec_false_is_not_canonical() {
     let text = format!(
         "{}\"a\" = {{ blob = \"sha256:{}\", exec = false }}\n",
-        render_manifest::<&str>(&hello(), &[]),
+        render_manifest::<&str>(&hello(), &Metadata::default(), &[]),
         hex(b"a")
     );
     assert_eq!(problem(&text), "not in canonical form");
@@ -96,7 +102,7 @@ fn unsafe_paths_are_refused() {
         "a/",
         "nul\0",
     ] {
-        let text = render_manifest(&hello(), &[(path, Entry::Dir)]);
+        let text = render_manifest(&hello(), &Metadata::default(), &[(path, Entry::Dir)]);
         assert!(
             problem(&text).ends_with(": not a safe relative path"),
             "{path:?}: {}",
@@ -107,7 +113,7 @@ fn unsafe_paths_are_refused() {
 
 #[test]
 fn blob_values_must_be_identities() {
-    let base = render_manifest::<&str>(&hello(), &[]);
+    let base = render_manifest::<&str>(&hello(), &Metadata::default(), &[]);
     for value in [
         "sha256:../../etc/passwd",
         "sha256:ABC",
@@ -124,8 +130,9 @@ fn blob_values_must_be_identities() {
 
 #[test]
 fn the_header_must_name_a_valid_package() {
-    let text = render_manifest::<&str>(&hello(), &[]).replace("1.0", "../1.0");
-    assert!(problem(&text).starts_with("invalid version '../1.0'"));
+    let text =
+        render_manifest::<&str>(&hello(), &Metadata::default(), &[]).replace("1.0-1", "../1.0-1");
+    assert!(problem(&text).starts_with("invalid version '../1.0-1'"));
     assert_eq!(problem("[files]\n"), "missing the string 'name'");
     assert!(problem("not = = toml").starts_with("not valid TOML: "));
     assert_eq!(

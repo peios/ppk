@@ -34,14 +34,14 @@ versioned package. For what a package contains, see
 3. Run `ppk pack` with the package's identifier and the directory:
 
    ```sh
-   ppk pack 'dev.peios.hello@1.0?arch=noarch' hello --artifact-dir artifacts
+   ppk pack 'dev.peios.hello@1.0-1?arch=noarch' hello --artifact-dir artifacts
    ```
 
    Quote the identifier, because some shells treat `?` as a wildcard.
    `ppk` prints the package's identity:
 
    ```text
-   sha256:044f86f4999c008042cb80ea46ee1f468457702cfe8426c7edf50997f79e420c
+   sha256:73a137f612f39b8ee1ffcbb7f51b7b9dc370b8662323d72b9e6b73b9d54413f8
    ```
 
 ## Check the result
@@ -50,13 +50,13 @@ Read the package's ref, which is named by its name, version, and
 architecture:
 
 ```sh
-cat artifacts/refs/dev.peios.hello/1.0/noarch
+cat artifacts/refs/dev.peios.hello/1.0-1/noarch
 ```
 
 It holds the identity that `ppk pack` printed:
 
 ```text
-sha256:044f86f4999c008042cb80ea46ee1f468457702cfe8426c7edf50997f79e420c
+sha256:73a137f612f39b8ee1ffcbb7f51b7b9dc370b8662323d72b9e6b73b9d54413f8
 ```
 
 The manifest is `artifacts/manifests/sha256/` followed by the same hash.
@@ -68,7 +68,7 @@ If the content is built for a particular processor, name its architecture
 in the identifier:
 
 ```sh
-ppk pack 'dev.peios.hello@1.0?arch=aarch64' hello-aarch64 --artifact-dir artifacts
+ppk pack 'dev.peios.hello@1.0-1?arch=aarch64' hello-aarch64 --artifact-dir artifacts
 ```
 
 Without `?arch=`, `ppk` uses the architecture it was built for itself. The
@@ -80,10 +80,10 @@ A packed version never changes. If you pack the same version again with
 different files, `ppk` refuses and exits with status 1:
 
 ```text
-ppk: dev.peios.hello@1.0?arch=noarch: already packed as sha256:044f86f4999c008042cb80ea46ee1f468457702cfe8426c7edf50997f79e420c; a packed version cannot be replaced
+ppk: dev.peios.hello@1.0-1?arch=noarch: already packed as sha256:73a137f612f39b8ee1ffcbb7f51b7b9dc370b8662323d72b9e6b73b9d54413f8; a packed version cannot be replaced
 ```
 
 Pack the changed files as a new version instead, such as
-`dev.peios.hello@1.1?arch=noarch`. Only the files that changed are stored
+`dev.peios.hello@1.1-1?arch=noarch`. Only the files that changed are stored
 again. Packing a version again with identical files succeeds and prints the
 same identity.

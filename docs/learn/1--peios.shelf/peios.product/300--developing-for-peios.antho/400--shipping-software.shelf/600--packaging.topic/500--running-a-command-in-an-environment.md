@@ -26,7 +26,7 @@ Run `ppk run` with the packages after `-p`, then `--`, then the command
 and its arguments:
 
 ```sh
-ppk run -p 'dev.peios.hello@1.0?arch=noarch' -- /usr/bin/hello
+ppk run -p 'dev.peios.hello@1.0-1?arch=noarch' -- /usr/bin/hello
 ```
 
 One `-p` takes every package after it. To use the packages of an
@@ -35,7 +35,7 @@ to its own. A run keeps the rest of the filesystem as it is, so a
 profile's links and directories don't apply:
 
 ```sh
-ppk run env.toml -p dev.peios.extra@1.0 -- /usr/bin/hello
+ppk run env.toml -p dev.peios.extra@1.0-1 -- /usr/bin/hello
 ```
 
 The command runs with the packages at `/usr`:

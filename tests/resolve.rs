@@ -134,12 +134,18 @@ fn the_newest_version_that_satisfies_is_chosen() {
 #[test]
 fn dependencies_and_requirements_are_followed_into_a_profile() {
     let dirs = Dirs::new();
-    dirs.pack("org.gnu.glibc@2.40-1", &provides(&[("libc.so.6", "2.40")]));
-    dirs.pack("org.gnu.glibc@2.44-1", &provides(&[("libc.so.6", "2.44")]));
+    dirs.pack(
+        "org.example.libexample@2.40-1",
+        &provides(&[("libexample.so.1", "2.40")]),
+    );
+    dirs.pack(
+        "org.example.libexample@2.44-1",
+        &provides(&[("libexample.so.1", "2.44")]),
+    );
     dirs.pack(
         "org.git.kernel.dash@0.5.13-1",
         &Metadata {
-            requires: table(&[("libc.so.6", ">= 2.34")]),
+            requires: table(&[("libexample.so.1", ">= 2.34")]),
             provides: provides(&[("sh", "")]).provides,
             ..Metadata::default()
         },
@@ -147,7 +153,7 @@ fn dependencies_and_requirements_are_followed_into_a_profile() {
     dirs.pack(
         "org.gnu.make@4.4-1",
         &Metadata {
-            dependencies: table(&[("org.gnu.glibc", ">= 2.34")]),
+            dependencies: table(&[("org.example.libexample", ">= 2.34")]),
             requires: table(&[("sh", "")]),
             ..Metadata::default()
         },
@@ -167,12 +173,12 @@ fn dependencies_and_requirements_are_followed_into_a_profile() {
         chosen,
         [
             (
-                "org.git.kernel.dash@0.5.13-1".to_owned(),
-                "org.gnu.make@4.4-1 requires sh".to_owned()
+                "org.example.libexample@2.44-1".to_owned(),
+                "org.gnu.make@4.4-1 depends on org.example.libexample >= 2.34".to_owned()
             ),
             (
-                "org.gnu.glibc@2.44-1".to_owned(),
-                "org.gnu.make@4.4-1 depends on org.gnu.glibc >= 2.34".to_owned()
+                "org.git.kernel.dash@0.5.13-1".to_owned(),
+                "org.gnu.make@4.4-1 requires sh".to_owned()
             ),
             (
                 "org.gnu.make@4.4-1".to_owned(),
@@ -188,8 +194,8 @@ fn dependencies_and_requirements_are_followed_into_a_profile() {
     );
     assert_eq!(
         resolution.profile().render().unwrap(),
-        "arch = \"x86_64\"\n\n[packages]\n\"org.git.kernel.dash\" = \"0.5.13-1\"\n\
-         \"org.gnu.glibc\" = \"2.44-1\"\n\"org.gnu.make\" = \"4.4-1\"\n"
+        "arch = \"x86_64\"\n\n[packages]\n\"org.example.libexample\" = \"2.44-1\"\n\
+         \"org.git.kernel.dash\" = \"0.5.13-1\"\n\"org.gnu.make\" = \"4.4-1\"\n"
     );
 }
 
@@ -293,20 +299,26 @@ fn a_conflict_says_what_conflicted_and_whether_backtracking_would_help() {
 #[test]
 fn a_capability_a_choice_provides_at_another_version_conflicts() {
     let dirs = Dirs::new();
-    dirs.pack("org.gnu.glibc@2.34-1", &provides(&[("libc.so.6", "2.34")]));
-    dirs.pack("org.gnu.glibc@2.44-1", &provides(&[("libc.so.6", "2.44")]));
+    dirs.pack(
+        "org.example.libexample@2.34-1",
+        &provides(&[("libexample.so.1", "2.34")]),
+    );
+    dirs.pack(
+        "org.example.libexample@2.44-1",
+        &provides(&[("libexample.so.1", "2.44")]),
+    );
     dirs.pack(
         "org.example.new@1.0-1",
-        &requires(&[("libc.so.6", ">= 2.40")]),
+        &requires(&[("libexample.so.1", ">= 2.40")]),
     );
     // The request pins glibc, and new's floor then conflicts with it.
     assert_eq!(
         dirs.error(&[
-            package("org.gnu.glibc = 2.34-1"),
+            package("org.example.libexample = 2.34-1"),
             package("org.example.new")
         ]),
-        "org.example.new@1.0-1 requires libc.so.6 >= 2.40, but org.gnu.glibc@2.34-1 was chosen \
-         for the request for org.gnu.glibc = 2.34-1; no version of org.gnu.glibc satisfies both"
+        "org.example.new@1.0-1 requires libexample.so.1 >= 2.40, but org.example.libexample@2.34-1 was chosen \
+         for the request for org.example.libexample = 2.34-1; no version of org.example.libexample satisfies both"
     );
 
     // A chosen package that provides it in another version only conflicts

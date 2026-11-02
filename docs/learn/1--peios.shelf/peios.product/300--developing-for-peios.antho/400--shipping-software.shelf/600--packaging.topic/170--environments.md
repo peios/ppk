@@ -3,7 +3,8 @@ title: Environments
 type: concept
 description: What an environment is, covering the closure mounted at /usr,
   what stays as it was, how an environment is kept to the processes inside
-  it, how a profile describes one, and who can create one.
+  it, how a profile and its fragments describe one, and who can create
+  one.
 related:
   - peios/packaging/closures
   - peios/packaging/running-a-command-in-an-environment
@@ -68,16 +69,36 @@ dirs = ["proc", "sys", "tmp"]
 
 `packages` maps each package's name to its exact version, so a profile
 holds one version of each package and always describes the same
-environment. Whatever chooses the versions, such as a tool that picks the
-newest, does so when it writes the profile. `symlinks` and `dirs` are what
-the root holds outside `/usr`, where a leading `:` in a link's target
+environment. Whatever chooses the versions does so when it writes the
+profile, as
+[`ppk resolve`](~peios/packaging/choosing-packages-for-an-environment)
+does from the packages and capabilities you need. `symlinks` and `dirs`
+are what the root holds outside `/usr`, besides any links its packages
+claim there, and a leading `:` in a link's target
 stands for `usr`. `include_artifacts = true` gives a composed root its
 packages in an artifact directory of its own. Every key is optional.
 `arch` sets the architecture of every package, the one `ppk` was built for
 by default.
 
-`ppk compose-env` and `ppk run` both take a profile. A run keeps the rest
-of the filesystem as it is, so it uses only the profile's packages.
+A profile can `include` other profiles, called fragments, so that what
+several environments share, such as the layout of a root, is written once:
+
+```toml
+include = ["root-layout.toml"]
+
+[packages]
+"net.busybox.busybox" = "1.37.0-1"
+```
+
+Each path is relative to the file that names it, and a fragment can include
+others. The profile holds everything its fragments hold. Where two of them
+hold the same thing, it's held once, and where they disagree, as with two
+versions of one package or two targets for one link, it's an error naming
+both files. Nothing decides which one wins: you change one of them.
+
+`ppk compose-env` and `ppk run` both take profiles, and several given
+together merge as fragments do. A run keeps the rest of the filesystem as
+it is, so it uses only the profiles' packages.
 
 ## Who can create one
 

@@ -36,9 +36,9 @@
 //!
 //! A manifest can also record [`Metadata`]: descriptive fields after the arch,
 //! and `[claims]`, `[dependencies]`, `[provides]` and `[requires]` tables
-//! before `[files]`, each left out when empty. ppk checks and records these,
-//! and acts on none of them yet: nothing resolves dependencies or
-//! requirements, and composing creates no claimed links.
+//! before `[files]`, each left out when empty. Composing creates the links a
+//! package claims, and [`resolve`] chooses the packages that dependencies and
+//! requirements need, for a [`Profile`].
 
 mod access;
 mod closure;
@@ -52,6 +52,7 @@ mod manifest;
 mod metadata;
 mod pack;
 mod profile;
+mod resolve;
 mod store;
 mod version;
 
@@ -65,6 +66,7 @@ pub use manifest::{Entry, Manifest, parse_manifest, render_manifest};
 pub use metadata::{LicenseClass, Metadata};
 pub use pack::{Packed, pack, pack_replacing, pack_replacing_with, pack_with};
 pub use profile::Profile;
+pub use resolve::{Request, Resolution, Resolved, Wanted, resolve};
 pub use store::{packed, prepare_artifact_dir, versions};
 pub use version::{Constraint, Operator, Version};
 

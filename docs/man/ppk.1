@@ -44,7 +44,7 @@ ppk \- create and manage Peios packages
 .IR package ...
 .br
 .B ppk compose\-env
-.RI [ profile ]
+.RI [ profile ...]
 .RB [ \-\-artifact\-dir
 .IR dir ]
 .RB [ \-\-symlink
@@ -59,7 +59,7 @@ ppk \- create and manage Peios packages
 .I dir
 .br
 .B ppk run
-.RI [ profile ]
+.RI [ profile ...]
 .RB [ \-\-artifact\-dir
 .IR dir ]
 .RB [ \-\-closure\-dir
@@ -70,6 +70,18 @@ ppk \- create and manage Peios packages
 .RB [ \-\-
 .I command
 .RI [ argument ...]]
+.br
+.B ppk resolve
+.RB [ \-p
+.IR request ...]
+.RB [ \-c
+.IR request ...]
+.RB [ \-\-arch
+.IR arch ]
+.RB [ \-\-out
+.IR file ]
+.B \-\-from
+.IR dir ...
 .br
 .B ppk help
 .RI [ command ]
@@ -198,6 +210,7 @@ and
 .PP
 .RS
 .EX
+include = ["layout.toml"]
 dirs = ["proc", "sys", "tmp"]
 
 [packages]
@@ -231,6 +244,27 @@ gives a composed root its packages as
 .B \-\-include\-artifacts
 does.
 Every key is optional, and any other key is an error.
+.PP
+.B include
+lists other profiles, called fragments, whose contents the profile holds as
+well, such as a root layout that several profiles share.
+Each path is relative to the directory of the file that names it, and a
+fragment can include others.
+A fragment's
+.B arch
+is for its own packages.
+What two of them hold alike is held once.
+It is an error for them to disagree: to give two versions of one package,
+packages for two architectures, two targets for one link, or a link and a
+directory at one path, and the error names both files.
+.B include_artifacts
+is true if any of them says so.
+A profile that includes itself, directly or through others, is an error.
+Several profiles given to
+.B compose\-env
+or
+.B run
+are merged in the same way.
 .PP
 The packages named with
 .B \-p
@@ -297,12 +331,11 @@ or none.
 A claim is a link, at an absolute path, that the package provides besides
 its files, which are all under
 .IR /usr .
+Composing creates it: one package in an environment provides each claimed
+path, so two that claim one path can't be composed together.
 .PP
-.B ppk
-records and checks these, but nothing in
-.B ppk
-acts on them yet: no command chooses packages to satisfy dependencies, and
-composing does not create claimed links.
+.B ppk resolve
+chooses packages that satisfy them, and writes their profile.
 .SH DERIVATION
 .B ppk pack
 also reads each ELF object among the files, and adds to the manifest what it
@@ -462,7 +495,12 @@ Print the closure's identity on standard output.
 Every file in the tree is a hard link to its blob, in the form its entry
 needs, or a copy of it with
 .BR \-\-copy\-files ;
-symbolic links and directories are created in the tree.
+symbolic links and directories are created in the tree, and so is each
+link a package claims under
+.IR /usr .
+A closure is only
+.IR /usr ,
+so links claimed elsewhere are left out of it.
 The closure's manifest lists the identities of its packages, sorted and
 without duplicates, and the closure's identity is the SHA-256 hash of that
 manifest, so the order and repetition of the arguments do not matter.
@@ -472,15 +510,19 @@ complete.
 .IP
 .B ppk closure
 fails, writing nothing, if two packages give one path different entries,
-or if a path lies beneath a file or symbolic link of another package.
+if a path lies beneath a file or symbolic link of another package, if two
+packages claim one path, even with one target, if a claimed path is also in
+a package's files or lies beneath one, or if a package claims
+.I /usr
+itself.
 It fails, leaving nothing behind, if a hard link cannot be made because the
 closure directory is not on the same mount as the artifact directory, or if
 a blob it copies does not match its hash.
 .TP
-.BI compose\-env " \fR[\fPprofile\fR]\fP"
-Lay out the root of the environment that
+.BI compose\-env " \fR[\fPprofile\fR...]\fP"
+Lay out the root of the environment that the
 .I profile
-and the options describe in the new directory named by
+files and the options describe in the new directory named by
 .BR \-\-out ,
 for a tool such as an image builder to take, and print the identity of the
 packages' closure on standard output.
@@ -501,8 +543,13 @@ Nothing is written to that artifact directory.
 .IP
 What lies outside
 .I usr
-belongs to the environment, not to any package, and comes from the
-profile's
+belongs to the environment, not to any package, except a link a package
+claims there, such as
+.IR /init ,
+which the root holds because the package is in it.
+Everything else outside
+.I usr
+comes from the profile's
 .B symlinks
 and
 .BR dirs ,
@@ -525,7 +572,10 @@ place when complete.
 fails, writing nothing, if the directory already exists, if the packages
 clash as they would for
 .BR closure ,
-or if a path given lies under a symbolic link given.
+if a link claimed outside
+.I usr
+is also a link or directory of the environment, or if a path lies under a
+symbolic link given or a link claimed.
 It fails, leaving nothing behind, if a hard link cannot be made because the
 directory is not on the same mount as the artifact directory, or if a blob
 it copies does not match its hash.
@@ -535,16 +585,16 @@ or
 .B \-\-copy\-files
 if the root has no artifact directory of its own.
 .TP
-.BI run " \fR[\fPprofile\fR] [\fP" \-\- " command \fR[\fPargument\fR...]]\fP"
+.BI run " \fR[\fPprofile\fR...] [\fP" \-\- " command \fR[\fPargument\fR...]]\fP"
 Run
 .IR command ,
 or
 .I /usr/bin/sh
 when no command is given,
 in an environment: the caller's own view of the filesystem, in a mount
-namespace of its own, with the closure of the packages of
+namespace of its own, with the closure of the packages of the
 .I profile
-and
+files and
 .B \-p
 mounted at
 .IR /usr .
@@ -571,7 +621,9 @@ is looked up through
 inside the environment, unless it contains a slash.
 The default shell is the closure's own, not the caller's, so it is only
 there if one of the packages provides
-.IR bin/sh .
+.I bin/sh
+or claims
+.IR /usr/bin/sh .
 The mount stays inside the environment: nothing outside it sees the
 closure at
 .IR /usr ,
@@ -579,6 +631,57 @@ and the command's children share the environment.
 .IP
 .I /usr
 must already exist; an environment replaces it rather than creating it.
+.TP
+.B resolve
+Choose an exact version of each package the requests of
+.B \-p
+and
+.B \-c
+need, from the packages for the architecture in the
+.B \-\-from
+directories, and write their profile: an
+.B arch
+and a
+.B packages
+table holding one version of each name, with nothing else, so that a
+fragment can add a layout.
+A request is a name, then optionally a constraint, as one argument:
+.B 'org.gnu.gcc >= 16'
+or
+.BR sh .
+.IP
+A dependency is on a package by its name.
+A requirement is on a capability, which a package provides by its own name,
+at its own version, or by an entry of its
+.B provides
+table, at that entry's version; an entry with no version satisfies any
+constraint.
+.B resolve
+follows the dependencies and requirements of every package it chooses.
+.IP
+The choice is greedy, and nothing chosen is reconsidered.
+Packages are settled before capabilities, at every step: the requests,
+then the dependencies of what they chose, and only when none is left, the
+first capability waiting.
+A package is chosen at the newest version that satisfies what first needs
+it.
+A capability that a package already chosen provides needs nothing more;
+otherwise the one package that provides it is chosen, at its newest
+version that does.
+.IP
+.B resolve
+fails, writing nothing, if a name has no version that satisfies what needs
+it, if no package provides a capability, or if packages of several names
+provide one, in which case a request must choose one of them by name.
+It fails if something needs a version of a package that the one already
+chosen doesn't satisfy, naming the requirement, the choice, and what it was
+chosen for, and saying whether another version would have satisfied both.
+It fails if the version it would choose is spelt two ways, as
+.B 1.0~a\-1
+and
+.B 1.0~alpha\-1
+are, since no constraint can tell them apart, or if one package is
+different in two directories.
 .TP
 .BI help " \fR[\fPcommand\fR]\fP"
 Print help for
@@ -594,8 +697,27 @@ and
 add every
 .I package
 that follows, up to the next option, to the environment.
+For
+.BR resolve ,
+request each package that follows, with its constraint.
 Can be given more than once.
-A profile must come before it, since what follows it is read as packages.
+.TP
+.BR \-c ", " \-\-capability " \fIrequest\fR..."
+For
+.BR resolve ,
+request a package providing each capability that follows, with its
+constraint.
+Can be given more than once.
+.TP
+.BI \-\-arch " arch"
+For
+.BR resolve ,
+choose packages for
+.IR arch ,
+rather than for the architecture
+.B ppk
+was built for.
+Profiles must come before it, since what follows it is read as packages.
 .TP
 .BI \-\-artifact\-dir " dir"
 Store packages in
@@ -729,15 +851,25 @@ For
 .BR fetch ,
 copy from the artifact directory
 .IR dir .
+For
+.BR resolve ,
+choose from the packages in every artifact directory
+.I dir
+that follows, up to the next option.
 Required.
 .TP
-.BI \-\-out " dir"
+.BI \-\-out " path"
 For
 .BR compose\-env ,
 create the root at
-.IR dir ,
+.IR path ,
 which must not exist.
 Required.
+For
+.BR resolve ,
+write the profile to the file
+.IR path ,
+replacing it, rather than to standard output.
 .TP
 .BI \-\-symlink " link"
 For
@@ -842,8 +974,10 @@ Success, including printing help or the version.
 .B 1
 Failure, such as an unreadable file, an unwritable artifact directory, a
 version that is already present with different contents, a package that
-is missing from the source or fails a check, or, for pack, an ELF object
-that cannot be read or a written entry that
+is missing from the source or fails a check, requests that
+.B resolve
+can't satisfy, or, for pack, an ELF object that cannot be read or a written
+entry that
 .B DERIVATION
 refuses.
 .TP
@@ -960,6 +1094,14 @@ directories.
 The same, with
 .B ppk
 added to the profile's packages.
+.TP
+.B ppk resolve \-p org.gnu.make 'org.gnu.gcc >= 16' \-c sh \-\-from stage1 \-\-out root.toml
+Choose make, a gcc of version 16 or later, a package providing
+.BR sh ,
+and everything they need, from the artifact directory
+.IR stage1 ,
+and write their profile to
+.IR root.toml .
 .TP
 .B ppk run \-p net.busybox.busybox@1.37.0\-1
 Start the shell that the busybox package provides, in an environment

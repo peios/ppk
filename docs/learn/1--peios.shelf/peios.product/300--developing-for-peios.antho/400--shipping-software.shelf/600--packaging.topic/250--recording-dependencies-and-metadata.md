@@ -193,11 +193,17 @@ The full rules for each value are in `ppk(1)`.
 
 The dependencies, requirements, capabilities and claims you record are part
 of the package and its identity, and `ppk` checks them when it reads a
-manifest. `ppk` doesn't act on them yet: no command chooses packages to
-satisfy them, and composing an environment doesn't create claimed links.
-Name every package an environment needs, as
-[Composing an Environment](~peios/packaging/composing-an-environment)
-describes.
+manifest.
+
+- `ppk resolve` follows dependencies and requirements to choose the
+  packages an environment needs, as
+  [Choosing Packages for an Environment](~peios/packaging/choosing-packages-for-an-environment)
+  describes. A requirement is met by a package of that name or one that
+  provides the capability; a dependency only by a package of that name.
+- Composing creates each claimed link: under `/usr` in the closure, and
+  elsewhere, such as `/init`, in a composed root. Two packages in one
+  environment can't claim the same path. A closure is only `/usr`, so
+  `ppk run` creates only the links claimed there.
 
 Changing any of them changes the package, so it needs a new version, as a
 change to its files does.

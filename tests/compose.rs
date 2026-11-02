@@ -38,6 +38,25 @@ impl Store {
         ppk::pack(&id(package), content.path(), &self.artifacts()).unwrap();
     }
 
+    /// Pack `files` as `package`, claiming each (path, target) of `claims`.
+    fn pack_claiming(&self, package: &str, files: &[(&str, &[u8], u32)], claims: &[(&str, &str)]) {
+        let content = tempfile::tempdir().unwrap();
+        for (path, bytes, mode) in files {
+            let path = content.path().join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, bytes).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(*mode)).unwrap();
+        }
+        let metadata = ppk::Metadata {
+            claims: claims
+                .iter()
+                .map(|(path, target)| (path.to_string(), target.to_string()))
+                .collect(),
+            ..ppk::Metadata::default()
+        };
+        ppk::pack_with(&id(package), &metadata, content.path(), &self.artifacts()).unwrap();
+    }
+
     fn compose(&self, packages: &[&str], extras: &Extras) -> anyhow::Result<ppk::Composed> {
         let ids: Vec<PackageId> = packages.iter().map(|p| id(p)).collect();
         ppk::compose_env(&ids, &self.artifacts(), &self.out(), extras)
@@ -508,5 +527,179 @@ fn copied_files_can_come_from_the_roots_own_artifacts() {
     assert_ne!(
         fs::metadata(store.out().join("usr/a")).unwrap().ino(),
         fs::metadata(blob).unwrap().ino()
+    );
+}
+
+const DASH: &str = "org.git.kernel.dash@0.5.13.5-1?arch=x86_64";
+const BUSYBOX: &str = "net.busybox.busybox@1.37.0-1?arch=x86_64";
+
+#[test]
+fn claimed_links_are_created_in_usr_and_in_the_root() {
+    let store = Store::new();
+    store.pack_claiming(
+        DASH,
+        &[("bin/dash", b"dash", 0o755)],
+        &[("/usr/bin/sh", "dash"), ("/init", "usr/bin/dash")],
+    );
+    store.compose(&[DASH], &Extras::default()).unwrap();
+    let out = store.out();
+    assert_eq!(
+        fs::read_link(out.join("usr/bin/sh")).unwrap(),
+        Path::new("dash")
+    );
+    assert_eq!(
+        fs::read_link(out.join("init")).unwrap(),
+        Path::new("usr/bin/dash")
+    );
+    assert_eq!(fs::read(out.join("init")).unwrap(), b"dash");
+
+    // A closure is only usr, so it has the claim under usr and no other.
+    let closures = store.dir.path().join("closures");
+    let closed = ppk::closure(&[id(DASH)], &store.artifacts(), &closures).unwrap();
+    let tree = closed.tree_path;
+    assert_eq!(
+        fs::read_link(tree.join("bin/sh")).unwrap(),
+        Path::new("dash")
+    );
+    let names: Vec<_> = fs::read_dir(&tree)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["bin"]);
+}
+
+#[test]
+fn a_path_claimed_twice_is_refused_naming_both() {
+    let store = Store::new();
+    store.pack_claiming(
+        DASH,
+        &[("bin/dash", b"dash", 0o755)],
+        &[("/usr/bin/sh", "dash")],
+    );
+    // Even with the same target: a claim says who provides the name.
+    store.pack_claiming(
+        BUSYBOX,
+        &[
+            ("bin/busybox", b"busybox", 0o755),
+            ("bin/dash", b"dash", 0o755),
+        ],
+        &[("/usr/bin/sh", "dash"), ("/init", "usr/bin/busybox")],
+    );
+    let err = format!(
+        "{:#}",
+        store
+            .compose(&[DASH, BUSYBOX], &Extras::default())
+            .unwrap_err()
+    );
+    // In the order of the packages' identities, as everything in a merge.
+    let one = format!("\"/usr/bin/sh\": claimed by both {DASH} and {BUSYBOX}");
+    let other = format!("\"/usr/bin/sh\": claimed by both {BUSYBOX} and {DASH}");
+    assert!(err == one || err == other, "{err}");
+    let closures = store.dir.path().join("closures");
+    let err = ppk::closure(&[id(BUSYBOX), id(DASH)], &store.artifacts(), &closures).unwrap_err();
+    assert!(format!("{err:#}").contains("claimed by both"), "{err:#}");
+    assert!(store.beside_artifacts().is_empty());
+}
+
+#[test]
+fn a_claim_that_collides_with_files_is_refused() {
+    for (files, claims, expected) in [
+        (
+            &[("bin/sh", &b"sh"[..], 0o755)][..],
+            &[("/usr/bin/sh", "dash")][..],
+            format!("\"/usr/bin/sh\": claimed by {DASH}, but in the files of {DASH}"),
+        ),
+        (
+            &[("bin/sh/x", &b"x"[..], 0o644)][..],
+            &[("/usr/bin/sh", "dash")][..],
+            format!("\"bin/sh/x\": in {DASH}, but \"bin/sh\" is a link claimed by {DASH}"),
+        ),
+        (
+            &[("bin", &b"bin"[..], 0o644)][..],
+            &[("/usr/bin/sh", "dash")][..],
+            format!("\"bin/sh\": claimed by {DASH}, but \"bin\" is a file or symlink in {DASH}"),
+        ),
+        (
+            &[("bin/dash", &b"dash"[..], 0o755)][..],
+            &[("/usr/bin/sh", "dash"), ("/usr/bin/sh/x", "dash")][..],
+            format!("\"bin/sh/x\": claimed by {DASH}, but \"bin/sh\" is a link claimed by {DASH}"),
+        ),
+        (
+            &[("bin/dash", &b"dash"[..], 0o755)][..],
+            &[("/usr", "dash")][..],
+            format!("\"/usr\": claimed by {DASH}, but is usr itself"),
+        ),
+    ] {
+        let store = Store::new();
+        store.pack_claiming(DASH, files, claims);
+        let err = store.compose(&[DASH], &Extras::default()).unwrap_err();
+        assert_eq!(format!("{err:#}"), expected);
+        assert!(store.beside_artifacts().is_empty());
+    }
+}
+
+#[test]
+fn a_claim_outside_usr_that_collides_with_the_environment_is_refused() {
+    let claims = [
+        ("/init", "usr/bin/dash"),
+        ("/sbin/registryd", "../usr/bin/dash"),
+    ];
+    for (extras, expected) in [
+        (
+            Extras {
+                symlinks: symlinks(&["init::bin/busybox"]),
+                ..Extras::default()
+            },
+            format!("\"init\": claimed by {DASH}, but the environment links it"),
+        ),
+        (
+            Extras {
+                dirs: dirs(&["init"]),
+                ..Extras::default()
+            },
+            format!("\"init\": claimed by {DASH}, but the environment makes it a directory"),
+        ),
+        (
+            Extras {
+                symlinks: symlinks(&["sbin::sbin"]),
+                ..Extras::default()
+            },
+            "\"sbin/registryd\": under \"sbin\", which is a symlink".to_owned(),
+        ),
+        (
+            Extras {
+                dirs: dirs(&["init/x"]),
+                ..Extras::default()
+            },
+            format!("\"init/x\": under \"init\", which is a link claimed by {DASH}"),
+        ),
+    ] {
+        let store = Store::new();
+        store.pack_claiming(DASH, &[("bin/dash", b"dash", 0o755)], &claims);
+        let err = store.compose(&[DASH], &extras).unwrap_err();
+        assert_eq!(format!("{err:#}"), expected);
+        assert!(store.beside_artifacts().is_empty());
+    }
+
+    let store = Store::new();
+    store.pack_claiming(
+        DASH,
+        &[("bin/dash", b"dash", 0o755)],
+        &[("/system/artifacts/x", "y")],
+    );
+    let extras = Extras {
+        artifacts: RootArtifacts::Include,
+        ..Extras::default()
+    };
+    let err = store.compose(&[DASH], &extras).unwrap_err();
+    assert_eq!(
+        format!("{err:#}"),
+        "\"system/artifacts/x\": inside system/artifacts, which holds the packages"
+    );
+    // Without an artifact directory of its own, the root has room for it.
+    store.compose(&[DASH], &Extras::default()).unwrap();
+    assert_eq!(
+        fs::read_link(store.out().join("system/artifacts/x")).unwrap(),
+        Path::new("y")
     );
 }

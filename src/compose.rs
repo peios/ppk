@@ -5,6 +5,8 @@
 //! blobs or copies of them. What lies outside `/usr` belongs to the
 //! environment, not to any package, so it is given separately: symlinks,
 //! empty directories, and optionally a store holding the packages themselves.
+//! The one exception is a link a package claims there, such as `/init`,
+//! which the root holds because the package is in it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, Permissions};
@@ -134,13 +136,15 @@ pub struct Extras {
 }
 
 /// Compose `packages`, each already in `artifact_dir`, into a new root at
-/// `out`: their closure as `usr`, and `extras` around it.
+/// `out`: their closure as `usr`, the links they claim outside it, and
+/// `extras` around it.
 ///
 /// Nothing is written to the store; the closure is built in `out` itself.
 /// Everything is checked before anything is written: the packages merge as
-/// for a closure, no extra lies under an extra symlink, and `out` must not
-/// exist. The root is built in a temporary directory beside `out` and
-/// renamed into place, so `out` is complete if it exists. `out` must be on
+/// for a closure, a link claimed outside `usr` is not also an extra, nothing
+/// lies under an extra symlink or a claimed link, and `out` must not exist.
+/// The root is built in a temporary directory beside `out` and renamed into
+/// place, so `out` is complete if it exists. `out` must be on
 /// the same mount as `artifact_dir` wherever a file is hardlinked from it:
 /// unless `extras` copies the packages into the root, or copies `usr`'s files
 /// with no artifact directory in the root.
@@ -154,7 +158,7 @@ pub fn compose_env(
     let identities = package_identities(&layout, packages, artifact_dir)?;
     let identity = Identity::of(render_closure_manifest(&identities).as_bytes());
     let merged = merge(&layout, &identities)?;
-    check_extras(extras)?;
+    check_extras(extras, &merged.root_claims)?;
     if out.symlink_metadata().is_ok() {
         bail!("{}: already exists", out.display());
     }
@@ -176,7 +180,14 @@ pub fn compose_env(
     match extras.artifacts {
         RootArtifacts::None => {}
         RootArtifacts::Include => {
-            include_artifacts(&layout, &root_store, packages, &identities, &merged, out)?;
+            include_artifacts(
+                &layout,
+                &root_store,
+                packages,
+                &identities,
+                &merged.usr,
+                out,
+            )?;
         }
         RootArtifacts::Copy => {
             for id in packages {
@@ -190,7 +201,7 @@ pub fn compose_env(
     };
     let usr = tmp.path().join(usr());
     fs::create_dir(&usr).with_context(|| format!("{}", usr.display()))?;
-    for (path, (entry, _)) in &merged {
+    for (path, (entry, _)) in &merged.usr {
         build_entry(&usr_layout, &usr, path, entry, extras.files, out)?;
     }
     for dir in &extras.dirs {
@@ -203,6 +214,13 @@ pub fn compose_env(
             fs::create_dir_all(parent).with_context(|| format!("{}", parent.display()))?;
         }
         symlink(link.target(), &dest).with_context(|| format!("{}", dest.display()))?;
+    }
+    for (path, (target, _)) in &merged.root_claims {
+        let dest = tmp.path().join(path);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("{}", parent.display()))?;
+        }
+        symlink(target, &dest).with_context(|| format!("{}", dest.display()))?;
     }
 
     fs::rename(tmp.path(), out).with_context(|| format!("{}", out.display()))?;
@@ -238,23 +256,44 @@ fn check_env_path(path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Refuse extras that clash, before anything is written. Nothing may lie
-/// under an extra symlink, so creating one never follows a link out of the
-/// root.
-fn check_extras(extras: &Extras) -> Result<()> {
-    // Each path, and whether it is a symlink.
-    let mut paths: BTreeMap<&str, bool> = BTreeMap::new();
+/// What lies at a path outside `usr`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Outside<'a> {
+    Symlink,
+    Dir,
+    /// A link claimed by this package.
+    Claim(&'a PackageId),
+}
+
+/// Refuse extras and claimed links outside `usr` that clash, before anything
+/// is written. Nothing may lie under a symlink or a claimed link, so creating
+/// one never follows a link out of the root.
+fn check_extras(extras: &Extras, claims: &BTreeMap<String, (String, PackageId)>) -> Result<()> {
+    let mut paths: BTreeMap<&str, Outside> = BTreeMap::new();
     for link in &extras.symlinks {
-        if paths.insert(link.path(), true).is_some() {
+        if paths.insert(link.path(), Outside::Symlink).is_some() {
             bail!("{}: given more than once", toml_string(link.path()));
         }
     }
     for dir in &extras.dirs {
-        if paths.insert(dir.path(), false) == Some(true) {
+        if paths.insert(dir.path(), Outside::Dir) == Some(Outside::Symlink) {
             bail!(
                 "{}: given as both a directory and a symlink",
                 toml_string(dir.path())
             );
+        }
+    }
+    for (path, (_, claimant)) in claims {
+        match paths.insert(path, Outside::Claim(claimant)) {
+            Some(Outside::Symlink) => bail!(
+                "{}: claimed by {claimant}, but the environment links it",
+                toml_string(path)
+            ),
+            Some(Outside::Dir) => bail!(
+                "{}: claimed by {claimant}, but the environment makes it a directory",
+                toml_string(path)
+            ),
+            _ => {}
         }
     }
 
@@ -262,7 +301,9 @@ fn check_extras(extras: &Extras) -> Result<()> {
     let mut checked: Vec<&str> = paths.keys().copied().collect();
     if extras.artifacts != RootArtifacts::None {
         for path in &checked {
-            if path.starts_with(&format!("{artifacts}/")) || (*path == artifacts && paths[path]) {
+            if path.starts_with(&format!("{artifacts}/"))
+                || (*path == artifacts && paths[path] != Outside::Dir)
+            {
                 bail!(
                     "{}: inside {artifacts}, which holds the packages",
                     toml_string(path)
@@ -275,12 +316,18 @@ fn check_extras(extras: &Extras) -> Result<()> {
         let mut ancestor = path;
         while let Some(slash) = ancestor.rfind('/') {
             ancestor = &ancestor[..slash];
-            if paths.get(ancestor) == Some(&true) {
-                bail!(
+            match paths.get(ancestor) {
+                Some(Outside::Symlink) => bail!(
                     "{}: under {}, which is a symlink",
                     toml_string(path),
                     toml_string(ancestor)
-                );
+                ),
+                Some(Outside::Claim(claimant)) => bail!(
+                    "{}: under {}, which is a link claimed by {claimant}",
+                    toml_string(path),
+                    toml_string(ancestor)
+                ),
+                _ => {}
             }
         }
     }

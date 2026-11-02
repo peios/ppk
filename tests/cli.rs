@@ -501,8 +501,8 @@ fn malformed_metadata_is_a_usage_error() {
 #[test]
 fn run_needs_packages() {
     for (args, missing) in [
-        (vec!["run"], "<profile> or -p <package>..."),
-        (vec!["run", "--", "true"], "<profile> or -p <package>..."),
+        (vec!["run"], "<profile>... or -p <package>..."),
+        (vec!["run", "--", "true"], "<profile>... or -p <package>..."),
     ] {
         let output = ppk(&args);
         assert_eq!(output.status.code(), Some(2), "{args:?}");
@@ -720,4 +720,147 @@ fn replacing_a_packed_version_fails() {
         "{message}"
     );
     assert_eq!(message.lines().count(), 1, "{message}");
+}
+
+/// Pack a package holding `bin/<file>`, with the options `extra`.
+fn pack_one_with(id: &str, file: &str, artifacts: &Path, extra: &[&str]) {
+    let content = tempfile::tempdir().unwrap();
+    fs::create_dir(content.path().join("bin")).unwrap();
+    fs::write(content.path().join("bin").join(file), file).unwrap();
+    let mut args = vec![
+        "pack",
+        id,
+        path(content.path()),
+        "--artifact-dir",
+        path(artifacts),
+    ];
+    args.extend_from_slice(extra);
+    let packed = ppk(&args);
+    assert_eq!(packed.status.code(), Some(0), "{}", stderr(&packed));
+}
+
+#[test]
+fn resolve_writes_a_profile_that_compose_env_lays_out_with_its_claims() {
+    let store = tempfile::tempdir().unwrap();
+    let artifacts = store.path().join("artifacts");
+    pack_one_with("org.gnu.glibc@2.40-1", "libc", &artifacts, &[]);
+    pack_one_with("org.gnu.glibc@2.44-1", "libc", &artifacts, &[]);
+    pack_one_with(
+        "org.git.kernel.dash@0.5.13-1",
+        "dash",
+        &artifacts,
+        &["--provides", "sh", "", "--claims", "/usr/bin/sh", "dash"],
+    );
+    pack_one_with(
+        "org.gnu.make@4.4-1",
+        "make",
+        &artifacts,
+        &[
+            "--depends",
+            "org.gnu.glibc",
+            ">= 2.34",
+            "--requires",
+            "sh",
+            "",
+        ],
+    );
+
+    let output = ppk(&["resolve", "-p", "org.gnu.make", "--from", path(&artifacts)]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let expected = format!(
+        "arch = \"{}\"\n\n[packages]\n\"org.git.kernel.dash\" = \"0.5.13-1\"\n\
+         \"org.gnu.glibc\" = \"2.44-1\"\n\"org.gnu.make\" = \"4.4-1\"\n",
+        ppk::HOST_ARCH
+    );
+    assert_eq!(stdout(&output), expected);
+
+    let profile = store.path().join("root.toml");
+    let output = ppk(&[
+        "resolve",
+        "-c",
+        "sh",
+        "-p",
+        "org.gnu.make",
+        "org.gnu.glibc < 2.44",
+        "--from",
+        path(&artifacts),
+        "--out",
+        path(&profile),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "");
+    assert_eq!(
+        fs::read_to_string(&profile).unwrap(),
+        expected.replace("2.44-1", "2.40-1")
+    );
+
+    let layout = store.path().join("layout.toml");
+    fs::write(
+        &layout,
+        "dirs = [\"tmp\"]\n\n[symlinks]\n\"bin\" = \":bin\"\n",
+    )
+    .unwrap();
+    let out = store.path().join("root");
+    let output = ppk(&[
+        "compose-env",
+        path(&profile),
+        path(&layout),
+        "--artifact-dir",
+        path(&artifacts),
+        "--out",
+        path(&out),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        fs::read_link(out.join("usr/bin/sh")).unwrap(),
+        Path::new("dash")
+    );
+    assert_eq!(fs::read_to_string(out.join("bin/sh")).unwrap(), "dash");
+    assert!(out.join("tmp").is_dir());
+}
+
+#[test]
+fn resolve_fails_on_a_conflict_and_refuses_bad_requests() {
+    let store = tempfile::tempdir().unwrap();
+    let artifacts = store.path().join("artifacts");
+    pack_one_with("org.gnu.glibc@2.44-1", "libc", &artifacts, &[]);
+    let out = store.path().join("root.toml");
+    let output = ppk(&[
+        "resolve",
+        "-p",
+        "org.gnu.glibc < 2",
+        "--from",
+        path(&artifacts),
+        "--out",
+        path(&out),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        stderr(&output),
+        "ppk: the request for org.gnu.glibc < 2, but no version satisfies it; there are 2.44-1\n"
+    );
+    assert!(!out.exists());
+
+    for (args, message) in [
+        (
+            vec!["resolve", "--from", "x"],
+            "missing -p <request>... or -c <request>...",
+        ),
+        (
+            vec!["resolve", "-p", "org.gnu.glibc"],
+            "missing option --from <dir>...",
+        ),
+        (
+            vec!["resolve", "-c", "sh >", "--from", "x"],
+            "-c: 'sh >': invalid constraint '>': invalid upstream in '': empty upstream version",
+        ),
+    ] {
+        let output = ppk(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert_eq!(
+            stderr(&output),
+            format!("ppk: {message}\nTry 'ppk --help' for more information.\n"),
+            "{args:?}"
+        );
+    }
 }

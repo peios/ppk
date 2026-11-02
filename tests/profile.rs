@@ -56,24 +56,26 @@ fn a_rendered_profile_reads_back_as_itself() {
          [symlinks]\n\"init\" = \":sbin/prelude\"\n\"x/y\" = \":bin\"\n\"etc\" = \"/run/etc\"\n",
     )
     .unwrap();
-    profile.add_packages([id("d.e.f@2?arch=aarch64")]).unwrap();
+    profile
+        .add_packages([id("d.e.f@2-1?arch=aarch64")])
+        .unwrap();
     let rendered = profile.render().unwrap();
     assert_eq!(Profile::parse(&rendered).unwrap(), profile, "{rendered}");
     assert_eq!(Profile::default().render().unwrap(), "");
 
     // A profile names one architecture.
-    profile.add_packages([id("g.h.i@3?arch=x86_64")]).unwrap();
+    profile.add_packages([id("g.h.i@3-1?arch=x86_64")]).unwrap();
     assert_eq!(
         format!("{:#}", profile.render().unwrap_err()),
-        "a.b.c@1.0-1?arch=aarch64 and g.h.i@3?arch=x86_64 are for different architectures"
+        "a.b.c@1.0-1?arch=aarch64 and g.h.i@3-1?arch=x86_64 are for different architectures"
     );
 }
 
 #[test]
 fn every_key_is_optional_and_arch_applies_to_every_package() {
     assert_eq!(Profile::parse("").unwrap(), Profile::default());
-    let profile = Profile::parse("arch = \"aarch64\"\n[packages]\n\"a.b.c\" = \"1\"\n").unwrap();
-    assert_eq!(profile.packages, [id("a.b.c@1?arch=aarch64")]);
+    let profile = Profile::parse("arch = \"aarch64\"\n[packages]\n\"a.b.c\" = \"1-1\"\n").unwrap();
+    assert_eq!(profile.packages, [id("a.b.c@1-1?arch=aarch64")]);
     assert!(!profile.include_artifacts);
     assert!(
         Profile::parse("include_artifacts = true")
@@ -120,13 +122,14 @@ fn a_malformed_profile_is_refused() {
 #[test]
 fn added_packages_and_extras_must_agree_with_the_profile() {
     let mut profile =
-        Profile::parse("[packages]\n\"a.b.c\" = \"1\"\n[symlinks]\n\"bin\" = \":bin\"\n").unwrap();
-    let held = PackageId::new("a.b.c", "1", HOST_ARCH).unwrap();
-    let other = PackageId::new("d.e.f", "2", HOST_ARCH).unwrap();
+        Profile::parse("[packages]\n\"a.b.c\" = \"1-1\"\n[symlinks]\n\"bin\" = \":bin\"\n")
+            .unwrap();
+    let held = PackageId::new("a.b.c", "1-1", HOST_ARCH).unwrap();
+    let other = PackageId::new("d.e.f", "2-1", HOST_ARCH).unwrap();
     // The same package again is added once; a new one is added.
     profile.add_packages([held.clone(), other.clone()]).unwrap();
     assert_eq!(profile.packages, [held.clone(), other]);
-    let newer = PackageId::new("a.b.c", "2", HOST_ARCH).unwrap();
+    let newer = PackageId::new("a.b.c", "2-1", HOST_ARCH).unwrap();
     assert_eq!(
         format!("{:#}", profile.add_packages([newer.clone()]).unwrap_err()),
         format!("{newer}: the environment holds {held} already")

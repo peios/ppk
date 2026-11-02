@@ -82,7 +82,8 @@ pub fn prepare_artifact_dir(artifact_dir: &Path) -> Result<()> {
 }
 
 /// The versions of the package `name` packed for `arch` in `artifact_dir`,
-/// sorted by their bytes, which is no order of versions: none is defined.
+/// oldest first, in the order of versions (PSPU 5.6). Two spellings of one
+/// version, such as `1.0~alpha-1` and `1.0~a-1`, are in byte order.
 pub fn versions(name: &str, arch: &str, artifact_dir: &Path) -> Result<Vec<String>> {
     let dir = artifact_dir.join("refs").join(name);
     let entries = match fs::read_dir(&dir) {
@@ -90,7 +91,7 @@ pub fn versions(name: &str, arch: &str, artifact_dir: &Path) -> Result<Vec<Strin
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => return Err(err).with_context(|| format!("{}", dir.display())),
     };
-    let mut versions = Vec::new();
+    let mut versions: Vec<PackageId> = Vec::new();
     for entry in entries {
         let entry = entry.with_context(|| format!("{}", dir.display()))?;
         let Some(version) = entry.file_name().to_str().map(str::to_owned) else {
@@ -101,11 +102,15 @@ pub fn versions(name: &str, arch: &str, artifact_dir: &Path) -> Result<Vec<Strin
             continue;
         };
         if packed(&id, artifact_dir)?.is_some() {
-            versions.push(version);
+            versions.push(id);
         }
     }
-    versions.sort();
-    Ok(versions)
+    versions.sort_by(|a, b| {
+        a.parsed_version()
+            .cmp(b.parsed_version())
+            .then_with(|| a.version().cmp(b.version()))
+    });
+    Ok(versions.iter().map(|id| id.version().to_owned()).collect())
 }
 
 /// The identity a ref names, or `None` if there is no ref at `path`. A ref

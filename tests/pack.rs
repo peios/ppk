@@ -22,7 +22,7 @@ fn pack_as(id: &str, input: &Path, out: &Path) -> anyhow::Result<ppk::Packed> {
 
 /// Pack `input` as dev.peios.hello 1.0 for x86_64.
 fn pack(input: &Path, out: &Path) -> anyhow::Result<ppk::Packed> {
-    pack_as("dev.peios.hello@1.0?arch=x86_64", input, out)
+    pack_as("dev.peios.hello@1.0-1?arch=x86_64", input, out)
 }
 
 fn parse(manifest: &Path) -> toml::Table {
@@ -249,10 +249,10 @@ fn name_version_and_arch_are_part_of_identity() {
     let input = tree(&[("a", b"a")]);
     let out = tempfile::tempdir().unwrap();
     let identities: Vec<String> = [
-        "dev.peios.hello@1.0?arch=x86_64",
-        "dev.peios.hello@2.0?arch=x86_64",
-        "dev.peios.goodbye@1.0?arch=x86_64",
-        "dev.peios.hello@1.0?arch=aarch64",
+        "dev.peios.hello@1.0-1?arch=x86_64",
+        "dev.peios.hello@2.0-1?arch=x86_64",
+        "dev.peios.goodbye@1.0-1?arch=x86_64",
+        "dev.peios.hello@1.0-1?arch=aarch64",
     ]
     .iter()
     .map(|id| pack_as(id, input.path(), out.path()).unwrap().identity)
@@ -306,8 +306,8 @@ fn versions_coexist_and_share_unchanged_blobs() {
     let v2 = tree(&[("bin/hello", b"v2 binary"), ("COPYING", b"license")]);
     let out = tempfile::tempdir().unwrap();
 
-    let p1 = pack_as("dev.peios.hello@1.0?arch=x86_64", v1.path(), out.path()).unwrap();
-    let p2 = pack_as("dev.peios.hello@2.0?arch=x86_64", v2.path(), out.path()).unwrap();
+    let p1 = pack_as("dev.peios.hello@1.0-1?arch=x86_64", v1.path(), out.path()).unwrap();
+    let p2 = pack_as("dev.peios.hello@2.0-1?arch=x86_64", v2.path(), out.path()).unwrap();
     assert_eq!(p1.blobs_written, 2);
     assert_eq!(p2.blobs_written, 1, "COPYING is already stored");
     assert!(p1.manifest_path.exists());
@@ -336,7 +336,7 @@ fn a_packed_version_cannot_be_replaced() {
     assert_eq!(
         err.to_string(),
         format!(
-            "dev.peios.hello@1.0?arch=x86_64: already packed as {}; \
+            "dev.peios.hello@1.0-1?arch=x86_64: already packed as {}; \
              a packed version cannot be replaced",
             original.identity
         )
@@ -352,7 +352,7 @@ fn a_packed_version_cannot_be_replaced() {
 #[test]
 fn pack_replacing_replaces_the_ref_and_keeps_the_old_manifest() {
     let out = tempfile::tempdir().unwrap();
-    let id = "dev.peios.hello@1.0?arch=x86_64".parse().unwrap();
+    let id = "dev.peios.hello@1.0-1?arch=x86_64".parse().unwrap();
     let original = pack(tree(&[("a", b"original")]).path(), out.path()).unwrap();
     let changed = tree(&[("a", b"changed")]);
     let replaced = ppk::pack_replacing(&id, changed.path(), out.path()).unwrap();
@@ -375,8 +375,8 @@ fn arches_of_one_version_coexist() {
     let x86 = tree(&[("bin/hello", b"x86 binary")]);
     let arm = tree(&[("bin/hello", b"arm binary")]);
     let out = tempfile::tempdir().unwrap();
-    let a = pack_as("dev.peios.hello@1.0?arch=x86_64", x86.path(), out.path()).unwrap();
-    let b = pack_as("dev.peios.hello@1.0?arch=aarch64", arm.path(), out.path()).unwrap();
+    let a = pack_as("dev.peios.hello@1.0-1?arch=x86_64", x86.path(), out.path()).unwrap();
+    let b = pack_as("dev.peios.hello@1.0-1?arch=aarch64", arm.path(), out.path()).unwrap();
     assert!(a.ref_path.exists());
     assert!(b.ref_path.exists());
     assert_ne!(a.ref_path, b.ref_path);
@@ -420,7 +420,7 @@ fn empty_content_gives_empty_files_table() {
     let packed = pack(input.path(), out.path()).unwrap();
     assert_eq!(
         fs::read_to_string(&packed.manifest_path).unwrap(),
-        "name = \"dev.peios.hello\"\nversion = \"1.0\"\narch = \"x86_64\"\n\n[files]\n"
+        "name = \"dev.peios.hello\"\nversion = \"1.0-1\"\narch = \"x86_64\"\n\n[files]\n"
     );
     assert_eq!(packed.entries, 0);
 }
@@ -491,12 +491,27 @@ fn any_execute_bit_marks_a_file_exec() {
 fn exec_bit_is_part_of_identity_and_selects_the_stored_form() {
     let input = tree(&[("bin/hello", b"binary")]);
     let out = tempfile::tempdir().unwrap();
-    let plain = pack_as("dev.peios.hello@1.0?arch=x86_64", input.path(), out.path()).unwrap();
+    let plain = pack_as(
+        "dev.peios.hello@1.0-1?arch=x86_64",
+        input.path(),
+        out.path(),
+    )
+    .unwrap();
     set_mode(&input.path().join("bin/hello"), 0o755);
-    let exec = pack_as("dev.peios.hello@1.1?arch=x86_64", input.path(), out.path()).unwrap();
+    let exec = pack_as(
+        "dev.peios.hello@1.1-1?arch=x86_64",
+        input.path(),
+        out.path(),
+    )
+    .unwrap();
     assert_eq!(exec.blobs_written, 1, "the executable form is stored too");
     assert_ne!(plain.identity, exec.identity);
-    let again = pack_as("dev.peios.hello@1.2?arch=x86_64", input.path(), out.path()).unwrap();
+    let again = pack_as(
+        "dev.peios.hello@1.2-1?arch=x86_64",
+        input.path(),
+        out.path(),
+    )
+    .unwrap();
     assert_eq!(again.blobs_written, 0, "each form is stored once");
 }
 
@@ -624,12 +639,12 @@ fn input_must_be_a_directory() {
 fn packed_names_the_identity_a_version_is_packed_as() {
     let input = tree(&[("a", b"a")]);
     let out = tempfile::tempdir().unwrap();
-    let id: ppk::PackageId = "dev.peios.hello@1.0?arch=x86_64".parse().unwrap();
+    let id: ppk::PackageId = "dev.peios.hello@1.0-1?arch=x86_64".parse().unwrap();
     assert_eq!(ppk::packed(&id, out.path()).unwrap(), None);
     let packed = pack(input.path(), out.path()).unwrap();
     let found = ppk::packed(&id, out.path()).unwrap().unwrap();
     assert_eq!(found.to_string(), packed.identity);
-    let other: ppk::PackageId = "dev.peios.hello@1.0?arch=aarch64".parse().unwrap();
+    let other: ppk::PackageId = "dev.peios.hello@1.0-1?arch=aarch64".parse().unwrap();
     assert_eq!(ppk::packed(&other, out.path()).unwrap(), None);
 }
 
@@ -643,19 +658,22 @@ fn versions_lists_what_is_packed_for_an_arch() {
             .is_empty()
     );
     for id in [
-        "dev.peios.hello@2.0?arch=x86_64",
-        "dev.peios.hello@1.0?arch=x86_64",
-        "dev.peios.hello@3.0?arch=aarch64",
+        "dev.peios.hello@10.0-1?arch=x86_64",
+        "dev.peios.hello@2.0-1?arch=x86_64",
+        "dev.peios.hello@2.0~rc1-1?arch=x86_64",
+        "dev.peios.hello@1.0-1?arch=x86_64",
+        "dev.peios.hello@3.0-1?arch=aarch64",
     ] {
         pack_as(id, input.path(), out.path()).unwrap();
     }
     assert_eq!(
         ppk::versions("dev.peios.hello", "x86_64", out.path()).unwrap(),
-        ["1.0", "2.0"]
+        ["1.0-1", "2.0~rc1-1", "2.0-1", "10.0-1"],
+        "in the order of versions, not of bytes"
     );
     assert_eq!(
         ppk::versions("dev.peios.hello", "aarch64", out.path()).unwrap(),
-        ["3.0"]
+        ["3.0-1"]
     );
 }
 

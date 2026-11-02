@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use ppk::{Entry, Identity, PackageId, render_manifest};
 use tempfile::TempDir;
 
-const HELLO: &str = "dev.peios.hello@1.0?arch=x86_64";
+const HELLO: &str = "dev.peios.hello@1.0-1?arch=x86_64";
 
 /// Build a directory tree from (relative path, content) pairs.
 fn tree(files: &[(&str, &[u8])]) -> TempDir {
@@ -72,7 +72,7 @@ fn plant_manifest(source: &Path, manifest: &[u8]) -> Identity {
     );
     plant(
         source,
-        "refs/dev.peios.hello/1.0/x86_64",
+        "refs/dev.peios.hello/1.0-1/x86_64",
         format!("{identity}\n").as_bytes(),
     );
     identity
@@ -103,7 +103,7 @@ fn fetch_reproduces_the_package_exactly() {
     assert_eq!(fetched.blobs_written, 2);
     assert_eq!(
         fetched.ref_path,
-        local.path().join("refs/dev.peios.hello/1.0/x86_64")
+        local.path().join("refs/dev.peios.hello/1.0-1/x86_64")
     );
     assert_eq!(contents_under(local.path()), contents_under(source.path()));
 }
@@ -135,32 +135,32 @@ fn only_missing_blobs_are_copied() {
     let source = tempfile::tempdir().unwrap();
     let local = tempfile::tempdir().unwrap();
     pack(
-        "dev.peios.hello@1.0?arch=x86_64",
+        "dev.peios.hello@1.0-1?arch=x86_64",
         &[("bin/hello", b"v1"), ("COPYING", b"license")],
         source.path(),
     );
     pack(
-        "dev.peios.hello@2.0?arch=x86_64",
+        "dev.peios.hello@2.0-1?arch=x86_64",
         &[("bin/hello", b"v2"), ("COPYING", b"license")],
         source.path(),
     );
 
     let first = fetch(
-        "dev.peios.hello@1.0?arch=x86_64",
+        "dev.peios.hello@1.0-1?arch=x86_64",
         source.path(),
         local.path(),
     )
     .unwrap();
     assert_eq!(first.blobs_written, 2);
     let second = fetch(
-        "dev.peios.hello@2.0?arch=x86_64",
+        "dev.peios.hello@2.0-1?arch=x86_64",
         source.path(),
         local.path(),
     )
     .unwrap();
     assert_eq!(second.blobs_written, 1, "COPYING is already present");
     let again = fetch(
-        "dev.peios.hello@2.0?arch=x86_64",
+        "dev.peios.hello@2.0-1?arch=x86_64",
         source.path(),
         local.path(),
     )
@@ -211,7 +211,7 @@ fn a_source_that_is_not_a_directory_is_refused() {
 fn a_manifest_that_does_not_match_its_hash_is_refused() {
     let source = tempfile::tempdir().unwrap();
     let local = tempfile::tempdir().unwrap();
-    let id = PackageId::new("dev.peios.hello", "1.0", "x86_64").unwrap();
+    let id = PackageId::new("dev.peios.hello", "1.0-1", "x86_64").unwrap();
     let identity = plant_manifest(source.path(), render_manifest::<&str>(&id, &[]).as_bytes());
     let manifest = format!("manifests/sha256/{}", identity.hex());
     fs::write(source.path().join(&manifest), b"tampered").unwrap();
@@ -231,7 +231,7 @@ fn a_manifest_that_does_not_match_its_hash_is_refused() {
 fn a_blob_that_does_not_match_its_hash_is_refused() {
     let source = tempfile::tempdir().unwrap();
     let local = tempfile::tempdir().unwrap();
-    let id = PackageId::new("dev.peios.hello", "1.0", "x86_64").unwrap();
+    let id = PackageId::new("dev.peios.hello", "1.0-1", "x86_64").unwrap();
     let entry = blob_entry(b"genuine");
     let Entry::Blob { hex, .. } = &entry else {
         unreachable!()
@@ -262,7 +262,7 @@ fn a_blob_that_does_not_match_its_hash_is_refused() {
 fn a_missing_blob_is_reported() {
     let source = tempfile::tempdir().unwrap();
     let local = tempfile::tempdir().unwrap();
-    let id = PackageId::new("dev.peios.hello", "1.0", "x86_64").unwrap();
+    let id = PackageId::new("dev.peios.hello", "1.0-1", "x86_64").unwrap();
     plant_manifest(
         source.path(),
         render_manifest(&id, &[("bin/hello", blob_entry(b"absent"))]).as_bytes(),
@@ -282,7 +282,7 @@ fn a_missing_blob_is_reported() {
 fn a_manifest_for_another_package_is_refused() {
     let source = tempfile::tempdir().unwrap();
     let local = tempfile::tempdir().unwrap();
-    let other = PackageId::new("dev.peios.other", "1.0", "x86_64").unwrap();
+    let other = PackageId::new("dev.peios.other", "1.0-1", "x86_64").unwrap();
     let identity = plant_manifest(
         source.path(),
         render_manifest::<&str>(&other, &[]).as_bytes(),
@@ -295,7 +295,7 @@ fn a_manifest_for_another_package_is_refused() {
     assert_eq!(
         err.to_string(),
         format!(
-            "{}: names dev.peios.other@1.0?arch=x86_64, not {HELLO}",
+            "{}: names dev.peios.other@1.0-1?arch=x86_64, not {HELLO}",
             manifest.display()
         )
     );
@@ -303,7 +303,7 @@ fn a_manifest_for_another_package_is_refused() {
 
 #[test]
 fn a_malformed_manifest_is_refused() {
-    let id = PackageId::new("dev.peios.hello", "1.0", "x86_64").unwrap();
+    let id = PackageId::new("dev.peios.hello", "1.0-1", "x86_64").unwrap();
     let canonical = render_manifest(&id, &[("a", blob_entry(b"a"))]);
     for (manifest, problem) in [
         (canonical.replace(" = {", "= {"), "not in canonical form"),
@@ -330,7 +330,7 @@ fn a_ref_naming_a_path_is_refused_before_it_is_used() {
     plant(outside.path(), "secret", b"not a manifest");
     plant(
         &source,
-        "refs/dev.peios.hello/1.0/x86_64",
+        "refs/dev.peios.hello/1.0-1/x86_64",
         b"sha256:../../../secret\n",
     );
 
@@ -349,7 +349,7 @@ fn a_ref_must_end_with_one_newline() {
     let identity = Identity::of(b"anything");
     plant(
         source.path(),
-        "refs/dev.peios.hello/1.0/x86_64",
+        "refs/dev.peios.hello/1.0-1/x86_64",
         identity.to_string().as_bytes(),
     );
     let err = fetch(HELLO, source.path(), local.path()).unwrap_err();

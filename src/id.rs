@@ -3,7 +3,9 @@
 use std::fmt;
 use std::str::FromStr;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
+
+use crate::Version;
 
 /// The architecture a package is assumed to be for when its identifier does
 /// not say: the one this build of ppk was compiled for, which for a native
@@ -12,23 +14,33 @@ pub const HOST_ARCH: &str = std::env::consts::ARCH;
 
 /// Which package something is: its name, version and architecture.
 ///
-/// The name has passed [`check_name`], and the version and arch
-/// [`check_component`], so each is safe to use as a single path component.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The name has passed [`check_name`], the version is a complete
+/// [`Version`], and the arch has passed [`check_component`], so each is safe
+/// to use as a single path component.
+///
+/// Two identifiers are the same only if they are spelled the same: packages
+/// are stored by their spelling, so `1.0~alpha-1` and `1.0~a-1` are two
+/// packages, though as versions they are equal.
+#[derive(Debug, Clone)]
 pub struct PackageId {
     name: String,
-    version: String,
+    version: Version,
     arch: String,
 }
 
 impl PackageId {
     pub fn new(name: &str, version: &str, arch: &str) -> Result<Self> {
         check_name(name)?;
-        check_component("version", version)?;
+        let version = Version::parse(version).map_err(|err| {
+            anyhow!(
+                "invalid version '{version}': {err}; a package's version is \
+                 [<epoch>:]<upstream>-<revision>, such as 1.0-1"
+            )
+        })?;
         check_component("arch", arch)?;
         Ok(Self {
             name: name.to_owned(),
-            version: version.to_owned(),
+            version,
             arch: arch.to_owned(),
         })
     }
@@ -37,7 +49,13 @@ impl PackageId {
         &self.name
     }
 
+    /// The version, as it is spelled.
     pub fn version(&self) -> &str {
+        self.version.as_str()
+    }
+
+    /// The version, parsed, to compare with other versions.
+    pub fn parsed_version(&self) -> &Version {
         &self.version
     }
 
@@ -79,6 +97,17 @@ impl FromStr for PackageId {
     }
 }
 
+/// The same name, version and arch, each spelled the same.
+impl PartialEq for PackageId {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.version.as_str() == other.version.as_str()
+            && self.arch == other.arch
+    }
+}
+
+impl Eq for PackageId {}
+
 /// The canonical spelling, which always includes the arch.
 impl fmt::Display for PackageId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -103,7 +132,7 @@ const NAME_MIN_LABELS: usize = 3;
 /// [`NAME_MIN_LABELS`], and the first two are a real domain's: the first is
 /// all letters, as a top-level domain is, and neither holds a `+`. A name is
 /// therefore a safe path component, and an identifier splits unambiguously.
-fn check_name(name: &str) -> Result<()> {
+pub(crate) fn check_name(name: &str) -> Result<()> {
     let labels: Vec<&str> = name.split('.').collect();
     let valid = name.len() <= NAME_MAX_BYTES
         && labels.len() >= NAME_MIN_LABELS
@@ -129,11 +158,13 @@ fn is_label(label: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "+-".contains(c))
 }
 
-/// Versions and arches become path components, so until their syntax is
-/// designed they are limited to a conservative set that cannot escape the
-/// artifact directory: ASCII letters, digits and `. _ + - ~`, starting with a
-/// letter or digit. This also keeps `@`, `?`, `&` and `=` out of them, so an
-/// identifier always splits unambiguously.
+/// Arches become path components, so until their syntax is designed they are
+/// limited to a conservative set that cannot escape the artifact directory:
+/// ASCII letters, digits and `. _ + - ~`, starting with a letter or digit.
+/// This also keeps `@`, `?`, `&` and `=` out of them, so an identifier always
+/// splits unambiguously. A version's own grammar does the same for it: digits
+/// and `:` in the epoch, and letters, digits and `. + - ~` after it, starting
+/// with a letter or digit.
 fn check_component(what: &str, s: &str) -> Result<()> {
     let valid = s.starts_with(|c: char| c.is_ascii_alphanumeric())
         && s.chars()

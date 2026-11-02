@@ -57,8 +57,8 @@ fn id(s: &str) -> PackageId {
     s.parse().unwrap()
 }
 
-const HELLO: &str = "dev.peios.hello@1.0?arch=x86_64";
-const LIBZ: &str = "dev.peios.libz@1.3?arch=x86_64";
+const HELLO: &str = "dev.peios.hello@1.0-1?arch=x86_64";
+const LIBZ: &str = "dev.peios.libz@1.3-1?arch=x86_64";
 
 #[test]
 fn files_are_hardlinks_to_their_blobs() {
@@ -281,7 +281,7 @@ fn a_tampered_package_manifest_is_refused() {
         .artifacts()
         .join(format!("manifests/sha256/{}", identity.hex()));
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-    let hello = PackageId::new("dev.peios.hello", "1.0", "x86_64").unwrap();
+    let hello = PackageId::new("dev.peios.hello", "1.0-1", "x86_64").unwrap();
     let blob = Entry::Blob {
         hex: Identity::of(b"other").hex().to_owned(),
         exec: false,

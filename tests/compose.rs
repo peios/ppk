@@ -76,8 +76,8 @@ fn dirs(paths: &[&str]) -> Vec<EnvDir> {
     paths.iter().map(|p| p.parse().unwrap()).collect()
 }
 
-const HELLO: &str = "dev.peios.hello@1.0?arch=x86_64";
-const LIBZ: &str = "dev.peios.libz@1.3?arch=x86_64";
+const HELLO: &str = "dev.peios.hello@1.0-1?arch=x86_64";
+const LIBZ: &str = "dev.peios.libz@1.3-1?arch=x86_64";
 
 #[test]
 fn usr_is_the_closure_as_hardlinks_to_the_blobs() {
@@ -158,7 +158,7 @@ fn included_artifacts_are_a_store_ppk_can_use() {
     store.pack(HELLO, &[("bin/hello", b"binary", 0o755)]);
     store.pack(LIBZ, &[("lib/libz.so", b"lib", 0o644)]);
     store.pack(
-        "dev.peios.unused@1.0?arch=x86_64",
+        "dev.peios.unused@1.0-1?arch=x86_64",
         &[("unused", b"unused", 0o644)],
     );
     let extras = Extras {
@@ -192,7 +192,7 @@ fn copied_artifacts_are_a_separate_store_that_usr_links_into() {
     let store = Store::new();
     store.pack(HELLO, &[("bin/hello", b"binary", 0o755)]);
     store.pack(
-        "dev.peios.unused@1.0?arch=x86_64",
+        "dev.peios.unused@1.0-1?arch=x86_64",
         &[("unused", b"unused", 0o644)],
     );
     let extras = Extras {

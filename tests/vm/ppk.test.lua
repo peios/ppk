@@ -53,17 +53,17 @@ local function build_closure(t, vm)
     busybox(vm, { "ln", "-s", "busybox", "/content/bin/sh" }):assert_ok()
 
     local packed = ppk(vm, {
-        "pack", "dev.peios.busybox@1.0", "/content", "--artifact-dir", "/build",
+        "pack", "dev.peios.busybox@1.0-1", "/content", "--artifact-dir", "/build",
     })
     packed:assert_ok()
 
     local fetched = ppk(vm, {
-        "fetch", "dev.peios.busybox@1.0", "--from", "/build", "--artifact-dir", "/system",
+        "fetch", "dev.peios.busybox@1.0-1", "--from", "/build", "--artifact-dir", "/system",
     })
     fetched:assert_ok()
     t:assert_eq(fetched.stdout, packed.stdout, "fetch reproduces the identity")
 
-    local closed = ppk(vm, { "closure", "dev.peios.busybox@1.0", "--artifact-dir", "/system" })
+    local closed = ppk(vm, { "closure", "dev.peios.busybox@1.0-1", "--artifact-dir", "/system" })
     closed:assert_ok()
     local hex = closed.stdout:match("^sha256:(%x+)\n$")
     t:assert(hex ~= nil, "closure printed an identity: " .. closed.stdout)
@@ -79,8 +79,8 @@ local function ppk_for_everyone(t, vm)
     t:assert(vm:mkdir("/ppk-content/bin", { parents = true }) == nil)
     busybox(vm, { "cp", PPK, "/ppk-content/bin/ppk" }):assert_ok()
     make_executable(t, vm, "/ppk-content/bin/ppk")
-    ppk(vm, { "pack", "dev.peios.ppk@0.1", "/ppk-content", "--artifact-dir", "/system" }):assert_ok()
-    local closed = ppk(vm, { "closure", "dev.peios.ppk@0.1", "--artifact-dir", "/system" })
+    ppk(vm, { "pack", "dev.peios.ppk@0.1-1", "/ppk-content", "--artifact-dir", "/system" }):assert_ok()
+    local closed = ppk(vm, { "closure", "dev.peios.ppk@0.1-1", "--artifact-dir", "/system" })
     closed:assert_ok()
     return "/system/closures/" .. closed.stdout:match("^sha256:(%x+)\n$") .. "/bin/ppk"
 end
@@ -99,7 +99,7 @@ end
 
 -- `ppk run` of the busybox closure, with `command` after the separator.
 local function run_args(command)
-    local args = { "run", "-p", "dev.peios.busybox@1.0", "--artifact-dir", "/system", "--" }
+    local args = { "run", "-p", "dev.peios.busybox@1.0-1", "--artifact-dir", "/system", "--" }
     for _, arg in ipairs(command) do
         args[#args + 1] = arg
     end
@@ -165,7 +165,7 @@ test("an ordinary user can run a copied closure but cannot change it", function(
     local vm = boot(t)
     local _, blob = build_closure(t, vm)
     local closed = ppk(vm, {
-        "closure", "dev.peios.busybox@1.0", "--artifact-dir", "/system",
+        "closure", "dev.peios.busybox@1.0-1", "--artifact-dir", "/system",
         "--closure-dir", "/copied", "--copy-files",
     })
     closed:assert_ok()
@@ -241,7 +241,7 @@ test("run with no command starts the closure's shell", function(t)
     t:assert(vm:mkdir("/usr") == nil)
 
     local r = vm:run(PPK, {
-        args = { "run", "dev.peios.busybox@1.0", "--artifact-dir", "/system" },
+        args = { "run", "dev.peios.busybox@1.0-1", "--artifact-dir", "/system" },
         stdin = "echo $0; ls /usr/bin; exit 3\n",
         timeout = "30s",
     })

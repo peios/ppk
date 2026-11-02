@@ -1,7 +1,7 @@
 use ppk::{Entry, Identity, Manifest, PackageId, parse_manifest, render_manifest};
 
 fn hello() -> PackageId {
-    PackageId::new("dev.peios.hello", "1.0", "x86_64").unwrap()
+    PackageId::new("dev.peios.hello", "1.0-1", "x86_64").unwrap()
 }
 
 fn hex(content: &[u8]) -> String {
@@ -124,8 +124,8 @@ fn blob_values_must_be_identities() {
 
 #[test]
 fn the_header_must_name_a_valid_package() {
-    let text = render_manifest::<&str>(&hello(), &[]).replace("1.0", "../1.0");
-    assert!(problem(&text).starts_with("invalid version '../1.0'"));
+    let text = render_manifest::<&str>(&hello(), &[]).replace("1.0-1", "../1.0-1");
+    assert!(problem(&text).starts_with("invalid version '../1.0-1'"));
     assert_eq!(problem("[files]\n"), "missing the string 'name'");
     assert!(problem("not = = toml").starts_with("not valid TOML: "));
     assert_eq!(

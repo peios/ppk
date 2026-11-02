@@ -69,9 +69,12 @@ dirs = ["proc", "sys", "tmp"]
 
 `packages` maps each package's name to its exact version, so a profile
 holds one version of each package and always describes the same
-environment. Whatever chooses the versions, such as a tool that picks the
-newest, does so when it writes the profile. `symlinks` and `dirs` are what
-the root holds outside `/usr`, where a leading `:` in a link's target
+environment. Whatever chooses the versions does so when it writes the
+profile, as
+[`ppk resolve`](~peios/packaging/choosing-packages-for-an-environment)
+does from the packages and capabilities you need. `symlinks` and `dirs`
+are what the root holds outside `/usr`, besides any links its packages
+claim there, and a leading `:` in a link's target
 stands for `usr`. `include_artifacts = true` gives a composed root its
 packages in an artifact directory of its own. Every key is optional.
 `arch` sets the architecture of every package, the one `ppk` was built for

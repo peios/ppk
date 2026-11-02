@@ -51,8 +51,10 @@ work, see [Environments](~peios/packaging/environments).
 sha256:fe5cf307f0b70379e1ec36b0d8dca659782446b0d13e7140c1257cd855ba61c4
 ```
 
-`root/usr` holds the packages' files. Nothing is written to the artifact
-directory.
+`root/usr` holds the packages' files, and the links they
+[claim](~peios/packaging/recording-dependencies-and-metadata#what-ppk-does-with-them)
+under `/usr`, such as dash's `/usr/bin/sh`. Nothing is written to the
+artifact directory.
 
 To add packages to the profile's, or to compose without a profile, name
 them after `-p`. One `-p` takes every package after it, up to the next
@@ -69,8 +71,10 @@ give `arch` in the profile.
 
 ## Add what lies outside usr
 
-A package can only place files under `/usr`, so anything else the root
-needs comes from the profile or the command line:
+A package can only place files under `/usr`. The one exception is a link
+it claims elsewhere, such as `/init`, which the root holds because the
+package is in it. Anything else the root needs comes from the profile or
+the command line:
 
 - A link, from the profile's `symlinks` or `--symlink <path>:<target>`.
   The target is written as given, unless it starts with a colon in the
@@ -177,6 +181,21 @@ environment holds one version of each:
 ppk: dev.peios.hello@2.0-1?arch=x86_64: the environment holds dev.peios.hello@1.0-1?arch=x86_64 already
 ```
 
+It refuses two packages that claim one path, even as links to one target,
+since a claim says which package provides the name. Choose one of them:
+
+```text
+ppk: "/usr/bin/sh": claimed by both org.git.kernel.dash@0.5.13.5-1?arch=x86_64 and net.busybox.busybox@1.37.0-1?arch=x86_64
+```
+
+It refuses a claimed link outside `usr` that the profile or the options
+also give as a link or a directory, or that a path given lies under:
+
+```text
+ppk: "init": claimed by org.git.kernel.dash@0.5.13.5-1?arch=x86_64, but the environment links it
+```
+
 It also refuses packages that conflict, in the same way as
-[`ppk closure`](~peios/packaging/building-a-closure), and any path that
-is `usr` or lies under it.
+[`ppk closure`](~peios/packaging/building-a-closure), including a claimed
+link that is a path in a package's files, and any path that is `usr` or
+lies under it.

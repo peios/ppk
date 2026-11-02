@@ -207,9 +207,10 @@ struct Candidate {
 }
 
 impl Candidate {
-    /// The version at which this provides `capability`, for an error:
-    /// `Some(None)` for no version, and `None` if it doesn't provide it. A
-    /// `provides` entry is given before its own name.
+    /// Whether, and at which version, this provides `capability` at all, to
+    /// find a conflict and describe it: `Some(None)` for no version, and
+    /// `None` if it doesn't provide it. A `provides` entry is given before
+    /// its own name.
     fn provides(&self, capability: &str) -> Option<Option<&Version>> {
         match self.metadata.provides.get(capability) {
             Some(version) => Some(version.as_ref()),

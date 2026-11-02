@@ -841,8 +841,11 @@ Success, including printing help or the version.
 .TP
 .B 1
 Failure, such as an unreadable file, an unwritable artifact directory, a
-version that is already present with different contents, or a package that
-is missing from the source or fails a check.
+version that is already present with different contents, a package that
+is missing from the source or fails a check, or, for pack, an ELF object
+that cannot be read or a written entry that
+.B DERIVATION
+refuses.
 .TP
 .B 2
 Usage error: an unknown option, a missing argument, a malformed

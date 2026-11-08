@@ -37,7 +37,9 @@ tools/check
 
 This checks style with the pinned PSC tools, then runs `pekit test`. It
 builds ppk, runs its unit tests, integration tests and documentation
-tests, and checks it with Clippy, with every warning denied. The tests
+tests, checks it with Clippy and builds its API documentation with
+rustdoc, with every warning denied, as
+`RUSTDOCFLAGS=-Dwarnings cargo doc --no-deps` would. The tests
 cover every command on a writable `/tmp` in a sandbox, not on the host's
 own filesystem. Prepare the style tools once, outside the repository:
 

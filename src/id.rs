@@ -14,8 +14,8 @@ pub const HOST_ARCH: &str = std::env::consts::ARCH;
 
 /// Which package something is: its name, version and architecture.
 ///
-/// The name has passed [`check_name`], the version is a complete
-/// [`Version`], and the arch has passed [`check_component`], so each is safe
+/// The name has passed `check_name`, the version is a complete
+/// [`Version`], and the arch has passed `check_component`, so each is safe
 /// to use as a single path component.
 ///
 /// Two identifiers are the same only if they are spelled the same: packages

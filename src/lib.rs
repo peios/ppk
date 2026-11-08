@@ -36,9 +36,14 @@
 //!
 //! A manifest can also record [`Metadata`]: descriptive fields after the arch,
 //! and `[claims]`, `[dependencies]`, `[provides]` and `[requires]` tables
-//! before `[files]`, each left out when empty. Composing creates the links a
-//! package claims, and [`resolve`] chooses the packages that dependencies and
-//! requirements need, for a [`Profile`].
+//! before `[files]`, each left out when empty. [`pack`] adds to the written
+//! metadata what it derives from the payload's ELF objects: each soname they
+//! have as a provide and each they need as a requirement, with a floor from
+//! the symbol versions of the libraries in [`SYMBOL_VERSION_FLOORS`] and
+//! capabilities from those in [`SYMBOL_CAPABILITIES`]. It refuses a floor
+//! written by hand on a library whose floor it derives. Composing creates the
+//! links a package claims, and [`resolve`] chooses the packages that
+//! dependencies and requirements need, for a [`Profile`].
 
 mod access;
 mod closure;

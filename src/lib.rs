@@ -59,7 +59,7 @@ mod version;
 pub use closure::{Closed, UsrFiles, closure, closure_copying};
 pub use compose::{Composed, EnvDir, EnvSymlink, Extras, RootArtifacts, compose_env};
 pub use derive::{SYMBOL_CAPABILITIES, SYMBOL_VERSION_FLOORS};
-pub use fetch::{Fetched, fetch};
+pub use fetch::{Fetched, fetch, fetch_replacing};
 pub use id::{HOST_ARCH, PackageId};
 pub use identity::Identity;
 pub use manifest::{Entry, Manifest, parse_manifest, render_manifest};

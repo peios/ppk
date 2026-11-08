@@ -87,6 +87,9 @@ enum Command {
         /// Copy from the artifact directory <dir>
         #[arg(long, value_name = "dir")]
         from: PathBuf,
+        /// Replace the package if <dir> already has another under its name
+        #[arg(long)]
+        replace: bool,
     },
     /// Compose packages into a closure
     #[command(
@@ -383,8 +386,13 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             package,
             artifact_dir,
             from,
+            replace,
         } => {
-            let fetched = ppk::fetch(&package, &from, &artifact_dir)?;
+            let fetched = if replace {
+                ppk::fetch_replacing(&package, &from, &artifact_dir)?
+            } else {
+                ppk::fetch(&package, &from, &artifact_dir)?
+            };
             println!("{}", fetched.identity);
         }
         Command::Closure {

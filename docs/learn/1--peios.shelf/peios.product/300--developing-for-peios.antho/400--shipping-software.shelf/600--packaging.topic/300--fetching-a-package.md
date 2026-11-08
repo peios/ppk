@@ -74,3 +74,19 @@ ppk: dev.peios.hello@1.0-1?arch=noarch: already present as sha256:73a137f612f39b
 A packed version never changes, so two different packages under one version
 mean the two artifact directories disagree. Find out which one is right
 before you use the package.
+
+## Replace a package in a bootstrap's directory
+
+A bootstrap builds its first packages with another system's tools, then
+rebuilds them with its own at the same versions. Its artifact directory isn't
+published until every package has been rebuilt, so nothing relies on the
+first builds yet. To replace one, pass `--replace`:
+
+```sh
+ppk fetch 'dev.peios.hello@1.0-1?arch=noarch' --from rebuilt --artifact-dir bootstrap --replace
+```
+
+The ref then names the fetched package. The replaced manifest and its files
+stay in the directory. Every check above still applies. Don't use
+`--replace` on an artifact directory anything has fetched from: that breaks
+the rule that a version never changes.

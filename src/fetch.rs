@@ -36,6 +36,22 @@ pub struct Fetched {
 /// check stops the fetch after earlier blobs were copied; they are named by
 /// their content, so they are correct and harmless.
 pub fn fetch(id: &PackageId, source: &Path, artifact_dir: &Path) -> Result<Fetched> {
+    fetch_as(id, source, artifact_dir, false)
+}
+
+/// Copy package `id` from `source` into `artifact_dir`, as [`fetch`] does,
+/// but replace whatever is stored as `id` there already.
+///
+/// This breaks the rule that a stored version never changes, as
+/// [`pack_replacing`](crate::pack_replacing) does, so it is for an artifact
+/// directory nothing else relies on yet, such as a bootstrap's, whose
+/// packages are rebuilt at the same versions before it is published. Only
+/// the ref changes: the replaced manifest and its blobs stay.
+pub fn fetch_replacing(id: &PackageId, source: &Path, artifact_dir: &Path) -> Result<Fetched> {
+    fetch_as(id, source, artifact_dir, true)
+}
+
+fn fetch_as(id: &PackageId, source: &Path, artifact_dir: &Path, replace: bool) -> Result<Fetched> {
     if !fs::metadata(source)
         .with_context(|| format!("{}", source.display()))?
         .is_dir()
@@ -51,7 +67,9 @@ pub fn fetch(id: &PackageId, source: &Path, artifact_dir: &Path) -> Result<Fetch
     let ref_path = to.ref_path(id);
     // The ref write at the end still refuses to replace a ref that appears
     // after this check.
-    if let Some(existing) = store::read_ref(&ref_path)?.filter(|existing| *existing != identity) {
+    if !replace
+        && let Some(existing) = store::read_ref(&ref_path)?.filter(|existing| *existing != identity)
+    {
         bail!(
             "{id}: already present as {existing}, but {} has {identity}",
             source.display()
@@ -100,7 +118,13 @@ pub fn fetch(id: &PackageId, source: &Path, artifact_dir: &Path) -> Result<Fetch
 
     let ref_dir = to.ref_dir(id);
     store::create_dirs(&ref_dir)?;
-    if !store::write_new(
+    if replace {
+        store::write_replacing(
+            &ref_dir,
+            &ref_path,
+            store::ref_contents(&identity).as_bytes(),
+        )?;
+    } else if !store::write_new(
         &ref_dir,
         &ref_path,
         store::ref_contents(&identity).as_bytes(),

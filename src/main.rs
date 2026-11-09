@@ -265,6 +265,15 @@ struct MetadataArgs {
         action = ArgAction::Append,
     )]
     claims: Vec<String>,
+    /// Give the package's file or directory <path> the security descriptor
+    /// <descriptor>, in hexadecimal
+    #[arg(
+        long,
+        value_names = ["path", "descriptor"],
+        num_args = 2,
+        action = ArgAction::Append,
+    )]
+    descriptor: Vec<String>,
     /// Describe the package in one line
     #[arg(long, value_name = "text", allow_hyphen_values = true)]
     description: Option<String>,
@@ -283,6 +292,20 @@ struct MetadataArgs {
 }
 
 impl MetadataArgs {
+    /// What the options give `pack`, checked.
+    fn options(mut self) -> anyhow::Result<ppk::PackOptions> {
+        let descriptors = pairs(
+            "--descriptor",
+            &std::mem::take(&mut self.descriptor),
+            |sd| sd.parse::<ppk::SecurityDescriptor>(),
+        )?;
+        Ok(ppk::PackOptions {
+            metadata: self.metadata()?,
+            descriptors,
+            replace: false,
+        })
+    }
+
     /// The metadata the options give, checked.
     fn metadata(self) -> anyhow::Result<Metadata> {
         let metadata = Metadata {
@@ -369,14 +392,15 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             artifact_dir,
             metadata,
         } => {
-            let metadata = match metadata.metadata() {
-                Ok(metadata) => metadata,
+            let options = match metadata.options() {
+                Ok(options) => options,
                 Err(err) => return Ok(report_usage_error(program, &describe(&err))),
             };
-            let packed = ppk::pack_with(&package, &metadata, &path, &artifact_dir)?;
+            let packed = ppk::pack_with_options(&package, &options, &path, &artifact_dir)?;
             for warning in &packed.warnings {
                 eprintln!("{program}: warning: {warning}");
             }
+            warn_unstamped(program, packed.unstamped);
             println!("{}", packed.identity);
         }
         Command::Fetch {
@@ -385,6 +409,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             from,
         } => {
             let fetched = ppk::fetch(&package, &from, &artifact_dir)?;
+            warn_unstamped(program, fetched.unstamped);
             println!("{}", fetched.identity);
         }
         Command::Closure {
@@ -395,6 +420,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
         } => {
             let closure_dir = closure_dir.unwrap_or_else(|| artifact_dir.join(ppk::CLOSURE_SUBDIR));
             let closed = closure(&packages, &artifact_dir, &closure_dir, copy_files)?;
+            warn_unstamped(program, closed.unstamped);
             println!("{}", closed.identity);
         }
         Command::ComposeEnv {
@@ -429,6 +455,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
                 },
             };
             let composed = ppk::compose_env(&env.packages, &artifact_dir, &out, &extras)?;
+            warn_unstamped(program, composed.unstamped);
             println!("{}", composed.identity);
         }
         Command::Run {
@@ -443,6 +470,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             let env = environment(&profiles, packages)?;
             let closure_dir = closure_dir.unwrap_or_else(|| artifact_dir.join(ppk::CLOSURE_SUBDIR));
             let closed = closure(&env.packages, &artifact_dir, &closure_dir, copy_files)?;
+            warn_unstamped(program, closed.unstamped);
             ppk::environment::enter(&closed.tree_path)?;
             let command = if command.is_empty() {
                 vec![OsString::from(ppk::environment::SHELL)]
@@ -476,6 +504,26 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Help { .. } => unreachable!("help is handled before run"),
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Report the `unstamped` files and directories that lack security metadata
+/// their manifests record, as PSPU 5.16 asks of a consumer that can't set it.
+fn warn_unstamped(program: &str, unstamped: usize) {
+    let (what, record) = match unstamped {
+        0 => return,
+        1 => (
+            "1 file or directory lacks".to_owned(),
+            "its manifest records",
+        ),
+        n => (
+            format!("{n} files and directories lack"),
+            "their manifests record",
+        ),
+    };
+    eprintln!(
+        "{program}: warning: {what} security metadata this system would not let ppk give; \
+         {record} it"
+    );
 }
 
 /// The requests `-p` and `-c` give, packages first.

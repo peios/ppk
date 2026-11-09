@@ -204,14 +204,15 @@ impl Security<'_> {
     /// On Peios the descriptor is set with `kacs_set_sd` and the signature
     /// as an attribute, and any failure is an error. Elsewhere both are
     /// attributes, given where the system allows and otherwise skipped, as
-    /// the store's own descriptor is.
+    /// the store's own descriptor is. The descriptor is set last, because on
+    /// Peios it decides from then on what ppk may do to the file.
     pub(crate) fn stamp(&self, path: &Path) -> Result<Stamp> {
         let mut stamp = Stamp::Done;
-        if let Some(sd) = self.descriptor {
-            stamp = worst(stamp, stamp_descriptor(path, sd)?);
-        }
         if let Some(signature) = self.signature {
             stamp = worst(stamp, ensure_xattr(path, SIGNATURE_XATTR, signature)?);
+        }
+        if let Some(sd) = self.descriptor {
+            stamp = worst(stamp, stamp_descriptor(path, sd)?);
         }
         Ok(stamp)
     }

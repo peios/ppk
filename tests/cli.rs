@@ -73,6 +73,50 @@ fn fetch_without_a_source_is_a_usage_error() {
 }
 
 #[test]
+fn fetch_replaces_another_package_only_when_asked() {
+    let ours = content_dir();
+    let theirs = tempfile::tempdir().unwrap();
+    fs::write(theirs.path().join("hello"), b"theirs").unwrap();
+    let store = tempfile::tempdir().unwrap();
+    let local = store.path().join("local");
+    let source = store.path().join("source");
+    for (content, artifacts) in [(ours.path(), &local), (theirs.path(), &source)] {
+        let packed = ppk(&[
+            "pack",
+            "dev.peios.hello@1.0-1",
+            path(content),
+            "--artifact-dir",
+            path(artifacts),
+        ]);
+        assert_eq!(packed.status.code(), Some(0), "{}", stderr(&packed));
+    }
+    let fetch = |extra: &[&str]| {
+        let mut args = vec![
+            "fetch",
+            "dev.peios.hello@1.0-1",
+            "--from",
+            path(&source),
+            "--artifact-dir",
+            path(&local),
+        ];
+        args.extend_from_slice(extra);
+        ppk(&args)
+    };
+
+    let refused = fetch(&[]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    let replaced = fetch(&["--replace"]);
+    assert_eq!(replaced.status.code(), Some(0), "{}", stderr(&replaced));
+    let source_ref = fs::read_dir(source.join("refs/dev.peios.hello/1.0-1"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert_eq!(stdout(&replaced), fs::read_to_string(source_ref).unwrap());
+}
+
+#[test]
 fn compose_env_prints_the_identity_and_lays_out_the_root() {
     let content = content_dir();
     let store = tempfile::tempdir().unwrap();

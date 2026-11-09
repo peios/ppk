@@ -189,6 +189,62 @@ fn a_different_local_package_is_refused_and_nothing_is_written() {
 }
 
 #[test]
+fn replacing_points_the_ref_at_the_fetched_package_and_keeps_the_old() {
+    let source = tempfile::tempdir().unwrap();
+    let local = tempfile::tempdir().unwrap();
+    let theirs = pack(HELLO, &[("a", b"theirs")], source.path());
+    let ours = pack(HELLO, &[("a", b"ours")], local.path());
+
+    let fetched = ppk::fetch_replacing(&id(HELLO), source.path(), local.path()).unwrap();
+    assert_eq!(fetched.identity, theirs);
+    assert_eq!(
+        ppk::packed(&id(HELLO), local.path())
+            .unwrap()
+            .map(|found| found.to_string()),
+        Some(theirs.clone())
+    );
+    let manifests = local.path().join("manifests/sha256");
+    for identity in [&ours, &theirs] {
+        let hex = identity.strip_prefix("sha256:").unwrap();
+        assert!(manifests.join(hex).exists(), "{identity} is kept");
+    }
+
+    let again = ppk::fetch_replacing(&id(HELLO), source.path(), local.path()).unwrap();
+    assert_eq!(again.identity, theirs);
+    assert_eq!(again.blobs_written, 0);
+    fetch(HELLO, source.path(), local.path()).unwrap();
+}
+
+#[test]
+fn replacing_still_checks_what_it_fetches() {
+    let source = tempfile::tempdir().unwrap();
+    let local = tempfile::tempdir().unwrap();
+    let ours = pack(HELLO, &[("a", b"ours")], local.path());
+    plant_manifest(
+        source.path(),
+        render_manifest(
+            &id(HELLO),
+            &Metadata::default(),
+            &[("bin/hello", blob_entry(b"absent"))],
+        )
+        .as_bytes(),
+    );
+
+    let err = ppk::fetch_replacing(&id(HELLO), source.path(), local.path()).unwrap_err();
+    assert!(
+        format!("{err:#}").ends_with("No such file or directory (os error 2)"),
+        "{err:#}"
+    );
+    assert_eq!(
+        ppk::packed(&id(HELLO), local.path())
+            .unwrap()
+            .map(|found| found.to_string()),
+        Some(ours),
+        "the ref is unchanged"
+    );
+}
+
+#[test]
 fn a_missing_package_is_reported() {
     let source = tempfile::tempdir().unwrap();
     let local = tempfile::tempdir().unwrap();

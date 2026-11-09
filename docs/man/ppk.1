@@ -32,6 +32,7 @@ ppk \- create and manage Peios packages
 .B ppk fetch
 .RB [ \-\-artifact\-dir
 .IR dir ]
+.RB [ \-\-replace ]
 .B \-\-from
 .I dir package
 .br
@@ -481,7 +482,9 @@ is already present with the same identity,
 copies only what is missing.
 If it is present with a different identity,
 .B ppk fetch
-fails and writes nothing.
+fails and writes nothing, unless
+.B \-\-replace
+is given.
 .IP
 These checks prove that the package matches the source's ref.
 They do not prove who published it, so fetch only from sources you trust.
@@ -870,6 +873,17 @@ For
 write the profile to the file
 .IR path ,
 replacing it, rather than to standard output.
+.TP
+.B \-\-replace
+For
+.BR fetch ,
+replace the package if the artifact directory already holds another
+under its name: its ref then names the fetched identity, and the manifest
+and blobs it named stay.
+This breaks the rule that a stored version never changes.
+It is for an artifact directory nothing relies on yet, such as a
+bootstrap's, whose packages are rebuilt at the same versions before it is
+published.
 .TP
 .BI \-\-symlink " link"
 For

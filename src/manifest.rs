@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::{ALGORITHM, Identity, Metadata, PackageId};
+use crate::{ALGORITHM, Identity, Metadata, PackageId, SecurityDescriptor};
 
 /// A manifest read back from its bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,19 +19,70 @@ pub struct Manifest {
 }
 
 /// One entry in a manifest's `[files]` table.
+///
+/// A file or directory may carry security metadata. It is part of the
+/// entry, so two files with the same content and different metadata are
+/// different entries, each stored as a file of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Entry {
-    /// A regular file whose content is the blob with this hex SHA-256.
+    /// A regular file whose content is the blob with the hex SHA-256 `hex`.
     /// `exec` is true if any execute bit was set on the source file.
-    Blob { hex: String, exec: bool },
+    /// `descriptor` replaces the security descriptor the file would get.
+    /// `signature` is the hex SHA-256 of a blob holding the file's PIP
+    /// signature, which becomes its `security.peios.sig` attribute.
+    Blob {
+        hex: String,
+        exec: bool,
+        descriptor: Option<SecurityDescriptor>,
+        signature: Option<String>,
+    },
     /// A symbolic link to this target, recorded exactly as `readlink` returns
     /// it. A relative target resolves from the link's directory; an absolute
     /// one from the root of the system, not from `/usr`, where the package's
     /// own paths are.
     Symlink(String),
-    /// An empty directory. Directories with anything in them are implied by
-    /// their contents and never listed, so each tree has one manifest.
-    Dir,
+    /// A directory that is empty, or that has a security descriptor to
+    /// replace the one it would get. Other directories are implied by their
+    /// contents and never listed, so each tree has one manifest.
+    Dir {
+        descriptor: Option<SecurityDescriptor>,
+    },
+}
+
+impl Entry {
+    /// A file whose content has the hex SHA-256 `hex`, with no security
+    /// metadata.
+    pub fn file(hex: impl Into<String>, exec: bool) -> Self {
+        Self::Blob {
+            hex: hex.into(),
+            exec,
+            descriptor: None,
+            signature: None,
+        }
+    }
+
+    /// A directory with no security descriptor.
+    pub fn dir() -> Self {
+        Self::Dir { descriptor: None }
+    }
+
+    /// Whether this is a directory.
+    pub fn is_dir(&self) -> bool {
+        matches!(self, Self::Dir { .. })
+    }
+
+    /// Whether this is a file or directory with security metadata.
+    pub fn has_security(&self) -> bool {
+        match self {
+            Self::Blob {
+                descriptor,
+                signature,
+                ..
+            } => descriptor.is_some() || signature.is_some(),
+            Self::Dir { descriptor } => descriptor.is_some(),
+            Self::Symlink(_) => false,
+        }
+    }
 }
 
 /// Render the manifest for `id` with `metadata` and `entries`, which must
@@ -44,9 +95,10 @@ pub enum Entry {
 /// no metadata has the manifest it had before metadata existed.
 ///
 /// Every entry is an inline table with single spaces inside the braces and
-/// around `=`, keys in a fixed order, and `exec` written only when true, so
-/// each entry has exactly one spelling. Every other value is a string, and a
-/// constraint is written in [`Constraint::to_manifest_string`]'s form.
+/// around `=`, keys in a fixed order, `exec` written only when true, and
+/// `descriptor` and `signature` only when present, so each entry has exactly
+/// one spelling. Every other value is a string, and a constraint is written
+/// in [`Constraint::to_manifest_string`]'s form.
 ///
 /// [`Constraint::to_manifest_string`]: crate::Constraint::to_manifest_string
 pub fn render_manifest<P: AsRef<str>>(
@@ -62,17 +114,47 @@ pub fn render_manifest<P: AsRef<str>>(
     out.push_str(&metadata.render_tables());
     out.push_str("\n[files]\n");
     for (path, entry) in entries {
-        let value = match entry {
-            Entry::Blob { hex, exec: false } => format!("blob = \"{ALGORITHM}:{hex}\""),
-            Entry::Blob { hex, exec: true } => {
-                format!("blob = \"{ALGORITHM}:{hex}\", exec = true")
-            }
-            Entry::Symlink(target) => format!("symlink = {}", toml_string(target)),
-            Entry::Dir => "dir = true".to_owned(),
-        };
-        let _ = writeln!(out, "{} = {{ {value} }}", toml_string(path.as_ref()));
+        let _ = writeln!(
+            out,
+            "{} = {}",
+            toml_string(path.as_ref()),
+            render_entry(entry)
+        );
     }
     out
+}
+
+/// `entry` as the manifest writes it, after its path and ` = `. A stored
+/// file with security metadata is named by this text's hash.
+pub(crate) fn render_entry(entry: &Entry) -> String {
+    let mut parts = Vec::new();
+    match entry {
+        Entry::Blob {
+            hex,
+            exec,
+            descriptor,
+            signature,
+        } => {
+            parts.push(format!("blob = \"{ALGORITHM}:{hex}\""));
+            if *exec {
+                parts.push("exec = true".to_owned());
+            }
+            if let Some(descriptor) = descriptor {
+                parts.push(format!("descriptor = \"{descriptor}\""));
+            }
+            if let Some(signature) = signature {
+                parts.push(format!("signature = \"{ALGORITHM}:{signature}\""));
+            }
+        }
+        Entry::Symlink(target) => parts.push(format!("symlink = {}", toml_string(target))),
+        Entry::Dir { descriptor } => {
+            parts.push("dir = true".to_owned());
+            if let Some(descriptor) = descriptor {
+                parts.push(format!("descriptor = \"{descriptor}\""));
+            }
+        }
+    }
+    format!("{{ {} }}", parts.join(", "))
 }
 
 /// Parse `bytes` as a manifest from an untrusted source.
@@ -127,15 +209,37 @@ fn parse_entry(value: &toml::Value) -> Result<Entry> {
     let Some(table) = value.as_table() else {
         bail!("not a table");
     };
+    let descriptor = match table.get("descriptor") {
+        Some(descriptor) => Some(
+            descriptor
+                .as_str()
+                .context("descriptor is not a string")?
+                .parse::<SecurityDescriptor>()
+                .context("descriptor")?,
+        ),
+        None => None,
+    };
     if let Some(blob) = table.get("blob") {
         let identity: Identity = blob.as_str().context("blob is not a string")?.parse()?;
         let exec = table
             .get("exec")
             .and_then(toml::Value::as_bool)
             .unwrap_or(false);
+        let signature = match table.get("signature") {
+            Some(signature) => {
+                let identity: Identity = signature
+                    .as_str()
+                    .context("signature is not a string")?
+                    .parse()?;
+                Some(identity.hex().to_owned())
+            }
+            None => None,
+        };
         return Ok(Entry::Blob {
             hex: identity.hex().to_owned(),
             exec,
+            descriptor,
+            signature,
         });
     }
     if let Some(target) = table.get("symlink") {
@@ -143,7 +247,7 @@ fn parse_entry(value: &toml::Value) -> Result<Entry> {
         return Ok(Entry::Symlink(target.to_owned()));
     }
     if table.contains_key("dir") {
-        return Ok(Entry::Dir);
+        return Ok(Entry::Dir { descriptor });
     }
     bail!("not a blob, symlink or directory")
 }

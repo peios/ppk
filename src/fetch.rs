@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use crate::access::{Security, Stamp};
 use crate::store::{self, ArtifactDir};
 use crate::{Entry, Identity, PackageId, parse_manifest};
 
@@ -20,6 +21,10 @@ pub struct Fetched {
     pub ref_path: PathBuf,
     /// Number of blobs copied; blobs already present are not counted.
     pub blobs_written: usize,
+    /// Number of stored files that don't carry all of their security
+    /// metadata, because this system isn't Peios and wouldn't let ppk give
+    /// it. Their manifest records it.
+    pub unstamped: usize,
 }
 
 /// Copy package `id` from the artifact directory `source` into
@@ -28,7 +33,11 @@ pub struct Fetched {
 /// Nothing read from `source` is trusted. The manifest must hash to the
 /// identity in the source's ref, be in canonical form, name `id`, and contain
 /// only safe paths; every blob copied must hash to the name the manifest
-/// gives it. Blobs already in `artifact_dir` are not copied.
+/// gives it. Blobs already in `artifact_dir` are not copied. Nothing is taken
+/// from a stored file but its content: it is given the security metadata its
+/// entry records, as [`pack_with_options`](crate::pack_with_options) gives
+/// it, and a file already in `artifact_dir` with the wrong metadata is an
+/// error.
 ///
 /// If `artifact_dir` already has a different package under `id`, the fetch is
 /// refused before anything is written. Otherwise blobs are written first,
@@ -94,19 +103,74 @@ fn fetch_as(id: &PackageId, source: &Path, artifact_dir: &Path, replace: bool) -
 
     let blob_dir = to.blob_dir();
     store::create_dirs(&blob_dir)?;
-    let mut copied = HashSet::new();
+    let mut done = HashSet::new();
+    let mut blobs_written = 0;
+    let mut unstamped = 0;
+    // Signatures first, so that a stored file's signature is in the store
+    // before the file is.
     for (_, entry) in &manifest.entries {
-        let Entry::Blob { hex, exec } = entry else {
+        let Entry::Blob {
+            signature: Some(signature),
+            ..
+        } = entry
+        else {
             continue;
         };
-        let blob = to.blob_path(hex, *exec);
-        if blob.exists() || !copied.insert((hex, exec)) {
+        let blob = to.blob_path(signature, false);
+        if !done.insert(blob.clone()) || blob.exists() {
             continue;
         }
-        let source_blob = from.blob_path(hex, *exec);
-        if !store::copy_blob(&source_blob, &blob, hex, *exec)? {
+        let source_blob = from.blob_path(signature, false);
+        if !store::copy_blob(
+            &source_blob,
+            &blob,
+            (signature.as_str(), false),
+            Security::default(),
+            &mut unstamped,
+        )? {
             bail!("{}: does not match its hash", source_blob.display());
         }
+        blobs_written += 1;
+    }
+    for (_, entry) in &manifest.entries {
+        let Entry::Blob {
+            hex,
+            exec,
+            descriptor,
+            signature,
+        } = entry
+        else {
+            continue;
+        };
+        let blob = to.file_path(entry);
+        if !done.insert(blob.clone()) {
+            continue;
+        }
+        let signature = signature
+            .as_deref()
+            .map(|signature| to.read_signature(signature))
+            .transpose()?;
+        let security = Security {
+            descriptor: descriptor.as_ref(),
+            signature: signature.as_deref(),
+        };
+        if blob.exists() {
+            if entry.has_security() && security.ensure(&blob)? == Stamp::Skipped {
+                unstamped += 1;
+            }
+            continue;
+        }
+        let source_blob = from.file_path(entry);
+        if !store::copy_blob(
+            &source_blob,
+            &blob,
+            (hex.as_str(), *exec),
+            security,
+            &mut unstamped,
+        )? {
+            bail!("{}: does not match its hash", source_blob.display());
+        }
+        blobs_written += 1;
     }
 
     let manifest_dir = to.manifest_dir();
@@ -136,6 +200,7 @@ fn fetch_as(id: &PackageId, source: &Path, artifact_dir: &Path, replace: bool) -
         identity: identity.to_string(),
         manifest_path,
         ref_path,
-        blobs_written: copied.len(),
+        blobs_written,
+        unstamped,
     })
 }

@@ -8,20 +8,38 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
-use crate::access;
-use crate::{ALGORITHM, Identity, PackageId};
+use crate::access::{self, Security, Stamp};
+use crate::manifest::render_entry;
+use crate::security::check_signature;
+use crate::{ALGORITHM, Entry, Identity, PackageId};
 
 /// Everything in the artifact directory is immutable once written: content
 /// is named by its hash, and a ref is never replaced.
+#[cfg(not(test))]
 const ARTIFACT_MODE: u32 = 0o444;
 
 /// The mode of a blob's executable form: read-only like every artifact, and
 /// executable, because closures hardlink it and a link shares its mode.
+#[cfg(not(test))]
 const EXEC_BLOB_MODE: u32 = 0o555;
+
+/// Unit tests give files `user.` attributes in place of `security.` ones
+/// (see `access`), which only a process that can write a file may set, so
+/// what they store is writable by its owner.
+#[cfg(test)]
+const ARTIFACT_MODE: u32 = 0o644;
+
+#[cfg(test)]
+const EXEC_BLOB_MODE: u32 = 0o755;
 
 /// What distinguishes a blob's executable form from its plain form, which has
 /// no suffix. Hex digits never contain it, so the two cannot collide.
 const EXEC_SUFFIX: &str = ".exec";
+
+/// What separates a blob's hash from the hash of the entry it is stored for,
+/// in the form of an entry with security metadata. The second hash is hex
+/// digits, so it never spells `exec`.
+const FORM_SEPARATOR: &str = ".";
 
 /// Where each kind of artifact lives under an artifact directory's root.
 pub(crate) struct ArtifactDir<'a> {
@@ -41,11 +59,42 @@ impl<'a> ArtifactDir<'a> {
         self.root.join("blobs").join(ALGORITHM)
     }
 
-    /// The stored form of the blob `hex` that an entry with this `exec` needs.
-    /// Content is stored once per form, not once per hash.
+    /// The stored form of the blob `hex` that an entry with this `exec` and
+    /// no security metadata needs. Content is stored once per form, not once
+    /// per hash.
     pub(crate) fn blob_path(&self, hex: &str, exec: bool) -> PathBuf {
         let suffix = if exec { EXEC_SUFFIX } else { "" };
         self.blob_dir().join(format!("{hex}{suffix}"))
+    }
+
+    /// The stored form of the file `entry`: [`blob_path`]'s without security
+    /// metadata, and with it `<hex>.<form>`, where `<form>` is the SHA-256
+    /// of the entry as the manifest writes it. So each file with metadata is
+    /// stored as a file of its own, carrying it, which its links share.
+    ///
+    /// [`blob_path`]: Self::blob_path
+    pub(crate) fn file_path(&self, entry: &Entry) -> PathBuf {
+        let Entry::Blob { hex, exec, .. } = entry else {
+            panic!("only a file entry is stored as a file");
+        };
+        if !entry.has_security() {
+            return self.blob_path(hex, *exec);
+        }
+        let form = Identity::of(render_entry(entry).as_bytes());
+        self.blob_dir()
+            .join(format!("{hex}{FORM_SEPARATOR}{}", form.hex()))
+    }
+
+    /// The signature in the blob `hex`, checked against its hash and as a
+    /// signature.
+    pub(crate) fn read_signature(&self, hex: &str) -> Result<Vec<u8>> {
+        let path = self.blob_path(hex, false);
+        let bytes = fs::read(&path).with_context(|| format!("{}", path.display()))?;
+        if Identity::of(&bytes).hex() != hex {
+            bail!("{}: does not match its hash", path.display());
+        }
+        check_signature(&bytes).with_context(|| format!("{}", path.display()))?;
+        Ok(bytes)
     }
 
     pub(crate) fn manifest_dir(&self) -> PathBuf {
@@ -136,11 +185,19 @@ pub(crate) fn ref_contents(identity: &Identity) -> String {
 }
 
 /// Copy `path` to `dest`, as a blob's form is stored: read-only, executable
-/// if `exec`, and with the store's security descriptor. `dest` is that form
-/// in an artifact directory, as [`ArtifactDir::blob_path`] gives it, or a
-/// file of a tree that copies its blobs. Returns false, writing nothing, if
-/// the content does not hash to `hex`; the caller knows what that means.
-pub(crate) fn copy_blob(path: &Path, dest: &Path, hex: &str, exec: bool) -> Result<bool> {
+/// if `exec`, with the store's security descriptor, and carrying `security`,
+/// given before `dest` exists. `dest` is that form in an artifact directory,
+/// as [`ArtifactDir::file_path`] gives it, or a file of a tree that copies
+/// its blobs. Returns false, writing nothing, if the content does not hash to
+/// `hex`; the caller knows what that means. Adds one to `unstamped` if this
+/// system would not let the copy carry all of `security`.
+pub(crate) fn copy_blob(
+    path: &Path,
+    dest: &Path,
+    (hex, exec): (&str, bool),
+    security: Security,
+    unstamped: &mut usize,
+) -> Result<bool> {
     let file = File::open(path).with_context(|| format!("{}", path.display()))?;
     let mut reader = HashingReader {
         inner: file,
@@ -154,6 +211,9 @@ pub(crate) fn copy_blob(path: &Path, dest: &Path, hex: &str, exec: bool) -> Resu
     io::copy(&mut reader, &mut tmp).with_context(|| format!("{}", path.display()))?;
     if Identity::from_digest(reader.hasher.finalize()).hex() != hex {
         return Ok(false);
+    }
+    if security.stamp(tmp.path())? == Stamp::Skipped {
+        *unstamped += 1;
     }
     persist(tmp, dest)?;
     Ok(true)

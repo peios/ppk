@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use crate::access;
+use crate::access::{self, Security, Stamp};
 use crate::environment::MOUNT_POINT;
 use crate::manifest::toml_string;
 use crate::store::{self, ArtifactDir};
@@ -53,6 +53,10 @@ pub struct Closed {
     pub manifest_path: PathBuf,
     /// True if the closure already existed and nothing was built.
     pub reused: bool,
+    /// Number of files and directories built that don't carry all of their
+    /// security metadata, because this system isn't Peios and wouldn't let
+    /// ppk give it. Their manifests record it.
+    pub unstamped: usize,
 }
 
 /// Compose `packages`, each already in `artifact_dir`, into a closure in
@@ -63,11 +67,15 @@ pub struct Closed {
 /// and repetition of `packages` do not matter. An existing closure is reused.
 ///
 /// Every file in the tree is a hardlink to its blob in the form its entry
-/// needs; symlinks and directories are created afresh, and so is each link a
-/// package claims under `/usr`. A closure is only `/usr`, so a link claimed
+/// needs, which carries the entry's security metadata; symlinks and
+/// directories are created afresh, each directory with its descriptor, and so
+/// is each link a package claims under `/usr`. Where this system isn't Peios
+/// and won't let ppk give a file or directory its metadata, it is built
+/// without it, which [`Closed::unstamped`] counts. A closure is only `/usr`, so a link claimed
 /// anywhere else is left to [`compose_env`](crate::compose_env). All
 /// packages are merged before anything is written, and the merge is refused
-/// if two packages give one path different entries, or if a path lies under
+/// if two packages give one path different entries, even entries that differ
+/// only in their security metadata, or if a path lies under
 /// another package's file, symlink or claimed link. A claim is refused if
 /// another package claims the same path, even with the same target, if it is
 /// a path in a package's files, or if it is `/usr` itself. The tree is built
@@ -102,11 +110,12 @@ fn closure_as(
     let identity = Identity::of(manifest.as_bytes());
     let tree_path = closure_dir.join(identity.hex());
     let manifest_path = closure_dir.join(format!("{}{MANIFEST_SUFFIX}", identity.hex()));
-    let closed = |reused| Closed {
+    let closed = |reused, unstamped| Closed {
         identity: identity.to_string(),
         tree_path: tree_path.clone(),
         manifest_path: manifest_path.clone(),
         reused,
+        unstamped,
     };
     if tree_path.is_dir() {
         // Reusing a closure only reads, so that anyone who can read the store
@@ -121,7 +130,7 @@ fn closure_as(
                 return Err(err).with_context(|| format!("{}", manifest_path.display()));
             }
         }
-        return Ok(closed(true));
+        return Ok(closed(true, 0));
     }
 
     // A closure is only usr, so links claimed outside it have no place.
@@ -142,20 +151,28 @@ fn closure_as(
     // Directories and symlinks created in the tree inherit this; its files
     // have their blobs' descriptor, either way.
     access::protect_dir(tmp.path())?;
+    let mut unstamped = 0;
     for (path, (entry, _)) in &merged {
-        build_entry(&layout, tmp.path(), path, entry, files, closure_dir)?;
+        build_entry(
+            &layout,
+            tmp.path(),
+            (path, entry),
+            files,
+            closure_dir,
+            &mut unstamped,
+        )?;
     }
     // Last, so that a tree that can't be built leaves nothing behind.
     write_manifest(closure_dir, &manifest_path, &manifest)?;
 
     let built = tmp.keep();
     match fs::rename(&built, &tree_path) {
-        Ok(()) => Ok(closed(false)),
+        Ok(()) => Ok(closed(false, unstamped)),
         // Another run built the same closure first. Its tree is identical,
         // so this one is discarded.
         Err(_) if tree_path.is_dir() => {
             fs::remove_dir_all(&built).with_context(|| format!("{}", built.display()))?;
-            Ok(closed(true))
+            Ok(closed(true, 0))
         }
         Err(err) => Err(err).with_context(|| format!("{}", tree_path.display())),
     }
@@ -292,7 +309,7 @@ pub(crate) fn merge(layout: &ArtifactDir, identities: &[Identity]) -> Result<Mer
             let Some((entry, ancestor_owner)) = merged.get(ancestor) else {
                 continue;
             };
-            if *entry == Entry::Dir {
+            if entry.is_dir() {
                 continue;
             }
             let what = match usr_claims.contains_key(file) {
@@ -321,31 +338,75 @@ pub(crate) fn merge(layout: &ArtifactDir, identities: &[Identity]) -> Result<Mer
 
 /// Place `entry` at `path` under `root`, a directory of the tree `dest_name`,
 /// which an error names rather than a temporary directory.
+///
+/// A file or directory is given its security metadata before anything else
+/// can reach it: a hardlinked file carries its stored file's, given to the
+/// stored file first if it lacks it, a copy is given it before it appears,
+/// and a directory is given its descriptor before anything is created in it.
+/// Adds one to `unstamped` if this system would not let it carry all of it.
 pub(crate) fn build_entry(
     layout: &ArtifactDir,
     root: &Path,
-    path: &str,
-    entry: &Entry,
+    (path, entry): (&str, &Entry),
     files: UsrFiles,
     dest_name: &Path,
+    unstamped: &mut usize,
 ) -> Result<()> {
     let dest = root.join(path);
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).with_context(|| format!("{}", parent.display()))?;
     }
     match entry {
-        Entry::Blob { hex, exec } => {
-            let blob = layout.blob_path(hex, *exec);
+        Entry::Blob {
+            hex,
+            exec,
+            descriptor,
+            signature,
+        } => {
+            let blob = layout.file_path(entry);
+            let signature = signature
+                .as_deref()
+                .map(|signature| layout.read_signature(signature))
+                .transpose()?;
+            let security = Security {
+                descriptor: descriptor.as_ref(),
+                signature: signature.as_deref(),
+            };
             match files {
-                UsrFiles::Hardlink => link_blob(layout, &blob, &dest, dest_name, "--copy-files"),
-                UsrFiles::Copy if store::copy_blob(&blob, &dest, hex, *exec)? => Ok(()),
+                UsrFiles::Hardlink => {
+                    if entry.has_security() && security.ensure(&blob)? == Stamp::Skipped {
+                        *unstamped += 1;
+                    }
+                    link_blob(layout, &blob, &dest, dest_name, "--copy-files")
+                }
+                UsrFiles::Copy
+                    if store::copy_blob(
+                        &blob,
+                        &dest,
+                        (hex.as_str(), *exec),
+                        security,
+                        unstamped,
+                    )? =>
+                {
+                    Ok(())
+                }
                 UsrFiles::Copy => bail!("{}: does not match its hash", blob.display()),
             }
         }
         Entry::Symlink(target) => {
             symlink(target, &dest).with_context(|| format!("{}", dest.display()))
         }
-        Entry::Dir => fs::create_dir_all(&dest).with_context(|| format!("{}", dest.display())),
+        Entry::Dir { descriptor } => {
+            fs::create_dir_all(&dest).with_context(|| format!("{}", dest.display()))?;
+            let security = Security {
+                descriptor: descriptor.as_ref(),
+                signature: None,
+            };
+            if security.stamp(&dest)? == Stamp::Skipped {
+                *unstamped += 1;
+            }
+            Ok(())
+        }
     }
 }
 

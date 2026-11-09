@@ -79,10 +79,7 @@ fn plant_manifest(source: &Path, manifest: &[u8]) -> Identity {
 }
 
 fn blob_entry(content: &[u8]) -> Entry {
-    Entry::Blob {
-        hex: Identity::of(content).hex().to_owned(),
-        exec: false,
-    }
+    Entry::file(Identity::of(content).hex().to_owned(), false)
 }
 
 #[test]

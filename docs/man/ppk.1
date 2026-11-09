@@ -1,4 +1,4 @@
-.TH PPK 1 2026-11-02 "Peios ppk 0.1.0"
+.TH PPK 1 2026-11-09 "Peios ppk 0.1.0"
 .SH NAME
 ppk \- create and manage Peios packages
 .SH SYNOPSIS
@@ -16,6 +16,9 @@ ppk \- create and manage Peios packages
 .RB ]...
 .RB [ \-\-claims
 .I path target\c
+.RB ]...
+.RB [ \-\-descriptor
+.I path descriptor\c
 .RB ]...
 .RB [ \-\-description
 .IR text ]
@@ -337,6 +340,64 @@ path, so two that claim one path can't be composed together.
 .PP
 .B ppk resolve
 chooses packages that satisfy them, and writes their profile.
+.SH SECURITY METADATA
+A file or directory of a package can carry security metadata, which its
+manifest entry records and the package's identity covers.
+.PP
+A security descriptor replaces the one the file or directory would
+otherwise get.
+It is a self-relative security descriptor with an owner, a group, and a
+DACL, given to
+.B \-\-descriptor
+in hexadecimal and written in the manifest in lowercase.
+Its bytes are kept as given:
+.B ppk
+checks only that its parts lie within it, and the kernel judges what it
+grants.
+A symbolic link can't have one.
+A directory with one is listed in the manifest even if it has contents.
+.PP
+A signature is a file's PIP signature, which the kernel reads from the
+file's
+.B security.peios.sig
+attribute before it loads the file as firmware.
+.B ppk pack
+takes it from the file beside the one it signs, named with
+.B .peios.sig
+added, which is not packed as a file of its own.
+It must be 3310 bytes, starting with the version byte 1, and the file it
+signs must be a regular file that is not ELF, since an ELF file carries
+its signature in its
+.B .peios.sig
+section.
+No other path may end in
+.BR .peios.sig .
+The signature is stored as a blob, and the manifest names it by its hash.
+.PP
+A file with security metadata is stored as a file of its own that carries
+it, so every hard link to it carries it too: two files with the same
+content and different metadata are two stored files.
+On Peios,
+.B ppk
+gives a stored file, a copy, or a directory its descriptor with the
+.B kacs_set_sd
+system call and its signature as an attribute when it creates it, before anything else
+can reach it, and fails if it can't.
+Elsewhere it writes them as the
+.B security.peios.sd
+and
+.B security.peios.sig
+attributes where the system lets it, which usually needs privilege.
+Where it doesn't,
+.B ppk
+leaves them out and warns, giving the number of files and directories that
+lack them; their manifests still record them.
+.PP
+A stored file that already exists must carry the signature its entry
+names: one that lacks it is given it, and one with another is an error.
+On Peios, a stored file's descriptor can't be read back as it was given, so
+a file stored elsewhere without its descriptor is not given it when it is
+linked; fetch the package on Peios, or copy its files, instead.
 .SH DERIVATION
 .B ppk pack
 also reads each ELF object among the files, and adds to the manifest what it
@@ -422,7 +483,7 @@ as
 and print the package's identity on standard output.
 .IP
 Regular files, symbolic links, and empty directories are recorded.
-Directories with contents are implied by them.
+Directories with contents are implied by them, unless given a descriptor.
 A symbolic link is recorded with its target exactly as it reads and is never followed.
 Of a file's permissions, only whether any execute bit is set is recorded.
 .IP
@@ -435,6 +496,8 @@ It also refuses an artifact directory inside
 .IP
 The manifest also records the metadata the options give, as
 .B METADATA
+describes, and each file's descriptor and signature, as
+.B SECURITY METADATA
 describes.
 A broken rule in it is a usage error, and nothing is written.
 It adds what the files' ELF objects need and provide, as
@@ -470,6 +533,8 @@ or
 .B ..
 component.
 Every blob copied must hash to the name the manifest gives it.
+A stored file takes only its content from the source: it is given the
+security metadata its entry records.
 If a check fails,
 .B ppk fetch
 stops without writing the manifest or the ref.
@@ -496,10 +561,10 @@ closure: one directory tree, the contents of a
 Print the closure's identity on standard output.
 .IP
 Every file in the tree is a hard link to its blob, in the form its entry
-needs, or a copy of it with
+needs, which carries its security metadata, or a copy of it with
 .BR \-\-copy\-files ;
-symbolic links and directories are created in the tree, and so is each
-link a package claims under
+symbolic links and directories are created in the tree, each directory
+with its descriptor, and so is each link a package claims under
 .IR /usr .
 A closure is only
 .IR /usr ,
@@ -513,6 +578,7 @@ complete.
 .IP
 .B ppk closure
 fails, writing nothing, if two packages give one path different entries,
+even entries that differ only in their security metadata,
 if a path lies beneath a file or symbolic link of another package, if two
 packages claim one path, even with one target, if a claimed path is also in
 a package's files or lies beneath one, or if a package claims
@@ -745,6 +811,22 @@ must be on the same mount as the artifact directory, unless
 .B \-\-copy\-files
 is given.
 .TP
+.BI \-\-descriptor " path descriptor"
+For
+.BR pack ,
+give the file or directory
+.I path
+of the package, as the manifest lists it, the security descriptor
+.IR descriptor ,
+in hexadecimal, as
+.B SECURITY METADATA
+describes.
+.I path
+and
+.I descriptor
+are separate arguments.
+Can be given more than once, for different paths.
+.TP
 .BI \-\-depends " name constraint"
 For
 .BR pack ,
@@ -845,8 +927,9 @@ the tree can be on any mount.
 A hard link cannot cross a mount, even between two mounts of one filesystem,
 as a sandbox's bind mounts can be.
 Each copy is checked against its hash as it is made, and has the mode and
-security descriptor of its blob, but as a file of its own: it takes its own
-space, and a later change to the store's descriptors does not reach it.
+security descriptor and security metadata of its blob, but as a file of its
+own: it takes its own space, and a later change to the store's descriptors
+does not reach it.
 A closure that already exists is reused as it is.
 .TP
 .BI \-\-from " dir"
@@ -969,6 +1052,9 @@ A file in a closure is a hard link, so it has its blob's descriptor.
 Only the DACL is set: the owner stays whoever ran
 .BR ppk .
 Off Peios, where the system call does not exist, no descriptor is set.
+A file or directory given a descriptor of its own has that instead, as
+.B SECURITY METADATA
+describes.
 .PP
 .B run
 needs no privilege on Peios: any process can create a mount namespace and
@@ -1029,6 +1115,12 @@ Mode 0444.
 The same for an executable file.
 Mode 0555.
 Content shipped both as executable and not is stored in both forms.
+.TP
+.IR blobs/sha256/ hash . entry
+The same content for an entry with security metadata, which it carries.
+.I entry
+is the SHA-256 hash of the entry as the manifest writes it, after its path.
+Mode 0444, or 0555 if the entry is executable.
 .TP
 .IR manifests/sha256/ hash
 A manifest, named by the SHA-256 hash of its bytes.

@@ -8,6 +8,9 @@
 //!     file content, uncompressed, named by its SHA-256 (mode 0444)
 //! <artifact-dir>/blobs/sha256/<hex>.exec
 //!     the same content in executable form (mode 0555), for exec entries
+//! <artifact-dir>/blobs/sha256/<hex>.<form>
+//!     the same content for an entry with security metadata, which it
+//!     carries; <form> is the SHA-256 of the entry as the manifest writes it
 //! <artifact-dir>/manifests/sha256/<hex>
 //!     a manifest, named by the SHA-256 of its bytes
 //! <artifact-dir>/refs/<name>/<version>/<arch>
@@ -22,7 +25,15 @@
 //! "share/doc/hello/README" = { blob = "sha256:<hex>" }
 //! "lib/libz.so" = { symlink = "libz.so.1" }
 //! "var/lib/hello" = { dir = true }
+//! "lib/firmware/hello.bin" = { blob = "sha256:<hex>", signature = "sha256:<hex>" }
+//! "libexec/hello" = { dir = true, descriptor = "<hex>" }
 //! ```
+//!
+//! A file or directory may carry a [`SecurityDescriptor`] that replaces the
+//! one it would get, and a file a PIP signature, stored as a blob, that
+//! becomes its `security.peios.sig` attribute. Each file with security
+//! metadata is stored as a file of its own carrying it, so a hardlink to it
+//! carries it too.
 //!
 //! The manifest is emitted by hand rather than through a TOML serializer so
 //! that its bytes are canonical: the same input tree always produces the same
@@ -58,6 +69,9 @@ mod metadata;
 mod pack;
 mod profile;
 mod resolve;
+mod security;
+#[cfg(test)]
+mod stamp_tests;
 mod store;
 mod version;
 
@@ -69,9 +83,12 @@ pub use id::{HOST_ARCH, PackageId};
 pub use identity::Identity;
 pub use manifest::{Entry, Manifest, parse_manifest, render_manifest};
 pub use metadata::{LicenseClass, Metadata};
-pub use pack::{Packed, pack, pack_replacing, pack_replacing_with, pack_with};
+pub use pack::{
+    PackOptions, Packed, pack, pack_replacing, pack_replacing_with, pack_with, pack_with_options,
+};
 pub use profile::Profile;
 pub use resolve::{Request, Resolution, Resolved, Wanted, resolve};
+pub use security::SecurityDescriptor;
 pub use store::{packed, prepare_artifact_dir, versions};
 pub use version::{Constraint, Operator, Version};
 

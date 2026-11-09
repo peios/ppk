@@ -79,7 +79,7 @@ fn no_metadata_leaves_the_manifest_as_it_was() {
     let metadata = Metadata::default();
     assert!(metadata.is_empty());
     assert_eq!(
-        render_manifest(&hello(), &metadata, &[("bin/hello", Entry::Dir)]),
+        render_manifest(&hello(), &metadata, &[("bin/hello", Entry::dir())]),
         "name = \"dev.peios.hello\"\nversion = \"1.0-1\"\narch = \"x86_64\"\n\n\
          [files]\n\"bin/hello\" = { dir = true }\n"
     );
@@ -93,7 +93,7 @@ fn no_metadata_leaves_the_manifest_as_it_was() {
 
 #[test]
 fn metadata_has_one_canonical_form_that_reads_back() {
-    let text = render_manifest(&hello(), &full(), &[("bin/hello", Entry::Dir)]);
+    let text = render_manifest(&hello(), &full(), &[("bin/hello", Entry::dir())]);
     assert_eq!(text, FULL);
     let manifest = parse_manifest(text.as_bytes()).unwrap();
     assert_eq!(manifest.metadata, full());

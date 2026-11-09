@@ -3,11 +3,12 @@ title: Packages
 type: concept
 description: What a Peios package is, covering manifests and blobs, how a
   package's identity is derived, package identifiers, names and versions,
-  what a manifest says besides its files, the layout of the artifact
-  directory, and why a packed version never changes.
+  what a manifest says besides its files, security metadata, the layout of
+  the artifact directory, and why a packed version never changes.
 related:
   - peios/packaging/creating-a-package
   - peios/packaging/recording-dependencies-and-metadata
+  - peios/packaging/giving-files-security-metadata
 ---
 
 A package is how software is shipped on Peios: a set of files, symbolic
@@ -28,8 +29,9 @@ A package has two kinds of part:
   a symbolic link, given by its target; or an empty directory.
 
 A directory that contains anything is implied by its contents, so the
-manifest lists only empty ones. Of a file's permissions, the manifest keeps
-only whether it is executable.
+manifest lists only empty ones, and those with
+[security metadata](#security-metadata) of their own. Of a file's
+permissions, the manifest keeps only whether it is executable.
 
 The manifest for a package holding one program and one document looks like
 this:
@@ -148,6 +150,40 @@ like the files they have one spelling each. A package that records none of
 them has the same manifest it would have had without them. To record them,
 see [Recording Dependencies and Metadata](~peios/packaging/recording-dependencies-and-metadata).
 
+## Security metadata
+
+A file or directory can carry security metadata in its manifest entry:
+
+- **A security descriptor**, which replaces the one it would otherwise get,
+  so that, for example, only one service can run a program or write a
+  directory.
+- **A signature**, for a file. The kernel reads it from the file's
+  `security.peios.sig` attribute and checks it before it gives the file to
+  a device as firmware. The signature is stored as a blob, and the entry
+  names it by its hash.
+
+These entries, with the descriptor shortened, are from a package that gives
+one content both ways:
+
+```toml
+"bin/server" = { blob = "sha256:07f7ab476bc3a83fad639d34a012cb4a5f859441f0d24c11627ca96696839012", descriptor = "0100048014000000…" }
+"lib/firmware/acme/fw.bin" = { blob = "sha256:07f7ab476bc3a83fad639d34a012cb4a5f859441f0d24c11627ca96696839012", signature = "sha256:ec87928fa1c24dacf5ebe2eaf8f7adf473de9ef65f8b7648ead92e9f7672155b" }
+```
+
+The metadata is part of the entry, so it's part of the package's identity.
+A file with security metadata is stored as a file of its own that carries
+it, and every hard link to that file carries it too. Two files with the
+same content and different metadata are two stored files, and two packages
+can't give one path different metadata. A package with no security
+metadata has the manifest it would have had without it.
+
+On Peios, `ppk` gives each file and directory its metadata as it creates
+it. On another system, such as a Linux host that builds packages, it writes
+the attributes only where that system lets it, which usually needs
+privilege, and otherwise warns that it couldn't. The manifest records the
+metadata either way. To give files security metadata, see
+[Giving Files Security Metadata](~peios/packaging/giving-files-security-metadata).
+
 ## The artifact directory
 
 `ppk` stores packages in an artifact directory, which is
@@ -157,13 +193,15 @@ see [Recording Dependencies and Metadata](~peios/packaging/recording-dependencie
 |---|---|
 | `blobs/sha256/<hash>` | The content of one file that isn't executable |
 | `blobs/sha256/<hash>.exec` | The content of one executable file |
+| `blobs/sha256/<hash>.<entry>` | The content of one file with security metadata, which it carries |
 | `manifests/sha256/<hash>` | One manifest, named by its hash |
 | `refs/<name>/<version>/<arch>` | The identity of the package with that name, version, and architecture |
 
 A blob is stored in the form its manifest entries need: plain, executable,
-or both if the same content is shipped both ways. The form is part of the
-stored file, not of the blob's name, so a package's identity doesn't depend
-on it.
+or both if the same content is shipped both ways. A file with security
+metadata has a form of its own, named by the SHA-256 hash of its entry as
+the manifest writes it. The form is part of the stored file, not of the
+blob's name, so a package's identity doesn't depend on it.
 
 A ref is an index. It lets you find a package by name, but every manifest
 records its own name, version, and architecture, so the manifests remain
@@ -196,7 +234,8 @@ Everyone on a machine can read and run what's in its artifact directory.
 `ppk` gives every file it stores a security descriptor that grants Everyone
 read and execute, and SYSTEM and Administrators full control. The
 directories it creates there grant the same, so any user can reach the
-packages.
+packages. A file or directory that a package gives a descriptor of its own
+has that one instead, wherever it's placed.
 
 A package is the same on every machine it's installed on, because its
 content is named by hash. It can't hold anything that belongs to one

@@ -282,10 +282,7 @@ fn a_tampered_package_manifest_is_refused() {
         .join(format!("manifests/sha256/{}", identity.hex()));
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
     let hello = PackageId::new("dev.peios.hello", "1.0-1", "x86_64").unwrap();
-    let blob = Entry::Blob {
-        hex: Identity::of(b"other").hex().to_owned(),
-        exec: false,
-    };
+    let blob = Entry::file(Identity::of(b"other").hex().to_owned(), false);
     fs::write(
         &path,
         render_manifest(&hello, &ppk::Metadata::default(), &[("a", blob)]),

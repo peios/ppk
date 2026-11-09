@@ -37,6 +37,10 @@ pub struct Composed {
     pub identity: String,
     /// The composed root.
     pub path: PathBuf,
+    /// Number of files and directories of `usr` that don't carry all of
+    /// their security metadata, because this system isn't Peios and wouldn't
+    /// let ppk give it. Their manifests record it.
+    pub unstamped: usize,
 }
 
 /// A symlink to create in a composed root, given as `<path>:<target>`.
@@ -201,8 +205,16 @@ pub fn compose_env(
     };
     let usr = tmp.path().join(usr());
     fs::create_dir(&usr).with_context(|| format!("{}", usr.display()))?;
+    let mut unstamped = 0;
     for (path, (entry, _)) in &merged.usr {
-        build_entry(&usr_layout, &usr, path, entry, extras.files, out)?;
+        build_entry(
+            &usr_layout,
+            &usr,
+            (path, entry),
+            extras.files,
+            out,
+            &mut unstamped,
+        )?;
     }
     for dir in &extras.dirs {
         let dest = tmp.path().join(dir.path());
@@ -229,6 +241,7 @@ pub fn compose_env(
     Ok(Composed {
         identity: identity.to_string(),
         path: out.to_owned(),
+        unstamped,
     })
 }
 
@@ -335,8 +348,8 @@ fn check_extras(extras: &Extras, claims: &BTreeMap<String, (String, PackageId)>)
 }
 
 /// Hardlink what ppk needs to find `packages` into the artifact directory
-/// `dest`: their refs and manifests, and each blob in the forms they use.
-/// `out` is the root it is in, which an error names.
+/// `dest`: their refs and manifests, each blob in the forms they use, and
+/// their files' signatures. `out` is the root it is in, which an error names.
 fn include_artifacts(
     layout: &ArtifactDir,
     dest: &Path,
@@ -357,10 +370,14 @@ fn include_artifacts(
         ));
     }
     for (entry, _) in merged.values() {
-        if let Entry::Blob { hex, exec } = entry {
+        let Entry::Blob { signature, .. } = entry else {
+            continue;
+        };
+        links.insert((layout.file_path(entry), dest_layout.file_path(entry)));
+        if let Some(signature) = signature {
             links.insert((
-                layout.blob_path(hex, *exec),
-                dest_layout.blob_path(hex, *exec),
+                layout.blob_path(signature, false),
+                dest_layout.blob_path(signature, false),
             ));
         }
     }

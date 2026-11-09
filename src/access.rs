@@ -8,6 +8,11 @@
 //! each copy this descriptor of its own, so that it grants what a link would
 //! have, but hardening the store will not reach what was copied before.
 //!
+//! A file or directory a package gives security metadata is different: its
+//! [`Security`] replaces the store's descriptor with its own and sets its
+//! signature attribute. Each stored file with metadata is a file of its own,
+//! so the links to it share exactly that metadata.
+//!
 //! This module builds the one descriptor it needs by hand and applies it with
 //! the raw `kacs_set_sd` system call, using only constants from `peios-uapi`.
 //! That keeps ppk a single static binary that runs anywhere: off Peios the
@@ -16,12 +21,34 @@
 //! other descriptors, `kacs_open` or token queries, rewrite this on that crate
 //! rather than growing a second copy of its machinery here.
 
+use std::ffi::{CStr, CString};
 use std::io;
 use std::os::fd::AsRawFd;
 use std::path::Path;
+use std::sync::OnceLock;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use peios_uapi as uapi;
+
+use crate::SecurityDescriptor;
+
+/// The extended attribute a file's stored descriptor is in, which the kernel
+/// reads (`file_sd_cache.c`) and, on Peios, lets only `kacs_set_sd` write.
+#[cfg(not(test))]
+const SD_XATTR: &CStr = c"security.peios.sd";
+
+/// The extended attribute a file's signature is in, which the kernel reads
+/// (`signing.h`).
+#[cfg(not(test))]
+const SIGNATURE_XATTR: &CStr = c"security.peios.sig";
+
+/// Unit tests use `user.` attributes, which any process may set on its own
+/// files, so that they stamp for real on any host. The rest is the same.
+#[cfg(test)]
+const SD_XATTR: &CStr = c"user.peios.sd";
+
+#[cfg(test)]
+const SIGNATURE_XATTR: &CStr = c"user.peios.sig";
 
 /// Every self-relative security descriptor has revision 1 (`sd.h`).
 const SD_REVISION: u8 = 1;
@@ -126,23 +153,205 @@ pub(crate) fn descriptor(inherit: Inherit) -> Vec<u8> {
 /// Give the open file `file` (at `path`, for messages) the store descriptor.
 pub(crate) fn protect_file(file: &impl AsRawFd, path: &Path) -> Result<()> {
     let sd = descriptor(Inherit::No);
-    set_dacl(file.as_raw_fd(), c"", &sd, libc::AT_EMPTY_PATH)
-        .with_context(|| format!("{}: cannot set its security descriptor", path.display()))
+    set_sd(
+        file.as_raw_fd(),
+        c"",
+        uapi::KACS_SECINFO_DACL,
+        &sd,
+        libc::AT_EMPTY_PATH,
+    )
+    .with_context(|| format!("{}: cannot set its security descriptor", path.display()))
 }
 
 /// Give the directory `path` the store descriptor, inherited by everything
 /// created in it afterwards.
 pub(crate) fn protect_dir(path: &Path) -> Result<()> {
     let sd = descriptor(Inherit::ToContents);
-    let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
-        .with_context(|| format!("{}: path contains a NUL byte", path.display()))?;
-    set_dacl(libc::AT_FDCWD, &c_path, &sd, libc::AT_SYMLINK_NOFOLLOW)
-        .with_context(|| format!("{}: cannot set its security descriptor", path.display()))
+    set_sd(
+        libc::AT_FDCWD,
+        &c_path(path)?,
+        uapi::KACS_SECINFO_DACL,
+        &sd,
+        libc::AT_SYMLINK_NOFOLLOW,
+    )
+    .with_context(|| format!("{}: cannot set its security descriptor", path.display()))
 }
 
-/// `kacs_set_sd(dirfd, path, DACL, sd)`. Succeeds without doing anything
+/// Whether a file or directory carries all of its security metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub(crate) enum Stamp {
+    /// It does, or it has none.
+    Done,
+    /// This system is not Peios and would not let ppk give it some of it,
+    /// such as `security.*` attributes for an unprivileged process. Its
+    /// manifest still records it.
+    Skipped,
+}
+
+/// The security metadata a stored file or a directory carries: a descriptor
+/// to replace the store's, and a signature for its `security.peios.sig`.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Security<'a> {
+    pub(crate) descriptor: Option<&'a SecurityDescriptor>,
+    pub(crate) signature: Option<&'a [u8]>,
+}
+
+impl Security<'_> {
+    /// Give `path`, a file or directory that ppk has just created and
+    /// nothing else yet uses, this metadata.
+    ///
+    /// On Peios the descriptor is set with `kacs_set_sd` and the signature
+    /// as an attribute, and any failure is an error. Elsewhere both are
+    /// attributes, given where the system allows and otherwise skipped, as
+    /// the store's own descriptor is.
+    pub(crate) fn stamp(&self, path: &Path) -> Result<Stamp> {
+        let mut stamp = Stamp::Done;
+        if let Some(sd) = self.descriptor {
+            stamp = worst(stamp, stamp_descriptor(path, sd)?);
+        }
+        if let Some(signature) = self.signature {
+            stamp = worst(stamp, ensure_xattr(path, SIGNATURE_XATTR, signature)?);
+        }
+        Ok(stamp)
+    }
+
+    /// Check that `path`, a stored file that ppk did not just create,
+    /// carries this metadata, and give it what it lacks, as [`stamp`] does.
+    /// A different signature, or off Peios a different descriptor, is an
+    /// error: the file is not what its name says.
+    ///
+    /// On Peios a file's descriptor cannot be read back as it was set, so it
+    /// is left as it is: ppk set it when it created the file.
+    ///
+    /// [`stamp`]: Self::stamp
+    pub(crate) fn ensure(&self, path: &Path) -> Result<Stamp> {
+        let mut stamp = Stamp::Done;
+        if let Some(sd) = self.descriptor
+            && !descriptors_by_syscall()
+        {
+            stamp = worst(stamp, ensure_xattr(path, SD_XATTR, sd.as_bytes())?);
+        }
+        if let Some(signature) = self.signature {
+            stamp = worst(stamp, ensure_xattr(path, SIGNATURE_XATTR, signature)?);
+        }
+        Ok(stamp)
+    }
+}
+
+fn worst(a: Stamp, b: Stamp) -> Stamp {
+    if a == Stamp::Skipped { a } else { b }
+}
+
+/// Whether descriptors are set with `kacs_set_sd`: on Peios, except in unit
+/// tests, which set an attribute in its place.
+fn descriptors_by_syscall() -> bool {
+    !cfg!(test) && kacs_present()
+}
+
+fn stamp_descriptor(path: &Path, sd: &SecurityDescriptor) -> Result<Stamp> {
+    if !descriptors_by_syscall() {
+        return ensure_xattr(path, SD_XATTR, sd.as_bytes());
+    }
+    set_sd(
+        libc::AT_FDCWD,
+        &c_path(path)?,
+        sd.security_info(),
+        sd.as_bytes(),
+        libc::AT_SYMLINK_NOFOLLOW,
+    )
+    .with_context(|| format!("{}: cannot set its security descriptor", path.display()))?;
+    Ok(Stamp::Done)
+}
+
+/// Whether the kernel is Peios's: whether it has `kacs_set_sd`.
+fn kacs_present() -> bool {
+    static PRESENT: OnceLock<bool> = OnceLock::new();
+    *PRESENT.get_or_init(|| {
+        // SAFETY: every pointer is null and every length zero; the kernel
+        // refuses a missing descriptor before it looks at anything else.
+        let ret = unsafe {
+            libc::syscall(
+                libc::c_long::from(uapi::SYS_KACS_SET_SD as i32),
+                -1,
+                std::ptr::null::<libc::c_char>(),
+                0u32,
+                std::ptr::null::<u8>(),
+                0u32,
+                0i32,
+            )
+        };
+        !(ret == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::ENOSYS))
+    })
+}
+
+/// Give `path` the attribute `name` holding `value`, unless it holds it
+/// already. Off Peios, a refusal to read or write it, for want of privilege
+/// or of support for such attributes, skips it.
+fn ensure_xattr(path: &Path, name: &CStr, value: &[u8]) -> Result<Stamp> {
+    let c_path = c_path(path)?;
+    let what = || format!("{}: {}", path.display(), name.to_string_lossy());
+    let skip = |err: &io::Error| {
+        !kacs_present()
+            && matches!(
+                err.raw_os_error(),
+                Some(libc::EPERM | libc::EACCES | libc::EOPNOTSUPP)
+            )
+    };
+    // One byte more than `value`, so that a longer value doesn't fit.
+    let mut existing = vec![0u8; value.len() + 1];
+    // SAFETY: both strings are NUL-terminated and `existing` is a buffer of
+    // its length, all borrowed for the whole call.
+    let len = unsafe {
+        libc::lgetxattr(
+            c_path.as_ptr(),
+            name.as_ptr(),
+            existing.as_mut_ptr().cast(),
+            existing.len(),
+        )
+    };
+    if len >= 0 {
+        if existing[..len as usize] == *value {
+            return Ok(Stamp::Done);
+        }
+        bail!("{}: holds something else", what());
+    }
+    let err = io::Error::last_os_error();
+    match err.raw_os_error() {
+        Some(libc::ENODATA) => {}
+        Some(libc::ERANGE) => bail!("{}: holds something else", what()),
+        _ if skip(&err) => return Ok(Stamp::Skipped),
+        _ => return Err(err).with_context(what),
+    }
+    // SAFETY: both strings are NUL-terminated and `value` is a buffer of its
+    // length, all borrowed for the whole call; the kernel only reads them.
+    let ret = unsafe {
+        libc::lsetxattr(
+            c_path.as_ptr(),
+            name.as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+        )
+    };
+    if ret == 0 {
+        return Ok(Stamp::Done);
+    }
+    let err = io::Error::last_os_error();
+    if skip(&err) {
+        return Ok(Stamp::Skipped);
+    }
+    Err(err).with_context(|| format!("{}: cannot set it", what()))
+}
+
+fn c_path(path: &Path) -> Result<CString> {
+    CString::new(path.as_os_str().as_encoded_bytes())
+        .with_context(|| format!("{}: path contains a NUL byte", path.display()))
+}
+
+/// `kacs_set_sd(dirfd, path, info, sd)`. Succeeds without doing anything
 /// where the system call does not exist, which is everywhere but Peios.
-fn set_dacl(dirfd: i32, path: &std::ffi::CStr, sd: &[u8], flags: i32) -> io::Result<()> {
+fn set_sd(dirfd: i32, path: &CStr, info: u32, sd: &[u8], flags: i32) -> io::Result<()> {
     // SAFETY: `path` is a NUL-terminated string and `sd` a buffer of `sd.len()`
     // bytes, both borrowed for the whole call; the kernel only reads them.
     let ret = unsafe {
@@ -150,7 +359,7 @@ fn set_dacl(dirfd: i32, path: &std::ffi::CStr, sd: &[u8], flags: i32) -> io::Res
             libc::c_long::from(uapi::SYS_KACS_SET_SD as i32),
             dirfd,
             path.as_ptr(),
-            uapi::KACS_SECINFO_DACL,
+            info,
             sd.as_ptr(),
             sd.len() as u32,
             flags,

@@ -1,6 +1,8 @@
 # ppk's tests: its unit tests and each integration test, as `cargo test`
-# builds them, its documentation tests, as `cargo test --doc` runs them, and
-# Clippy's checks, as `cargo clippy --all-targets -- -Dwarnings` makes them.
+# builds them, its documentation tests, as `cargo test --doc` runs them,
+# Clippy's checks, as `cargo clippy --all-targets -- -Dwarnings` makes them,
+# and its documentation, as `RUSTDOCFLAGS=-Dwarnings cargo doc --no-deps`
+# makes it.
 # None needs the host's own filesystem beyond a writable `/tmp`. The tests
 # on a Peios kernel, `tests/vm`, run under provium, as `docs/testing.md`
 # describes.
@@ -21,3 +23,5 @@ def test ppk(tests: List<rust.RustTest> = rust.tests(crates(), "ppk")) {
 def test doctests(ran: List<{}> = rust.doctests(crates(), "ppk")) {}
 
 def test clippy(checked: List<{}> = rust.clippy(crates(), "ppk", flags = ["-Dwarnings"])) {}
+
+def test docs(made: Dir = rust.docs(crates(), "ppk", flags = ["-Dwarnings"])) {}

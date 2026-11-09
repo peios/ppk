@@ -14,7 +14,7 @@
 //!     "sha256:<hex>\n": which manifest that package is
 //! ```
 //!
-//! A manifest records name, version, arch, and a [files] table mapping each
+//! A manifest records name, version, arch, and a `[files]` table mapping each
 //! path to an inline table whose first key says what kind of entry it is:
 //!
 //! ```text

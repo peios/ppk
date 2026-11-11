@@ -15,7 +15,8 @@
 # alongside from being taken for it. The root lives on its own tmpfs
 # because prelude deletes what is left on the initramfs's filesystem once
 # it hands over; --copy-artifacts gives it a store of its own there, so
-# the medium is unmounted afterwards.
+# the medium is unmounted afterwards. The root's own skeleton file then
+# gives it what it needs outside /usr.
 
 # prelude installs its hook logger at this path on the booted system.
 # shellcheck source=/dev/null
@@ -72,6 +73,19 @@ seed-sd "$live" || exit 1
 # them whatever the profile says.
 ppk compose-env "$medium/live.toml" --artifact-dir "$medium/artifacts" --out "$live/root" \
     --copy-artifacts --dir proc --dir sys --dir dev >/dev/null || exit 1
+# A package holds only /usr. What the root needs outside it, /var, /lcl,
+# /tmp and the /lib64 link to the loader, is in the root skeleton file
+# fsbase ships, which the root builder applies (PSPU 11). Without one the
+# root has only what its packages and the profile give it.
+skeleton=$live/root/usr/share/skeleton
+if [ -e "$skeleton" ]; then
+    if ! skeleton apply "$live/root"; then
+        log_fail "could not apply the root skeleton"
+        exit 1
+    fi
+else
+    log_warn "the system root has no skeleton file, /usr/share/skeleton; nothing outside /usr but what its profile gives"
+fi
 # Image policy is outside /usr, so it travels beside the profile rather
 # than in a package. Preserve the autorun scripts' executable modes.
 if [ -d "$medium/lcl" ]; then

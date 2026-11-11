@@ -163,7 +163,9 @@ At boot:
    runs `ppk compose-env` with the medium's `live.toml` and `artifacts`
    and `--copy-artifacts`, so the system's root has its own copy of its
    packages, adds `/proc`, `/sys` and `/dev` for prelude to move its mounts
-   onto. If the medium carries `/lcl`, the hook copies that tree into the
+   onto. It applies the root's skeleton file, `/usr/share/skeleton`, with
+   `skeleton apply`, warning and continuing if the closure has none. If the
+   medium carries `/lcl`, the hook copies that tree into the
    root, preserving modes, before unmounting the medium and bind-mounting
    the root onto `/mnt/rootfs`. A copy failure fails the boot. This carries
    the image's registry seed queues and executable autorun script outside

@@ -42,9 +42,12 @@ ppk \- create and manage Peios packages
 .B ppk fetch
 .RB [ \-\-artifact\-dir
 .IR dir ]
+.RB [ \-\-arch
+.IR arch ]
+.RB [ \-\-no\-deps ]
 .RB [ \-\-replace ]
 .B \-\-from
-.I dir package
+.I dir request
 .br
 .B ppk closure
 .RB [ \-\-artifact\-dir
@@ -71,13 +74,16 @@ ppk \- create and manage Peios packages
 .br
 .B ppk run
 .RI [ profile ...]
+.RB [ \-\-no\-deps ]
+.RB [ \-\-arch
+.IR arch ]
 .RB [ \-\-artifact\-dir
 .IR dir ]
 .RB [ \-\-closure\-dir
 .IR dir ]
 .RB [ \-\-copy\-files ]
 .RB [ \-p
-.IR package ...]
+.IR request ...]
 .RB [ \-\-
 .I command
 .RI [ argument ...]]
@@ -554,20 +560,34 @@ If it is packed with different contents or metadata,
 .B ppk pack
 fails and writes nothing: a packed version is never replaced.
 .TP
-.BI fetch " package"
-Copy
-.I package
-from the artifact directory named by
+.BI fetch " request"
+Resolve
+.I request
+and its dependencies and requirements against the artifact directory named by
 .B \-\-from
-and print its identity on standard output.
+and copy every chosen package into the artifact directory.
+Print one identity per fetched package on standard output, in package-name order.
+A request is a bare name, a name with a constraint as for
+.BR resolve ,
+or an exact package ID, including its version's spelling and architecture.
+Unqualified requests use
+.BR \-\-arch ,
+or the architecture ppk was built for.
+An explicitly qualified ID can select its own architecture.
+All packages in one resolution must be for one architecture.
+Resolution errors name the missing or conflicting requirement and occur
+before copying starts.
+With
+.BR \-\-no\-deps ,
+copy exactly the package ID given, without resolving anything it needs;
+bare names and constraints are not accepted in this mode.
 Blobs already present are not copied.
 .IP
 Nothing read from the source is trusted.
 The source's ref must hold exactly one identity and a newline.
 The manifest must hash to that identity, be in exactly the form
 .B ppk pack
-writes, name
-.IR package ,
+writes, name the chosen package,
 and contain only relative paths with no empty,
 .BR . ,
 or
@@ -582,15 +602,18 @@ stops without writing the manifest or the ref.
 Blobs it copied before the failure are named by their content and are kept.
 .IP
 If
-.I package
+the chosen package
 is already present with the same identity,
 .B ppk fetch
-copies only what is missing.
+skips it without writes or output, while still resolving its dependencies.
+With
+.BR \-\-no\-deps ,
+it copies any missing files and prints the identity as before.
 If it is present with a different identity,
 .B ppk fetch
 fails and writes nothing, unless
-.B \-\-replace
-is given.
+.B \-\-replace \-\-no\-deps
+is given. Earlier packages fetched successfully remain if a later fetch fails.
 .IP
 These checks prove that the package matches the source's ref.
 They do not prove who published it, so fetch only from sources you trust.
@@ -723,6 +746,20 @@ files and
 mounted at
 .IR /usr .
 At least one of them must be given.
+Requests after
+.B \-p
+accept the same names, constraints and exact IDs as
+.BR fetch .
+They are resolved against the artifact directory before composition.
+Profiles used with requests contribute exact pins to that resolution;
+conflicts fail rather than upgrading a pinned package.
+Profiles without requests stay exact and are not resolved again.
+With
+.BR \-\-no\-deps ,
+only the profile packages and exact IDs after
+.B \-p
+are composed, without resolving dependencies or requirements.
+Missing packages must be fetched first.
 Everything outside
 .I /usr
 is as the caller sees it, so a profile's
@@ -821,11 +858,14 @@ list the store's packages, marking those in the current closure.
 .BR \-p ", " \-\-package " \fIpackage\fR..."
 For
 .B compose\-env
-and
-.BR run ,
+and for
+.BR "run \-\-no\-deps" ,
 add every
 .I package
 that follows, up to the next option, to the environment.
+For
+.BR run ,
+request each package that follows, with its constraint or as an exact ID.
 For
 .BR resolve ,
 request each package that follows, with its constraint.
@@ -840,13 +880,31 @@ Can be given more than once.
 .TP
 .BI \-\-arch " arch"
 For
+.BR fetch ,
+.BR run ,
+and
 .BR resolve ,
 choose packages for
 .IR arch ,
 rather than for the architecture
 .B ppk
 was built for.
-Profiles must come before it, since what follows it is read as packages.
+An exact ID with an explicit architecture must agree with this option.
+Cannot be combined with
+.BR \-\-no\-deps .
+.TP
+.B \-\-no\-deps
+For
+.B fetch
+and
+.BR run ,
+use exactly the package IDs given, without resolving dependencies or
+requirements. IDs have the form
+.IB name @ version\c
+.RB [ ?arch= \c
+.IR arch ].
+Bare names and constraints are not accepted in this mode.
+Profiles passed to run remain exact.
 .TP
 .BI \-\-artifact\-dir " dir"
 Store packages in
@@ -1032,6 +1090,9 @@ This breaks the rule that a stored version never changes.
 It is for an artifact directory nothing relies on yet, such as a
 bootstrap's, whose packages are rebuilt at the same versions before it is
 published.
+Requires
+.BR \-\-no\-deps ,
+so replacement affects only the named package.
 .TP
 .BI \-\-symlink " link"
 For
@@ -1247,12 +1308,12 @@ and claims
 as a link to
 .IR dash .
 .TP
-.B ppk fetch 'dev.peios.hello@1.0\-1?arch=noarch' \-\-from shared \-\-artifact\-dir artifacts
+.B ppk fetch org.figlet.figlet \-\-from shared \-\-artifact\-dir artifacts
 Copy the package from the artifact directory
 .I shared
 into
 .I artifacts
-and print its identity, which is the one
+with everything it needs, printing each fetched identity, which is the one
 .B ppk pack
 printed.
 .TP

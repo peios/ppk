@@ -157,7 +157,42 @@ impl Resolution {
 /// error, which asks for one to be removed. A package in several directories
 /// must be the same package in each.
 pub fn resolve(requests: &[Request], artifact_dirs: &[PathBuf], arch: &str) -> Result<Resolution> {
-    let index = Index::read(artifact_dirs, arch)?;
+    resolve_pinned(requests, &[], artifact_dirs, arch)
+}
+
+/// Resolve `requests` together with exact package IDs. Pins keep the version's
+/// spelling as well as its value, and must all be for `arch`. They are chosen
+/// before requests, so profiles and explicit IDs cannot be silently upgraded.
+pub fn resolve_pinned(
+    requests: &[Request],
+    pins: &[PackageId],
+    artifact_dirs: &[PathBuf],
+    arch: &str,
+) -> Result<Resolution> {
+    let mut index = Index::read(artifact_dirs, arch)?;
+    let mut pinned = BTreeMap::new();
+    let mut pin_requests = Vec::new();
+    for id in pins {
+        if id.arch() != arch {
+            bail!("{id}: resolving packages for {arch}");
+        }
+        if let Some(other) = pinned.insert(id.name(), id)
+            && other != id
+        {
+            bail!("{id}: conflicts with exact pin {other}");
+        }
+        let Some(candidates) = index.names.get_mut(id.name()) else {
+            bail!("{id}: no such package in the artifact directories");
+        };
+        candidates.retain(|candidate| candidate.id == *id);
+        if candidates.is_empty() {
+            bail!("{id}: no such package in the artifact directories");
+        }
+        pin_requests.push(Request::package(
+            id.name(),
+            Constraint::parse(&format!("= {}", id.version()))?,
+        )?);
+    }
     let mut resolver = Resolver {
         index: &index,
         artifact_dirs,
@@ -166,7 +201,7 @@ pub fn resolve(requests: &[Request], artifact_dirs: &[PathBuf], arch: &str) -> R
         packages: VecDeque::new(),
         capabilities: VecDeque::new(),
     };
-    for request in requests {
+    for request in pin_requests.iter().chain(requests) {
         resolver.push(Need {
             wanted: request.wanted.clone(),
             constraint: request.constraint.clone(),

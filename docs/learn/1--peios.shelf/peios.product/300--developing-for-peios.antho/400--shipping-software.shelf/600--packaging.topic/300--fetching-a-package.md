@@ -9,8 +9,9 @@ related:
   - peios/packaging/creating-a-package
 ---
 
-Fetching copies a package from another artifact directory into yours and
-checks every part of it on the way. Do this to use a package that was packed
+Fetching resolves a package and everything it needs from another artifact
+directory, then copies the chosen packages into yours and checks them on the
+way. Do this to use a package that was packed
 somewhere else, such as on a build machine whose artifact directory you can
 read.
 
@@ -21,20 +22,42 @@ read.
 - Have write access to your artifact directory. The default is
   `/system/artifacts`; to use a directory of your own, pass
   `--artifact-dir`.
-- Know the package's identifier, such as `dev.peios.hello@1.0-1?arch=noarch`.
+- Know the package's name, such as `org.figlet.figlet`.
 
 ## Fetch the package
 
-Run `ppk fetch` with the identifier and the source:
+Run `ppk fetch` with the name and the source:
 
 ```sh
-ppk fetch 'dev.peios.hello@1.0-1?arch=noarch' --from shared --artifact-dir artifacts
+ppk fetch org.figlet.figlet --from shared --artifact-dir artifacts
 ```
 
-`ppk` prints the package's identity:
+`ppk` chooses the newest version that satisfies the request, follows its
+dependencies and requirements, and fetches every chosen package. It prints
+one identity per package fetched, in package-name order:
 
 ```text
 sha256:73a137f612f39b8ee1ffcbb7f51b7b9dc370b8662323d72b9e6b73b9d54413f8
+```
+
+To constrain the version, quote the name and constraint, for example
+`'org.figlet.figlet >= 2.2'`. A full ID such as
+`'org.figlet.figlet@2.2.5-1?arch=x86_64'` pins that exact package, including
+the version's spelling. Its dependencies are still resolved. Unqualified
+requests choose for ppk's own architecture; `--arch` selects another. All
+packages in one resolution must be for the same architecture. A full ID
+with an explicit architecture can select that architecture on its own.
+
+Resolution is greedy, as `ppk resolve` is. Missing dependencies, missing
+capability providers and conflicting constraints fail with an error naming
+what is needed, before copying starts.
+
+To copy exactly one package without resolving anything it needs, pass
+`--no-deps` and a full ID. This mode accepts IDs, with an optional
+`?arch=…`, rather than bare names or constraints:
+
+```sh
+ppk fetch --no-deps 'dev.peios.hello@1.0-1?arch=noarch' --from shared --artifact-dir artifacts
 ```
 
 ## Check the result
@@ -62,10 +85,12 @@ don't prove who published it, so fetch only from sources you trust.
 
 ## When the package is already present
 
-Fetching a package that is already present with the same identity succeeds
-and copies only what is missing. If your artifact directory has a different
-package under the same name, version, and architecture, `ppk fetch` refuses
-and writes nothing:
+By default, a chosen package already present with the same identity is
+skipped without writes or output. Its dependencies are still resolved and
+fetched if missing. With `--no-deps`, fetching it checks the package, copies
+any missing files, and prints its identity as before. If your artifact
+directory has a different package under the same name, version, and
+architecture, `ppk fetch` refuses to replace it:
 
 ```text
 ppk: dev.peios.hello@1.0-1?arch=noarch: already present as sha256:73a137f612f39b8ee1ffcbb7f51b7b9dc370b8662323d72b9e6b73b9d54413f8, but other has sha256:453a10dad4cb1902912919527452fa61c6420ae9152c1f02b57c1421a6d9d57b
@@ -80,13 +105,14 @@ before you use the package.
 A bootstrap builds its first packages with another system's tools, then
 rebuilds them with its own at the same versions. Its artifact directory isn't
 published until every package has been rebuilt, so nothing relies on the
-first builds yet. To replace one, pass `--replace`:
+first builds yet. To replace one, pass `--replace --no-deps` with its ID:
 
 ```sh
-ppk fetch 'dev.peios.hello@1.0-1?arch=noarch' --from rebuilt --artifact-dir bootstrap --replace
+ppk fetch 'dev.peios.hello@1.0-1?arch=noarch' --from rebuilt --artifact-dir bootstrap --replace --no-deps
 ```
 
 The ref then names the fetched package. The replaced manifest and its files
-stay in the directory. Every check above still applies. Don't use
+stay in the directory. Replacement requires `--no-deps` so that it affects
+only the named package. Every check above still applies. Don't use
 `--replace` on an artifact directory anything has fetched from: that breaks
 the rule that a version never changes.

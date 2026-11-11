@@ -85,15 +85,15 @@ enum Command {
         #[command(flatten)]
         metadata: Box<MetadataArgs>,
     },
-    /// Copy a package from another artifact directory
+    /// Fetch a package and what it needs from another artifact directory
     #[command(
-        override_usage = "ppk fetch [options] --from <dir> <package>",
+        override_usage = "ppk fetch [options] --from <dir> <request>",
         after_help = SEE_ALSO
     )]
     Fetch {
-        /// Package to copy, as <name>@<version>[?arch=<arch>]
-        #[arg(value_name = "package")]
-        package: PackageId,
+        /// Package to fetch, as a name, constraint or exact package ID
+        #[arg(value_name = "request")]
+        package: String,
         /// Store packages in <dir> (default: /system/artifacts)
         #[arg(
             long,
@@ -105,8 +105,14 @@ enum Command {
         /// Copy from the artifact directory <dir>
         #[arg(long, value_name = "dir")]
         from: PathBuf,
-        /// Replace the package if <dir> already has another under its name
+        /// Copy exactly the package ID given, without resolving what it needs
         #[arg(long)]
+        no_deps: bool,
+        /// Choose for <arch> (default: ppk's own)
+        #[arg(long, value_name = "arch", conflicts_with = "no_deps")]
+        arch: Option<String>,
+        /// Replace an existing package (requires --no-deps; for bootstraps)
+        #[arg(long, requires = "no_deps")]
         replace: bool,
     },
     /// Compose packages into a closure
@@ -176,7 +182,7 @@ enum Command {
     },
     /// Run a command, or a shell, with the closure of packages at /usr
     #[command(
-        override_usage = "ppk run [<profile>...] [options] [-p <package>...]\n       \
+        override_usage = "ppk run [<profile>...] [options] [-p <request>...]\n       \
                           [-- <command> [<argument>...]]",
         after_help = SEE_ALSO
     )]
@@ -186,10 +192,16 @@ enum Command {
         // Angle brackets in the name, as for help's optional argument below.
         #[arg(value_name = "<profile>", required_unless_present = "packages")]
         profiles: Vec<PathBuf>,
-        /// Packages to compose besides the profiles', each as
-        /// <name>@<version>[?arch=<arch>]
-        #[arg(short = 'p', long = "package", value_name = "package", num_args = 1..)]
-        packages: Vec<PackageId>,
+        /// Packages to resolve besides the profiles', as names, constraints
+        /// or exact package IDs
+        #[arg(short = 'p', long = "package", value_name = "request", num_args = 1..)]
+        packages: Vec<String>,
+        /// Compose exactly the package IDs given, without resolving their needs
+        #[arg(long)]
+        no_deps: bool,
+        /// Choose for <arch> (default: ppk's own)
+        #[arg(long, value_name = "arch", conflicts_with = "no_deps")]
+        arch: Option<String>,
         /// Read packages from <dir> (default: /system/artifacts)
         #[arg(
             long,
@@ -429,14 +441,41 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             artifact_dir,
             from,
             replace,
+            no_deps,
+            arch,
         } => {
-            let fetched = if replace {
-                ppk::fetch_replacing(&package, &from, &artifact_dir)?
+            if no_deps {
+                let id = match package.parse() {
+                    Ok(id) => id,
+                    Err(err) => return Ok(report_usage_error(program, &describe(&err))),
+                };
+                let fetched = if replace {
+                    ppk::fetch_replacing(&id, &from, &artifact_dir)?
+                } else {
+                    ppk::fetch(&id, &from, &artifact_dir)?
+                };
+                warn_unstamped(program, fetched.unstamped);
+                println!("{}", fetched.identity);
             } else {
-                ppk::fetch(&package, &from, &artifact_dir)?
-            };
-            warn_unstamped(program, fetched.unstamped);
-            println!("{}", fetched.identity);
+                let inputs = match resolution_inputs(&[package], Vec::new(), arch.as_deref()) {
+                    Ok(inputs) => inputs,
+                    Err(err) => return Ok(report_usage_error(program, &describe(&err))),
+                };
+                let resolved = ppk::resolve_pinned(
+                    &inputs.requests,
+                    &inputs.pins,
+                    std::slice::from_ref(&from),
+                    &inputs.arch,
+                )?;
+                for package in resolved.packages {
+                    if ppk::packed(&package.id, &artifact_dir)? == Some(package.identity) {
+                        continue;
+                    }
+                    let fetched = ppk::fetch(&package.id, &from, &artifact_dir)?;
+                    warn_unstamped(program, fetched.unstamped);
+                    println!("{}", fetched.identity);
+                }
+            }
         }
         Command::List {
             all,
@@ -526,9 +565,32 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             closure_dir,
             copy_files,
             command,
+            no_deps,
+            arch,
         } => {
             // A run keeps the caller's root, so it takes only the packages.
-            let env = environment(&profiles, packages)?;
+            let env = if no_deps {
+                let packages = match packages.iter().map(|s| s.parse()).collect() {
+                    Ok(packages) => packages,
+                    Err(err) => return Ok(report_usage_error(program, &describe(&err))),
+                };
+                environment(&profiles, packages)?
+            } else if packages.is_empty() {
+                environment(&profiles, Vec::new())?
+            } else {
+                let profile = ppk::Profile::read_all(&profiles)?;
+                let inputs = match resolution_inputs(&packages, profile.packages, arch.as_deref()) {
+                    Ok(inputs) => inputs,
+                    Err(err) => return Ok(report_usage_error(program, &describe(&err))),
+                };
+                ppk::resolve_pinned(
+                    &inputs.requests,
+                    &inputs.pins,
+                    std::slice::from_ref(&artifact_dir),
+                    &inputs.arch,
+                )?
+                .profile()
+            };
             let closure_dir = closure_dir.unwrap_or_else(|| artifact_dir.join(ppk::CLOSURE_SUBDIR));
             let closed = closure(&env.packages, &artifact_dir, &closure_dir, copy_files)?;
             warn_unstamped(program, closed.unstamped);
@@ -585,6 +647,52 @@ fn warn_unstamped(program: &str, unstamped: usize) {
         "{program}: warning: {what} security metadata this system would not let ppk give; \
          {record} it"
     );
+}
+
+/// Requests and exact pins for one resolution. A full ID can select a foreign
+/// architecture; unqualified requests use `--arch`, or ppk's own architecture.
+struct ResolutionInputs {
+    requests: Vec<ppk::Request>,
+    pins: Vec<PackageId>,
+    arch: String,
+}
+
+fn resolution_inputs(
+    packages: &[String],
+    mut pins: Vec<PackageId>,
+    arch: Option<&str>,
+) -> anyhow::Result<ResolutionInputs> {
+    let default_arch = arch.unwrap_or(ppk::HOST_ARCH);
+    let mut requests = Vec::new();
+    let mut unqualified = false;
+    for package in packages {
+        if package.contains('@') {
+            let mut id: PackageId = package.parse()?;
+            if !package.contains('?') {
+                id = PackageId::new(id.name(), id.version(), default_arch)?;
+                unqualified = true;
+            }
+            pins.push(id);
+        } else {
+            requests.push(ppk::Request::parse_package(package)?);
+            unqualified = true;
+        }
+    }
+    let arch = if unqualified || arch.is_some() {
+        default_arch
+    } else {
+        pins.first().map_or(default_arch, PackageId::arch)
+    };
+    for id in &pins {
+        if id.arch() != arch {
+            anyhow::bail!("{id}: resolving packages for {arch}");
+        }
+    }
+    Ok(ResolutionInputs {
+        arch: arch.to_owned(),
+        requests,
+        pins,
+    })
 }
 
 /// The requests `-p` and `-c` give, packages first.
@@ -710,7 +818,12 @@ fn usage_message(err: &clap::Error) -> String {
         }
         // Required only without -p, and named with its brackets already.
         (ErrorKind::MissingRequiredArgument, ["<<profile>>..."]) => {
-            "missing <profile>... or -p <package>...".to_owned()
+            let value = if err.render().to_string().contains("ppk run ") {
+                "request"
+            } else {
+                "package"
+            };
+            format!("missing <profile>... or -p <{value}>...")
         }
         (ErrorKind::MissingRequiredArgument, [_]) => format!("missing argument {}", args[0]),
         (ErrorKind::MissingRequiredArgument, [_, ..]) => {

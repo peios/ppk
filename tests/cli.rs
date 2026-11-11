@@ -105,7 +105,9 @@ fn fetch_replaces_another_package_only_when_asked() {
 
     let refused = fetch(&[]);
     assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
-    let replaced = fetch(&["--replace"]);
+    let unsafe_replace = fetch(&["--replace"]);
+    assert_eq!(unsafe_replace.status.code(), Some(2));
+    let replaced = fetch(&["--replace", "--no-deps"]);
     assert_eq!(replaced.status.code(), Some(0), "{}", stderr(&replaced));
     let source_ref = fs::read_dir(source.join("refs/dev.peios.hello/1.0-1"))
         .unwrap()
@@ -545,8 +547,8 @@ fn malformed_metadata_is_a_usage_error() {
 #[test]
 fn run_needs_packages() {
     for (args, missing) in [
-        (vec!["run"], "<profile>... or -p <package>..."),
-        (vec!["run", "--", "true"], "<profile>... or -p <package>..."),
+        (vec!["run"], "<profile>... or -p <request>..."),
+        (vec!["run", "--", "true"], "<profile>... or -p <request>..."),
     ] {
         let output = ppk(&args);
         assert_eq!(output.status.code(), Some(2), "{args:?}");

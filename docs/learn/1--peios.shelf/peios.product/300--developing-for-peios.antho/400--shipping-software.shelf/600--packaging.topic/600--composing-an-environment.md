@@ -99,6 +99,13 @@ ppk compose-env env.toml --artifact-dir artifacts --out root --symlink bin::bin 
 The root then holds `bin`, a link to `usr/bin`, an empty `tmp`, the
 packages' artifacts in `system/artifacts`, and `usr`.
 
+For a live image, `ppk-live-root` composes the root from the medium's
+profile and store, then copies the medium's `/lcl` tree into it if present.
+The copy preserves modes and a copy failure fails the boot. This carries
+image policy, including registry seed queues and executable autorun
+scripts, outside `/usr`. peinit applies the common and live seed queues
+after registryd starts; an installer owns promotion of the install queue.
+
 ## Share a layout between profiles
 
 When several environments need the same root layout, write it once as a

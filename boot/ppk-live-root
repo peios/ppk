@@ -72,6 +72,15 @@ seed-sd "$live" || exit 1
 # them whatever the profile says.
 ppk compose-env "$medium/live.toml" --artifact-dir "$medium/artifacts" --out "$live/root" \
     --copy-artifacts --dir proc --dir sys --dir dev >/dev/null || exit 1
+# Image policy is outside /usr, so it travels beside the profile rather
+# than in a package. Preserve the autorun scripts' executable modes.
+if [ -d "$medium/lcl" ]; then
+    log "copying the medium's local policy into the system root"
+    if ! cp -a "$medium/lcl" "$live/root/"; then
+        log_fail "could not copy the medium's local policy"
+        exit 1
+    fi
+fi
 umount "$medium" || exit 1
 mount --bind "$live/root" "$rootfs" || exit 1
 log_ok "system root composed at $rootfs"

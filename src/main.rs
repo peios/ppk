@@ -50,7 +50,7 @@ enum Command {
     /// List the packages in the current closure or the store
     #[command(override_usage = "ppk list [options]", after_help = SEE_ALSO)]
     List {
-        /// List every stored package, with 1 for membership and 0 otherwise
+        /// List every stored package, with `*` beside those in the current closure
         #[arg(long)]
         all: bool,
         /// Read <dir>/usr/inventory (default: /)
@@ -453,7 +453,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
                             .iter()
                             .any(|(current, package)| *current == identity && *package == id)
                     });
-                    println!("{}\t{id}", u8::from(member));
+                    println!("{} {id}", if member { '*' } else { ' ' });
                 }
             } else {
                 let inventory = inventory.ok_or_else(|| {

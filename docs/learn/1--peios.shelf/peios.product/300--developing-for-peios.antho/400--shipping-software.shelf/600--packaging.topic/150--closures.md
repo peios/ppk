@@ -81,11 +81,12 @@ package IDs or verify the files in the tree.
 Run `ppk list` to print the current closure's full package IDs in byte
 order, one per line. No artifact directory is needed. Run `ppk list --all`
 to list every package indexed by the store's refs, also sorted by full ID.
-Each line has `1`, a tab, and the ID when both ID and identity are in the
-current closure; other packages have `0` in the first field.
+A package whose ID and identity are both in the current closure has `*`
+before its ID; other packages have a space there, so every ID starts in the
+same column.
 
 A missing inventory makes `ppk list` fail with an explanation. With
-`--all`, a missing inventory gives every package a `0` field. A malformed
+`--all`, a missing inventory leaves every package unmarked. A malformed
 inventory or mismatched closure identity makes either command fail.
 
 An existing closure without an inventory is reused unchanged as a closure

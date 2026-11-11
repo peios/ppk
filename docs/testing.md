@@ -163,7 +163,12 @@ At boot:
    runs `ppk compose-env` with the medium's `live.toml` and `artifacts`
    and `--copy-artifacts`, so the system's root has its own copy of its
    packages, adds `/proc`, `/sys` and `/dev` for prelude to move its mounts
-   onto, unmounts the medium, and bind-mounts the root onto `/mnt/rootfs`.
+   onto. If the medium carries `/lcl`, the hook copies that tree into the
+   root, preserving modes, before unmounting the medium and bind-mounting
+   the root onto `/mnt/rootfs`. A copy failure fails the boot. This carries
+   the image's registry seed queues and executable autorun script outside
+   the package closure; peinit applies the common and live queues after
+   registryd starts. The install queue is reserved for an installer.
    The root lives on its own tmpfs because prelude deletes what is left on
    the initramfs's filesystem once it hands over.
 3. prelude moves `/proc`, `/sys` and `/dev` into the new root, switches to

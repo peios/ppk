@@ -47,6 +47,24 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// List the packages in the current closure or the store
+    #[command(override_usage = "ppk list [options]", after_help = SEE_ALSO)]
+    List {
+        /// List every stored package, with 1 for membership and 0 otherwise
+        #[arg(long)]
+        all: bool,
+        /// Read <dir>/usr/inventory (default: /)
+        #[arg(
+            long,
+            value_name = "dir",
+            default_value = "/",
+            hide_default_value = true
+        )]
+        root: PathBuf,
+        /// Read packages from <dir> (default: /system/artifacts)
+        #[arg(long, value_name = "dir", default_value = ppk::DEFAULT_ARTIFACT_DIR, hide_default_value = true)]
+        artifact_dir: PathBuf,
+    },
     /// Pack a directory into the artifact directory
     #[command(override_usage = "ppk pack [options] <package> <path>", after_help = SEE_ALSO)]
     Pack {
@@ -419,6 +437,41 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             };
             warn_unstamped(program, fetched.unstamped);
             println!("{}", fetched.identity);
+        }
+        Command::List {
+            all,
+            root,
+            artifact_dir,
+        } => {
+            let usr = root.join("usr");
+            let inventory = ppk::read_inventory(&usr)?;
+            if all {
+                for (id, identity) in ppk::stored_packages(&artifact_dir)? {
+                    let member = inventory.as_ref().is_some_and(|inventory| {
+                        inventory
+                            .packages
+                            .iter()
+                            .any(|(current, package)| *current == identity && *package == id)
+                    });
+                    println!("{}\t{id}", u8::from(member));
+                }
+            } else {
+                let inventory = inventory.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "{}: this /usr wasn't composed by a ppk that records an inventory",
+                        usr.display()
+                    )
+                })?;
+                let mut ids: Vec<_> = inventory
+                    .packages
+                    .iter()
+                    .map(|(_, id)| id.to_string())
+                    .collect();
+                ids.sort();
+                for id in ids {
+                    println!("{id}");
+                }
+            }
         }
         Command::Closure {
             packages,

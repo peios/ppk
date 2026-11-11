@@ -15,6 +15,11 @@ versioned package. For what a package contains, see
 
 ## Before you start
 
+The top-level name `inventory` is reserved for ppk's closure inventory.
+Do not include a file, directory, or symbolic link with that name in the
+package's input tree, or claim `/usr/inventory` or a path beneath it.
+`ppk pack` refuses these paths before writing to the store.
+
 - Install `ppk`.
 - Choose the package's version, the architecture its content is built for,
   and its name, which must follow the

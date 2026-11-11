@@ -56,6 +56,24 @@ sha256:fe5cf307f0b70379e1ec36b0d8dca659782446b0d13e7140c1257cd855ba61c4
 under `/usr`, such as dash's `/usr/bin/sh`. Nothing is written to the
 artifact directory.
 
+`root/usr/inventory` records the closure identity and the identities and
+full IDs of its packages. List them without a store:
+
+```sh
+ppk list --root root
+```
+
+To list a store and mark the packages in this root, run:
+
+```sh
+ppk list --all --root root --artifact-dir artifacts
+```
+
+Each line has `1` for a matching package identity and ID, or `0` otherwise,
+then a tab and the full ID. Both commands sort by full ID. For validation
+and missing-inventory behavior, see
+[Identifying the mounted closure](~peios/packaging/closures#identifying-the-mounted-closure).
+
 To add packages to the profile's, or to compose without a profile, name
 them after `-p`. One `-p` takes every package after it, up to the next
 option, so the profile must come first:

@@ -56,6 +56,12 @@ The closure's manifest, which lists its packages, is beside the tree with
 the same name and a `.manifest` suffix. Running the same command again
 reuses the closure and prints the same identity.
 
+The tree also holds `inventory`, recording the closure identity and each
+package's identity and full ID. When mounted at `/usr`, this file lets
+`ppk list` identify the closure without an artifact directory. For its
+format and the treatment of older closures, see
+[Identifying the mounted closure](~peios/packaging/closures#identifying-the-mounted-closure).
+
 ## Resolving a conflict
 
 If two packages give the same path different contents, `ppk closure`

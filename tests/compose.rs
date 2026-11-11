@@ -561,11 +561,12 @@ fn claimed_links_are_created_in_usr_and_in_the_root() {
         fs::read_link(tree.join("bin/sh")).unwrap(),
         Path::new("dash")
     );
-    let names: Vec<_> = fs::read_dir(&tree)
+    let mut names: Vec<_> = fs::read_dir(&tree)
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
         .collect();
-    assert_eq!(names, ["bin"]);
+    names.sort();
+    assert_eq!(names, ["bin", "inventory"]);
 }
 
 #[test]

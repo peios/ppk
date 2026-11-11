@@ -120,6 +120,53 @@ pub fn packed(id: &PackageId, artifact_dir: &Path) -> Result<Option<Identity>> {
     read_ref(&ArtifactDir::new(artifact_dir).ref_path(id))
 }
 
+/// Every package indexed by a ref, sorted by its full ID. Manifests and
+/// blobs are not read. A missing refs directory is an empty store.
+pub fn stored_packages(artifact_dir: &Path) -> Result<Vec<(PackageId, Identity)>> {
+    let mut packages = Vec::new();
+    for name in ref_entries(&artifact_dir.join("refs"))? {
+        let name = name.with_context(|| format!("{}: refs", artifact_dir.display()))?;
+        if !name.file_type()?.is_dir() {
+            continue;
+        }
+        for version in ref_entries(&name.path())? {
+            let version = version?;
+            if !version.file_type()?.is_dir() {
+                continue;
+            }
+            for arch in ref_entries(&version.path())? {
+                let arch = arch?;
+                if !arch.file_type()?.is_file() {
+                    continue;
+                }
+                let (name, version, arch_name) =
+                    (name.file_name(), version.file_name(), arch.file_name());
+                let (Some(name), Some(version), Some(arch_name)) =
+                    (name.to_str(), version.to_str(), arch_name.to_str())
+                else {
+                    continue;
+                };
+                let Ok(id) = PackageId::new(name, version, arch_name) else {
+                    continue;
+                };
+                if let Some(identity) = read_ref(&arch.path())? {
+                    packages.push((id, identity));
+                }
+            }
+        }
+    }
+    packages.sort_by_cached_key(|(id, _)| id.to_string());
+    Ok(packages)
+}
+
+fn ref_entries(dir: &Path) -> Result<Vec<io::Result<fs::DirEntry>>> {
+    match fs::read_dir(dir) {
+        Ok(entries) => Ok(entries.collect()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(err) => Err(err).with_context(|| format!("{}", dir.display())),
+    }
+}
+
 /// Create `artifact_dir` if it is missing, and check that files can be
 /// created in it, so that a caller with costly work to do before packing
 /// finds out first.

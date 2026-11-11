@@ -18,10 +18,10 @@ can hold different versions of the same package side by side.
 
 ## A tree of hardlinks
 
-Unless you ask for copies, every file in a closure is a hardlink to its
-blob in the artifact directory: the same file on disk, not a copy. Building
-a closure therefore copies no file content, and a file that several
-closures share is stored once.
+Unless you ask for copies, every package file in a closure is a hardlink
+to its blob in the artifact directory: the same file on disk, not a copy.
+Building a closure therefore copies no file content, and a file that
+several closures share is stored once.
 
 A hardlink shares everything about the file except its name, including
 whether it is executable. That's why the artifact directory stores an
@@ -60,6 +60,38 @@ Because the name is known before anything is built, `ppk closure` reuses
 a closure that already exists. It builds a new tree in a temporary
 directory and moves it into place only when it's complete, so a closure
 that exists is never half-built.
+
+## Identifying the mounted closure
+
+Each built closure also holds `inventory` at its top, visible as
+`/usr/inventory` when mounted. `ppk compose-env` writes the same file in
+the root's `usr`. `ppk run` exposes the inventory of the closure it mounts.
+This generated file has mode `0444` and inherits the tree's security
+descriptor, like directories without manifest metadata.
+
+The inventory uses canonical TOML, following the package manifest format.
+Its `closure` string records the closure identity. Its `[packages]` table
+maps each quoted package identity to its full package ID, one per line,
+sorted by identity. The inventory doesn't change how the closure is named.
+`ppk list` reconstructs the closure manifest from these identities and
+checks its hash against `closure` before printing the packages.
+This checks the recorded set of identities; it doesn't authenticate the
+package IDs or verify the files in the tree.
+
+Run `ppk list` to print the current closure's full package IDs in byte
+order, one per line. No artifact directory is needed. Run `ppk list --all`
+to list every package indexed by the store's refs, also sorted by full ID.
+Each line has `1`, a tab, and the ID when both ID and identity are in the
+current closure; other packages have `0` in the first field.
+
+A missing inventory makes `ppk list` fail with an explanation. With
+`--all`, a missing inventory gives every package a `0` field. A malformed
+inventory or mismatched closure identity makes either command fail.
+
+An existing closure without an inventory is reused unchanged as a closure
+built by an older ppk. To obtain an inventory, compose a fresh root or use
+a separate closure directory. Reusing a closure keeps requiring only read
+access to its tree.
 
 ## Conflicts
 

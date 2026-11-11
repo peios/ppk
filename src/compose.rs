@@ -22,6 +22,7 @@ use crate::closure::{
 };
 use crate::environment::MOUNT_POINT;
 use crate::fetch::fetch;
+use crate::inventory::Inventory;
 use crate::manifest::{check_path, toml_string};
 use crate::store::ArtifactDir;
 use crate::{DEFAULT_ARTIFACT_DIR, Entry, Identity, PackageId};
@@ -216,6 +217,7 @@ pub fn compose_env(
             &mut unstamped,
         )?;
     }
+    Inventory::new(merged.packages).write(&usr)?;
     for dir in &extras.dirs {
         let dest = tmp.path().join(dir.path());
         fs::create_dir_all(&dest).with_context(|| format!("{}", dest.display()))?;

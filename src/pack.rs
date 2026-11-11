@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::access::{Security, Stamp};
 use crate::derive;
+use crate::inventory::INVENTORY;
 use crate::manifest::toml_string;
 use crate::security::{
     SIGNATURE_BYTES, SIGNATURE_SUFFIX, check_signature, is_elf, is_signature_path,
@@ -184,6 +185,16 @@ pub fn pack_with_options(
     }
 
     let mut found = Vec::new();
+    if fs::symlink_metadata(input.join(INVENTORY)).is_ok() {
+        bail!("/usr/inventory is reserved for ppk; remove inventory from the package's files");
+    }
+    if metadata
+        .claims
+        .keys()
+        .any(|path| path == "/usr/inventory" || path.starts_with("/usr/inventory/"))
+    {
+        bail!("/usr/inventory is reserved for ppk and cannot be claimed");
+    }
     let mut dirs = BTreeSet::new();
     walk(input, input, &mut found, &mut dirs)?;
     let signatures = take_signatures(&mut found)?;

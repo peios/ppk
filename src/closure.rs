@@ -11,6 +11,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::access::{self, Security, Stamp};
 use crate::environment::MOUNT_POINT;
+use crate::inventory::{INVENTORY, Inventory, read_inventory};
 use crate::manifest::toml_string;
 use crate::store::{self, ArtifactDir};
 use crate::{Entry, Identity, PackageId, parse_manifest};
@@ -66,7 +67,7 @@ pub struct Closed {
 /// identities of its packages sorted and without duplicates, so the order
 /// and repetition of `packages` do not matter. An existing closure is reused.
 ///
-/// Every file in the tree is a hardlink to its blob in the form its entry
+/// Every package file is a hardlink to its blob in the form its entry
 /// needs, which carries the entry's security metadata; symlinks and
 /// directories are created afresh, each directory with its descriptor, and so
 /// is each link a package claims under `/usr`. Where this system isn't Peios
@@ -118,6 +119,12 @@ fn closure_as(
         unstamped,
     };
     if tree_path.is_dir() {
+        // Keep older trees usable without writing into a published closure.
+        if let Some(inventory) = read_inventory(&tree_path)?
+            && inventory.identity != identity
+        {
+            bail!("{}: inventory names another closure", tree_path.display());
+        }
         // Reusing a closure only reads, so that anyone who can read the store
         // can use the closures an administrator built.
         match fs::read(&manifest_path) {
@@ -134,7 +141,7 @@ fn closure_as(
     }
 
     // A closure is only usr, so links claimed outside it have no place.
-    let merged = merge(&layout, &identities)?.usr;
+    let merged = merge(&layout, &identities)?;
 
     store::create_dirs(closure_dir)?;
 
@@ -152,7 +159,7 @@ fn closure_as(
     // have their blobs' descriptor, either way.
     access::protect_dir(tmp.path())?;
     let mut unstamped = 0;
-    for (path, (entry, _)) in &merged {
+    for (path, (entry, _)) in &merged.usr {
         build_entry(
             &layout,
             tmp.path(),
@@ -162,6 +169,7 @@ fn closure_as(
             &mut unstamped,
         )?;
     }
+    Inventory::new(merged.packages).write(tmp.path())?;
     // Last, so that a tree that can't be built leaves nothing behind.
     write_manifest(closure_dir, &manifest_path, &manifest)?;
 
@@ -223,6 +231,8 @@ fn write_manifest(closure_dir: &Path, manifest_path: &Path, manifest: &str) -> R
 /// with its entry and the package that provides or claims it, and the links
 /// they claim outside `/usr`.
 pub(crate) struct Merged {
+    /// Verified package identities and full IDs, in closure identity order.
+    pub(crate) packages: Vec<(Identity, PackageId)>,
     /// Each path, relative to `/usr`.
     pub(crate) usr: BTreeMap<String, (Entry, PackageId)>,
     /// Each link claimed outside `/usr`, relative to the root, with its
@@ -239,6 +249,7 @@ pub(crate) struct Merged {
 /// provides a name; for a claim to be a path in a package's files; or for a
 /// path to lie under another's claim. `/usr` itself can't be claimed.
 pub(crate) fn merge(layout: &ArtifactDir, identities: &[Identity]) -> Result<Merged> {
+    let mut packages = Vec::with_capacity(identities.len());
     let mut merged: BTreeMap<String, (Entry, PackageId)> = BTreeMap::new();
     // Every claim, keyed by its absolute path.
     let mut claims: BTreeMap<String, (String, PackageId)> = BTreeMap::new();
@@ -249,6 +260,7 @@ pub(crate) fn merge(layout: &ArtifactDir, identities: &[Identity]) -> Result<Mer
             bail!("{}: does not match its hash", path.display());
         }
         let manifest = parse_manifest(&bytes).with_context(|| format!("{}", path.display()))?;
+        packages.push((identity.clone(), manifest.id.clone()));
         for (file, entry) in manifest.entries {
             match merged.get(&file) {
                 Some((existing, owner)) if *existing != entry => bail!(
@@ -303,6 +315,9 @@ pub(crate) fn merge(layout: &ArtifactDir, identities: &[Identity]) -> Result<Mer
     // order of packages. It also means no symlink is ever followed when the
     // tree is built, because nothing is created beneath one.
     for (file, (_, owner)) in &merged {
+        if file == INVENTORY || file.starts_with(&format!("{INVENTORY}/")) {
+            bail!("{file}: in {owner}, but /usr/inventory is reserved for ppk");
+        }
         let mut ancestor = file.as_str();
         while let Some(slash) = ancestor.rfind('/') {
             ancestor = &ancestor[..slash];
@@ -331,6 +346,7 @@ pub(crate) fn merge(layout: &ArtifactDir, identities: &[Identity]) -> Result<Mer
         }
     }
     Ok(Merged {
+        packages,
         usr: merged,
         root_claims,
     })

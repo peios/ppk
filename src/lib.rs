@@ -64,6 +64,7 @@ pub mod environment;
 mod fetch;
 mod id;
 mod identity;
+mod inventory;
 mod manifest;
 mod metadata;
 mod pack;
@@ -81,6 +82,7 @@ pub use derive::{SYMBOL_CAPABILITIES, SYMBOL_VERSION_FLOORS};
 pub use fetch::{Fetched, fetch, fetch_replacing};
 pub use id::{HOST_ARCH, PackageId};
 pub use identity::Identity;
+pub use inventory::{Inventory, read_inventory};
 pub use manifest::{Entry, Manifest, parse_manifest, render_manifest};
 pub use metadata::{LicenseClass, Metadata};
 pub use pack::{
@@ -89,7 +91,7 @@ pub use pack::{
 pub use profile::Profile;
 pub use resolve::{Request, Resolution, Resolved, Wanted, resolve};
 pub use security::SecurityDescriptor;
-pub use store::{packed, prepare_artifact_dir, versions};
+pub use store::{packed, prepare_artifact_dir, stored_packages, versions};
 pub use version::{Constraint, Operator, Version};
 
 /// The hash algorithm, as it appears in artifact paths and manifest values.

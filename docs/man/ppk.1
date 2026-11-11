@@ -1,7 +1,14 @@
-.TH PPK 1 2026-11-09 "Peios ppk 0.1.0"
+.TH PPK 1 2026-11-11 "Peios ppk 0.1.0"
 .SH NAME
 ppk \- create and manage Peios packages
 .SH SYNOPSIS
+.B ppk list
+.RB [ \-\-all ]
+.RB [ \-\-artifact\-dir
+.IR dir ]
+.RB [ \-\-root
+.IR dir ]
+.br
 .B ppk pack
 .RB [ \-\-artifact\-dir
 .IR dir ]
@@ -475,6 +482,36 @@ The same files give the same requirements and provides, in the same
 manifest.
 .SH COMMANDS
 .TP
+.B list
+Print the current closure's full package IDs, one per line in byte order,
+from
+.IR /usr/inventory .
+No artifact directory is needed.
+The inventory records the closure identity and a table mapping package
+identities to full IDs, sorted by identity.
+The closure identity is the hash of the existing closure manifest format,
+reconstructed from those package identities.
+A malformed inventory or a mismatched closure identity is an error.
+The package IDs describe the recorded packages; checking the closure hash
+does not authenticate their manifests or the files in the tree.
+.IP
+With
+.BR \-\-all ,
+list every package indexed by the artifact directory's refs, sorted by full ID.
+Each line is a membership field, a tab, and the full ID.
+The field is
+.B 1
+when both the ID and identity match a package in the current closure, and
+.B 0
+otherwise.
+Without an inventory, all fields are
+.BR 0 ;
+without
+.BR \-\-all ,
+a missing inventory is an error explaining that this
+.I /usr
+was not composed by a ppk that records one.
+.TP
 .BI pack " package path"
 Pack the directory
 .I path
@@ -493,6 +530,12 @@ a file with its set-user-ID or set-group-ID bit set;
 or a path or link target that is not valid UTF-8.
 It also refuses an artifact directory inside
 .IR path .
+The top-level path
+.I inventory
+is reserved for ppk, whether a file, directory, or symbolic link.
+Packages cannot claim
+.I /usr/inventory
+or paths beneath it.
 .IP
 The manifest also records the metadata the options give, as
 .B METADATA
@@ -560,7 +603,21 @@ closure: one directory tree, the contents of a
 .IR /usr .
 Print the closure's identity on standard output.
 .IP
-Every file in the tree is a hard link to its blob, in the form its entry
+Each built tree includes
+.IR inventory ,
+also written as
+.I usr/inventory
+by
+.BR compose\-env .
+When mounted by
+.BR run ,
+this becomes the command's own
+.IR /usr/inventory .
+An existing tree without an inventory is reused unchanged as a closure
+built by an older ppk; compose a fresh root or use a separate closure
+directory to obtain an inventory.
+.IP
+Every package file is a hard link to its blob, in the form its entry
 needs, which carries its security metadata, or a copy of it with
 .BR \-\-copy\-files ;
 symbolic links and directories are created in the tree, each directory
@@ -758,6 +815,11 @@ Print help for
 or for one of its commands.
 .SH OPTIONS
 .TP
+.B \-\-all
+For
+.BR list ,
+list the store's packages with membership fields.
+.TP
 .BR \-p ", " \-\-package " \fIpackage\fR..."
 For
 .B compose\-env
@@ -795,6 +857,11 @@ instead of
 .IR /system/artifacts .
 .B ppk
 creates the directory if it does not exist.
+For
+.BR list ,
+read this store with
+.BR \-\-all ;
+no directories are created.
 .TP
 .BI \-\-closure\-dir " dir"
 For
@@ -1035,6 +1102,18 @@ Print help and exit.
 .TP
 .BR \-V ", " \-\-version
 Print the program name and version and exit.
+.TP
+.BI \-\-root " dir"
+For
+.BR list ,
+read
+.I dir/usr/inventory
+instead of
+.IR /usr/inventory .
+The default is
+.IR / .
+This does not change the store selected by
+.BR \-\-artifact\-dir .
 .SH SECURITY
 .B ppk
 makes no access checks of its own.
@@ -1049,6 +1128,8 @@ Administrators full control.
 Every directory it creates there, and the root of every closure tree, gets
 the same grants, inherited by what is created inside it.
 A file in a closure is a hard link, so it has its blob's descriptor.
+The generated inventory has mode 0444 and inherits the composed tree's
+descriptor, like directories created without manifest security metadata.
 Only the DACL is set: the owner stays whoever ran
 .BR ppk .
 Off Peios, where the system call does not exist, no descriptor is set.
@@ -1102,6 +1183,16 @@ Once
 .B run
 has started its command, the exit status is the command's.
 .SH FILES
+.TP
+.I /usr/inventory
+The current closure's identity and packages in canonical TOML.
+The
+.B closure
+string precedes a
+.B [packages]
+table, with one quoted identity key and full package ID value per line,
+sorted by identity.
+.PP
 Paths are relative to the artifact directory,
 .I /system/artifacts
 by default.

@@ -641,6 +641,7 @@ fn help_lines_fit_in_80_columns() {
     for args in [
         vec!["--help"],
         vec!["help", "pack"],
+        vec!["help", "list"],
         vec!["help", "fetch"],
         vec!["help", "closure"],
         vec!["help", "compose-env"],

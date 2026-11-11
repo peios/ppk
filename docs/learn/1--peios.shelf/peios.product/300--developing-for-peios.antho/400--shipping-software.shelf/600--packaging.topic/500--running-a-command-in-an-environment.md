@@ -71,3 +71,10 @@ ppk: /usr/bin/nothing: No such file or directory
 ```
 
 Outside the command, `/usr` hasn't changed.
+
+The mounted closure includes its own `/usr/inventory`, so `ppk list`
+inside the command reports that closure's packages. Include ppk and its
+runtime packages if you want to run it there. `ppk list --all` reads the
+store in the caller's root and marks membership in the mounted closure.
+Closures built by an older ppk without an inventory are reused unchanged;
+use a separate `--closure-dir` to build one with an inventory.

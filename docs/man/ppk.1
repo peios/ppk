@@ -498,14 +498,12 @@ does not authenticate their manifests or the files in the tree.
 With
 .BR \-\-all ,
 list every package indexed by the artifact directory's refs, sorted by full ID.
-Each line is a membership field, a tab, and the full ID.
-The field is
-.B 1
-when both the ID and identity match a package in the current closure, and
-.B 0
-otherwise.
-Without an inventory, all fields are
-.BR 0 ;
+Each line is a marker, a space, and the full ID.
+The marker is
+.B *
+when both the ID and identity match a package in the current closure, and a
+space otherwise, so every ID starts in the same column.
+Without an inventory, no package is marked;
 without
 .BR \-\-all ,
 a missing inventory is an error explaining that this
@@ -818,7 +816,7 @@ or for one of its commands.
 .B \-\-all
 For
 .BR list ,
-list the store's packages with membership fields.
+list the store's packages, marking those in the current closure.
 .TP
 .BR \-p ", " \-\-package " \fIpackage\fR..."
 For

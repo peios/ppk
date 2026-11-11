@@ -122,19 +122,19 @@ fn list_needs_no_store_and_all_marks_the_exact_package_identity() {
     assert_eq!(stdout(&output), format!("{FIRST}\n"));
     let output = list(&root, &store, true);
     check_success(&output);
-    assert_eq!(stdout(&output), format!("1\t{FIRST}\n0\t{SECOND}\n"));
+    assert_eq!(stdout(&output), format!("* {FIRST}\n  {SECOND}\n"));
     // A replaced ref for the same full ID is not the running package.
     let input = tempfile::tempdir().unwrap();
     fs::write(input.path().join("changed"), "changed").unwrap();
     ppk::pack_replacing(&id(FIRST), input.path(), &store).unwrap();
     let output = list(&root, &store, true);
     check_success(&output);
-    assert_eq!(stdout(&output), format!("0\t{FIRST}\n0\t{SECOND}\n"));
+    assert_eq!(stdout(&output), format!("  {FIRST}\n  {SECOND}\n"));
     // Listing the store reads refs alone, including every architecture.
     fs::remove_dir_all(store.join("manifests")).unwrap();
     let output = list(work.path(), &store, true);
     check_success(&output);
-    assert_eq!(stdout(&output), format!("0\t{FIRST}\n0\t{SECOND}\n"));
+    assert_eq!(stdout(&output), format!("  {FIRST}\n  {SECOND}\n"));
     let output = list(work.path(), &store, false);
     assert_eq!(output.status.code(), Some(1));
     assert!(

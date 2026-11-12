@@ -118,7 +118,11 @@ The root then holds `bin`, a link to `usr/bin`, an empty `tmp`, the
 packages' artifacts in `system/artifacts`, and `usr`.
 
 For a live image, `ppk-live-root` composes the root from the medium's
-profile and store, then copies the medium's `/lcl` tree into it if present.
+profile and store, then runs `skeleton apply` on it. That applies the root
+skeleton file in the root's own `/usr/share/skeleton`, which
+`dev.peios.fsbase` ships, so the root gets its directories outside `/usr`
+and the `/lib64` link. Without the file the hook warns and continues. It
+then copies the medium's `/lcl` tree into the root if present.
 The copy preserves modes and a copy failure fails the boot. This carries
 image policy, including registry seed queues and executable autorun
 scripts, outside `/usr`. peinit applies the common and live seed queues

@@ -1,11 +1,15 @@
 #!/usr/bin/sh
 # /// hook
-# provides = ["rootfs-ready"]
+# contributes = ["rootfs-ready"]
 # ///
 #
 # Live boot: find the medium this initramfs was built for, compose the
 # system's root from the environment profile and packages it holds, on a
 # fresh tmpfs, and offer the root to prelude at /mnt/rootfs.
+#
+# The hook contributes to rootfs-ready, as every hook that prepares the
+# root does: coldplug's driver loading contributes alongside it, so the
+# medium's driver may load while this hook waits for the medium.
 #
 # The initramfs names its medium in /system/medium. The medium holds the
 # same identifier in /peios-medium, beside the live system's profile,

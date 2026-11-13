@@ -49,6 +49,17 @@ ppk \- create and manage Peios packages
 .B \-\-from
 .I dir request
 .br
+.B ppk fetch
+.RB [ \-\-artifact\-dir
+.IR dir ]
+.RB [ \-\-arch
+.IR arch ]
+.RB [ \-\-config\-dir
+.IR dir ]
+.RB [ \-\-state\-dir
+.IR dir ]
+.I request
+.br
 .B ppk closure
 .RB [ \-\-artifact\-dir
 .IR dir ]
@@ -56,6 +67,65 @@ ppk \- create and manage Peios packages
 .IR dir ]
 .RB [ \-\-copy\-files ]
 .IR package ...
+.br
+.B ppk repo update
+.RB [ \-\-artifact\-dir
+.IR dir ]
+.RB [ \-\-key
+.IR file ]
+.RB [ \-\-strict ]
+.br
+.B ppk repo snapshot
+.RI [ options ]
+.I name
+.RB [ \-\-from
+.IR index ]
+.br
+.B ppk repo channel
+.RI [ options ]
+.RB [ \-\-ended ]
+.I name target
+.br
+.B ppk repo yank
+.RI [ options ]
+.RB [ \-\-undo ]
+.I package
+.br
+.B ppk repo delete
+.RI [ options ]
+.I package
+.B \-\-reason
+.I text
+.br
+.B ppk repo show
+.RB [ \-\-artifact\-dir
+.IR dir ]
+.RB [ \-\-public\-key
+.IR key ]
+.br
+.B ppk repo add
+.RB [ \-\-config\-dir
+.IR dir ]
+.RB [ \-\-public\-key
+.IR key ]
+.RB [ \-\-track
+.IR index ]
+.I name path
+.br
+.B ppk repo remove
+.RB [ \-\-config\-dir
+.IR dir ]
+.I name
+.br
+.B ppk repo list
+.RB [ \-\-config\-dir
+.IR dir ]
+.RB [ \-\-state\-dir
+.IR dir ]
+.br
+.B ppk repo public\-key
+.RB [ \-\-key
+.IR file ]
 .br
 .B ppk name
 .RB [ \-\-artifact\-dir
@@ -258,6 +328,12 @@ dirs = ["proc", "sys", "tmp"]
 .B packages
 maps each package asked for to the versions that will do, as a constraint;
 a bare version asks for exactly that version, and the empty string for any.
+.B #
+and an index or channel, as in
+.B """#stable"""
+or
+.BR """#stable >= 1.36""" ,
+asks for the version that index holds, as under REPOSITORIES.
 A profile holds requests, not their answer: composing it resolves them, with
 what they need, and the closure's inventory records the packages chosen.
 Every package is for the architecture
@@ -310,6 +386,32 @@ and
 to its own.
 Another version of a package the profile holds, or a link at a path the
 profile links elsewhere, is an error.
+.SH REPOSITORIES
+A repository, an artifact directory that
+.B repo update
+has published, can be asked for packages by index or channel:
+.B #stable
+after a name takes the version the channel
+.B stable
+leads to, and the dependencies and requirements of a package chosen that way
+are settled from the same index, so that a request for a release takes the
+release's versions of what it needs too.
+A package asked for by name or with an exact ID is settled as usual.
+The request
+.B se.curl.curl#stable
+fails if that index holds no version of
+.B se.curl.curl
+that satisfies it, or if no repository among the artifact directories
+publishes
+.BR stable .
+.PP
+A version a repository has yanked is chosen only by a request for exactly
+it.
+A request a deleted version would have satisfied fails, and says why it was
+deleted.
+.PP
+An inventory records the index of each request that named one, as in
+.BR "[* #stable >=8]" .
 .SH METADATA
 Besides its files, a package's manifest can say what the package needs and
 offers, and describe it.
@@ -586,6 +688,13 @@ Print one identity per fetched package on standard output, in package-name order
 A request is a bare name, a name with a constraint as for
 .BR resolve ,
 or an exact package ID, including its version's spelling and architecture.
+A name followed by
+.B #
+and an index or channel of a repository, as in
+.BR se.curl.curl#stable ,
+asks for the version that index holds, optionally with a constraint after
+it; what that version needs comes from the same index too, as described
+under REPOSITORIES.
 Unqualified requests use
 .BR \-\-arch ,
 or the architecture ppk was built for.
@@ -598,6 +707,23 @@ With
 copy exactly the package ID given, without resolving anything it needs;
 bare names and constraints are not accepted in this mode.
 Blobs already present are not copied.
+.IP
+Without
+.BR \-\-from ,
+fetch from the repositories configured in
+.BR \-\-config\-dir ,
+.I /conf/ppk
+unless given, as under REPOSITORIES.
+A request for a package by a bare name or a constraint, naming no index and
+no exact version, follows the index or channel its repository tracks.
+Every package name belongs to one repository: one that two repositories
+publish is an error, for a request or anything it needs.
+A repository whose configuration gives a public key must have signed its
+pointer file with it, and none may publish a lower sequence than this machine
+has seen of it, which is kept in
+.BR \-\-state\-dir ,
+.I /var/state/ppk
+unless given.
 .IP
 Nothing read from the source is trusted.
 The source's ref must hold exactly one identity and a newline.
@@ -685,6 +811,117 @@ itself.
 It fails, leaving nothing behind, if a hard link cannot be made because the
 closure directory is not on the same mount as the artifact directory, or if
 a blob it copies does not match its hash.
+.TP
+.B repo update
+Publish the repository, an artifact directory: write its catalog, every
+version its refs hold, and the index
+.BR leading ,
+the newest current version of each package for each architecture, then sign
+its pointer file, one higher in sequence.
+A package whose dependencies or requirements
+.B leading
+can't satisfy is left out of it, with a warning, and so is anything left
+needing it; with
+.BR \-\-strict ,
+that is an error and nothing is published.
+A version yanked or deleted stays so.
+.IP
+Every
+.B repo
+command that publishes signs with the ML-DSA-65 private key in the PEM file
+.BR \-\-key ,
+or in
+.B $PPK_REPO_KEY
+if that isn't given, the kind of key
+.B openssl genpkey \-algorithm ML\-DSA\-65
+writes, and prints the pointer file it published.
+.TP
+.BI "repo snapshot" " name"
+Make
+.I name
+a new index holding what the index or channel
+.B \-\-from
+holds,
+.B leading
+unless given.
+A snapshot never changes, so
+.I name
+must be new.
+.TP
+.BI "repo channel" " name target"
+Make the channel
+.I name
+follow the index or channel
+.IR target .
+With
+.BR \-\-ended ,
+mark it as one that won't move again.
+Indexes and channels share one namespace, and every channel must reach an
+index.
+.TP
+.BI "repo yank" " package"
+Take the version
+.I package
+back: new resolutions don't choose it, but a request for exactly it still
+does.
+With
+.BR \-\-undo ,
+restore it.
+Publishes again, so
+.B leading
+follows.
+.TP
+.BI "repo delete" " package"
+Delete the version
+.IR package :
+its ref, its manifest, and every file of it that no other manifest names.
+The catalog keeps a tombstone with the reason
+.BR \-\-reason
+gives, one line, so that a resolution that needs it can say why it's gone.
+Publishes again.
+.TP
+.B repo show
+Print the repository's pointer file.
+With
+.BR \-\-public\-key ,
+its signature must be that key's.
+.TP
+.BI "repo add" " name path"
+Add the repository at
+.I path
+to those this machine fetches from, as
+.IR name ,
+writing its configuration in
+.BR \-\-config\-dir ,
+.I /lcl/conf/ppk
+unless given, which
+.I /conf/ppk
+merges with what the system ships.
+With
+.BR \-\-public\-key ,
+its pointer file must be signed with that key; with
+.BR \-\-track ,
+a request for a bare name follows that index or channel, such as
+.BR stable .
+A repository of the same name is replaced.
+.TP
+.BI "repo remove" " name"
+Stop fetching from the repository
+.IR name .
+.TP
+.B repo list
+Print each repository this machine fetches from: its name, its path, the
+index or channel it follows, and the sequence and signing time of its
+pointer file, checked as
+.B fetch
+checks it.
+.TP
+.B repo public\-key
+Print the public key of
+.BR \-\-key ,
+as
+.B ml\-dsa\-65:
+and its base64, for a repository's configuration.
 .TP
 .BI name " \fR[\fPname \fR[\fPclosure\fR]]\fP"
 Name a closure in the closure directory, so that what a system runs can be
@@ -1314,7 +1551,9 @@ thing that wants it:
 .B *
 for a request of the closure itself, or the name of a package in the
 closure; then, if what was asked for is a capability rather than the package
-by name, the capability; then the constraint, one token per expression, such
+by name, the capability; then, for a request from an index or channel,
+.B #
+and its name; then the constraint, one token per expression, such
 as
 .BR >=8.22 ,
 and none for any version:
@@ -1367,6 +1606,76 @@ names another directory.
 .IR closures/ name
 A name for a closure: a symbolic link to its tree beside it, set by
 .BR name .
+.TP
+.IR /conf/ppk/repositories/ name .toml
+A repository this machine fetches from:
+.IP
+.EX
+path = "/mnt/peios\-repo"
+key = "ml\-dsa\-65:..."
+track = "stable"
+.EE
+.IP
+.B path
+is required;
+.B key
+and
+.B track
+are optional.
+.TP
+.IR /var/state/ppk/sequences/ name
+The highest sequence this machine has seen of the repository
+.IR name .
+.TP
+.I repository
+A published repository's pointer file, the one file of it that changes:
+.IP
+.EX
+sequence 1042
+signed 2026\-11\-13T11:30:00Z
+catalog sha256:...
+index 2026.10.0 sha256:...
+index leading sha256:...
+channel stable 2026.10
+channel 2026.09 2026.09.3 ended
+.EE
+.IP
+.B sequence
+goes up by one each time the repository is published, and
+.B signed
+is when, in UTC.
+.B catalog
+and each
+.B index
+name the top node of a tree;
+each
+.B channel
+names the index or channel it follows, and
+.B ended
+marks one that won't move again.
+Lines are in this order, indexes and channels each sorted by name.
+.TP
+.I repository.sig
+The ML-DSA-65 signature of the pointer file's bytes, in the context
+.BR "ppk repository" .
+.TP
+.IR trees/sha256/ hash
+A node of the catalog's or an index's tree, named by the SHA-256 hash of its
+content.
+A package's node has a line for each version:
+the version, the architecture and the manifest's identity, then
+.BR yanked ,
+or
+.B deleted
+and a reason, for a version taken back.
+A bucket's node has a line for each package whose name falls in it: its
+name and its node's hash.
+The top node has a line for each bucket: the bucket and its node's hash.
+A name falls in the bucket of the first two hex digits of the SHA-256 hash
+of the name.
+Every node's lines are sorted and unique, each ending in a newline.
+A catalog lists every version published; an index, one of each package for
+each architecture.
 .TP
 .IR closures/ hash .manifest
 The manifest of that closure.

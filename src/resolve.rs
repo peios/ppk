@@ -9,7 +9,7 @@
 //! conflicted with what, and whether another version would have satisfied
 //! both. That is the evidence a resolver that backtracks would need.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::fs;
 use std::io;
@@ -19,6 +19,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::id::check_name;
 use crate::metadata::check_capability;
+use crate::repo::{self, Standing, Trees, check_ref_name};
 use crate::store::{self, ArtifactDir};
 use crate::{Constraint, Identity, Metadata, PackageId, Profile, Version, parse_manifest};
 
@@ -34,11 +35,15 @@ pub enum Wanted {
     Capability(String),
 }
 
-/// Something asked for, at the versions that will do.
+/// Something asked for, at the versions that will do, and from an index
+/// or channel if it names one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
     pub wanted: Wanted,
     pub constraint: Constraint,
+    /// The index or channel of a repository it must come from: the version
+    /// that holds, and what that version needs, from the same index.
+    pub index: Option<String>,
 }
 
 impl Request {
@@ -48,6 +53,7 @@ impl Request {
         Ok(Self {
             wanted: Wanted::Package(name.to_owned()),
             constraint,
+            index: None,
         })
     }
 
@@ -58,39 +64,93 @@ impl Request {
         Ok(Self {
             wanted: Wanted::Capability(name.to_owned()),
             constraint,
+            index: None,
         })
     }
 
-    /// A request for a package written as its name, then optionally a
-    /// constraint, such as `org.gnu.gcc >= 16` or `org.gnu.make`.
+    /// The same request, from the index or channel `index`.
+    pub fn from_index(self, index: Option<&str>) -> Result<Self> {
+        if let Some(index) = index {
+            check_ref_name(index)?;
+        }
+        Ok(Self {
+            index: index.map(str::to_owned),
+            ..self
+        })
+    }
+
+    /// A request for a package written as its name, then optionally `#` and
+    /// an index or channel, then optionally a constraint, such as
+    /// `org.gnu.gcc >= 16`, `se.curl.curl#stable` or `org.gnu.make`.
     pub fn parse_package(s: &str) -> Result<Self> {
-        let (name, constraint) = split(s)?;
-        Self::package(name, constraint)
+        let (name, index, constraint) = split(s)?;
+        Self::package(name, constraint)?.from_index(index)
     }
 
     /// A request for a capability written as [`Request::parse_package`]
     /// reads a package's, such as `libc.so.6 >= 2.34` or `sh`.
     pub fn parse_capability(s: &str) -> Result<Self> {
-        let (name, constraint) = split(s)?;
-        Self::capability(name, constraint)
+        let (name, index, constraint) = split(s)?;
+        Self::capability(name, constraint)?.from_index(index)
+    }
+
+    /// What the request's versions are written as, after its name: `#` and
+    /// its index, if it names one, then its constraint, if it has one.
+    pub fn versions(&self) -> String {
+        let constraint = self.constraint.to_manifest_string();
+        match (&self.index, constraint.is_empty()) {
+            (Some(index), true) => format!("#{index}"),
+            (Some(index), false) => format!("#{index} {constraint}"),
+            (None, _) => constraint,
+        }
+    }
+
+    /// The request's versions written as [`Request::versions`] writes them.
+    pub fn parse_versions(s: &str) -> Result<(Option<String>, Constraint)> {
+        let s = s.trim();
+        let (index, constraint) = match s.strip_prefix('#') {
+            Some(rest) => {
+                let end = rest
+                    .find(|c: char| c.is_whitespace() || "=<>!".contains(c))
+                    .unwrap_or(rest.len());
+                let (index, constraint) = rest.split_at(end);
+                check_ref_name(index)?;
+                (Some(index.to_owned()), constraint)
+            }
+            None => (None, s),
+        };
+        let constraint = Constraint::from_manifest_string(constraint.trim())
+            .with_context(|| format!("'{s}'"))?;
+        Ok((index, constraint))
     }
 }
 
-/// The name and constraint in `s`. The name ends at whitespace or an
-/// operator, neither of which a name can hold, and no constraint means any
-/// version.
-fn split(s: &str) -> Result<(&str, Constraint)> {
+/// The name, index and constraint in `s`. The name ends at whitespace, an
+/// operator or `#`, none of which a name can hold; no index means any, and
+/// no constraint means any version.
+fn split(s: &str) -> Result<(&str, Option<&str>, Constraint)> {
     let s = s.trim();
     let end = s
-        .find(|c: char| c.is_whitespace() || "=<>!".contains(c))
+        .find(|c: char| c.is_whitespace() || "=<>!#".contains(c))
         .unwrap_or(s.len());
-    let (name, constraint) = s.split_at(end);
+    let (name, rest) = s.split_at(end);
     if name.is_empty() {
         bail!("'{s}': no name");
     }
+    let rest = rest.trim_start();
+    let (index, constraint) = match rest.strip_prefix('#') {
+        Some(rest) => {
+            let end = rest
+                .find(|c: char| c.is_whitespace() || "=<>!".contains(c))
+                .unwrap_or(rest.len());
+            let (index, constraint) = rest.split_at(end);
+            (Some(index), constraint)
+        }
+        None => (None, rest),
+    };
     let constraint =
         Constraint::from_manifest_string(constraint.trim()).with_context(|| format!("'{s}'"))?;
-    Ok((name, constraint))
+    Ok((name, index, constraint))
 }
 
 /// A package chosen.
@@ -172,7 +232,8 @@ pub fn resolve_pinned(
     artifact_dirs: &[PathBuf],
     arch: &str,
 ) -> Result<Resolution> {
-    let mut index = Index::read(artifact_dirs, arch)?;
+    let wanted_indexes = requests.iter().filter_map(|r| r.index.clone()).collect();
+    let mut index = Index::read(artifact_dirs, arch, &wanted_indexes)?;
     let mut pinned = BTreeMap::new();
     let mut pin_requests = Vec::new();
     for id in pins {
@@ -208,6 +269,7 @@ pub fn resolve_pinned(
         resolver.push(Need {
             wanted: request.wanted.clone(),
             constraint: request.constraint.clone(),
+            index: request.index.clone(),
             by: None,
         });
     }
@@ -242,6 +304,10 @@ struct Candidate {
     identity: Identity,
     artifact_dir: PathBuf,
     metadata: Metadata,
+    /// Whether its repository's catalog has yanked it.
+    yanked: bool,
+    /// The indexes and channels asked for that hold it.
+    indexes: BTreeSet<String>,
 }
 
 impl Candidate {
@@ -259,8 +325,19 @@ impl Candidate {
 
     /// Whether this satisfies `need`. A capability is satisfied by its own
     /// name at its own version, or by a `provides` entry at that entry's
-    /// version (PSPU 5.21).
+    /// version (PSPU 5.21). A need from an index is satisfied only by what
+    /// that index holds, and a yanked version only by a need for exactly it.
     fn satisfies(&self, need: &Need) -> bool {
+        if need
+            .index
+            .as_ref()
+            .is_some_and(|index| !self.indexes.contains(index))
+        {
+            return false;
+        }
+        if self.yanked && need.constraint.exact() != Some(self.id.parsed_version()) {
+            return false;
+        }
         let by_name = |name: &str| {
             name == self.id.name() && need.constraint.matches(self.id.parsed_version())
         };
@@ -282,16 +359,86 @@ impl Candidate {
 /// newest first.
 struct Index {
     names: BTreeMap<String, Vec<Candidate>>,
+    /// Each version deleted from a repository, by name: its version, the
+    /// repository, and why.
+    deleted: BTreeMap<String, Vec<(String, PathBuf, String)>>,
+}
+
+/// What a repository's catalog and the indexes asked for say of each of
+/// its packages for one architecture.
+#[derive(Default)]
+struct Published {
+    /// The versions yanked, as `name@version`.
+    yanked: BTreeSet<String>,
+    /// For each index or channel asked for, the versions it holds, as
+    /// `name@version`.
+    indexes: BTreeMap<String, BTreeSet<String>>,
+    deleted: Vec<(String, String, String)>,
+}
+
+impl Published {
+    /// What the repository at `dir` publishes, if it is one.
+    fn read(dir: &Path, arch: &str, wanted: &BTreeSet<String>) -> Result<Self> {
+        let mut published = Self::default();
+        let Some(pointer) = repo::read_pointer(dir, None)? else {
+            return Ok(published);
+        };
+        let trees = Trees::new(dir);
+        let held = |packages: &repo::Packages| {
+            (packages.iter())
+                .flat_map(|(name, releases)| {
+                    (releases.iter())
+                        .filter(|r| r.arch == arch)
+                        .map(move |r| (name.clone(), r.clone()))
+                })
+                .collect::<Vec<_>>()
+        };
+        if let Some(catalog) = &pointer.catalog {
+            for (name, release) in held(&trees.read_tree(catalog)?) {
+                match release.standing {
+                    Standing::Current => {}
+                    Standing::Yanked => {
+                        published
+                            .yanked
+                            .insert(format!("{name}@{}", release.version));
+                    }
+                    Standing::Deleted(reason) => {
+                        published.deleted.push((name, release.version, reason));
+                    }
+                }
+            }
+        }
+        for index in wanted {
+            let Ok((_, top)) = pointer.index_of(index) else {
+                continue;
+            };
+            let versions = (held(&trees.read_tree(top)?).into_iter())
+                .map(|(name, release)| format!("{name}@{}", release.version))
+                .collect();
+            published.indexes.insert(index.clone(), versions);
+        }
+        Ok(published)
+    }
 }
 
 impl Index {
-    fn read(artifact_dirs: &[PathBuf], arch: &str) -> Result<Self> {
+    fn read(artifact_dirs: &[PathBuf], arch: &str, wanted: &BTreeSet<String>) -> Result<Self> {
         if artifact_dirs.is_empty() {
             bail!("no artifact directory to choose packages from");
         }
         let mut names: BTreeMap<String, Vec<Candidate>> = BTreeMap::new();
+        let mut deleted: BTreeMap<String, Vec<(String, PathBuf, String)>> = BTreeMap::new();
+        let mut found = BTreeSet::new();
         for dir in artifact_dirs {
             let layout = ArtifactDir::new(dir);
+            let published = Published::read(dir, arch, wanted)?;
+            found.extend(published.indexes.keys().cloned());
+            for (name, version, reason) in published.deleted {
+                deleted
+                    .entry(name)
+                    .or_default()
+                    .push((version, dir.clone(), reason));
+            }
             for name in package_names(dir)? {
                 for version in store::versions(&name, arch, dir)? {
                     let id = PackageId::new(&name, &version, arch)?;
@@ -311,7 +458,13 @@ impl Index {
                         continue;
                     }
                     let metadata = read_metadata(&layout, &id, &identity)?;
+                    let short = format!("{name}@{version}");
                     held.push(Candidate {
+                        yanked: published.yanked.contains(&short),
+                        indexes: (published.indexes.iter())
+                            .filter(|(_, held)| held.contains(&short))
+                            .map(|(index, _)| index.clone())
+                            .collect(),
                         id,
                         identity,
                         artifact_dir: dir.clone(),
@@ -320,6 +473,9 @@ impl Index {
                 }
             }
         }
+        if let Some(missing) = wanted.difference(&found).next() {
+            bail!("#{missing}: no repository among the artifact directories publishes it");
+        }
         for candidates in names.values_mut() {
             candidates.sort_by(|a, b| {
                 b.id.parsed_version()
@@ -327,7 +483,20 @@ impl Index {
                     .then_with(|| a.id.version().cmp(b.id.version()))
             });
         }
-        Ok(Self { names })
+        Ok(Self { names, deleted })
+    }
+
+    /// Why a version of `name` that `need` asks for isn't there, if a
+    /// repository deleted one it would have satisfied.
+    fn tombstone(&self, name: &str, need: &Need) -> Option<String> {
+        let deleted = self.deleted.get(name)?;
+        let (version, dir, reason) = deleted.iter().find(|(version, _, _)| {
+            Version::parse(version).is_ok_and(|version| need.constraint.matches(&version))
+        })?;
+        Some(format!(
+            "; {name}@{version} was deleted from {}: {reason}",
+            dir.display()
+        ))
     }
 
     fn get(&self, name: &str) -> &[Candidate] {
@@ -386,6 +555,10 @@ fn read_metadata(layout: &ArtifactDir, id: &PackageId, identity: &Identity) -> R
 struct Need {
     wanted: Wanted,
     constraint: Constraint,
+    /// The index it must be settled from: the request's, or for a
+    /// dependency or requirement, the index of the request that chose the
+    /// package that needs it.
+    index: Option<String>,
     /// The package that needs it, or none for a request.
     by: Option<PackageId>,
 }
@@ -398,9 +571,13 @@ impl fmt::Display for Wants<'_> {
         let name = match &self.0.wanted {
             Wanted::Package(name) | Wanted::Capability(name) => name,
         };
+        write!(f, "{name}")?;
+        if let Some(index) = &self.0.index {
+            write!(f, "#{index}")?;
+        }
         match self.0.constraint.is_any() {
-            true => write!(f, "{name}"),
-            false => write!(f, "{name} {}", self.0.constraint),
+            true => Ok(()),
+            false => write!(f, " {}", self.0.constraint),
         }
     }
 }
@@ -475,17 +652,22 @@ impl<'a> Resolver<'a> {
             return Ok(());
         }
         let candidates = self.index.get(name);
+        let tombstone = self.index.tombstone(name, &need).unwrap_or_default();
         if candidates.is_empty() {
             bail!(
-                "{need}, but no artifact directory holds {name} for {}: {}",
+                "{need}, but no artifact directory holds {name} for {}: {}{tombstone}",
                 self.arch,
                 self.dirs()
             );
         }
         let Some(index) = self.newest(candidates, &need)? else {
             let versions: Vec<&str> = candidates.iter().map(|c| c.id.version()).collect();
+            let place = match &need.index {
+                Some(index) => format!(" in #{index}"),
+                None => String::new(),
+            };
             bail!(
-                "{need}, but no version satisfies it; there are {}",
+                "{need}, but no version{place} satisfies it; there are {}{tombstone}",
                 versions.join(", ")
             );
         };
@@ -584,10 +766,12 @@ impl<'a> Resolver<'a> {
 
     fn choose(&mut self, candidate: &'a Candidate, index: usize, need: Need) {
         let by = Some(candidate.id.clone());
+        // What a package chosen from an index needs comes from that index.
         for (name, constraint) in &candidate.metadata.dependencies {
             self.push(Need {
                 wanted: Wanted::Package(name.clone()),
                 constraint: constraint.clone(),
+                index: need.index.clone(),
                 by: by.clone(),
             });
         }
@@ -595,6 +779,7 @@ impl<'a> Resolver<'a> {
             self.push(Need {
                 wanted: Wanted::Capability(capability.clone()),
                 constraint: constraint.clone(),
+                index: need.index.clone(),
                 by: by.clone(),
             });
         }

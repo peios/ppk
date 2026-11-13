@@ -63,13 +63,18 @@ fn pack_prints_the_identity_and_writes_the_ref() {
 }
 
 #[test]
-fn fetch_without_a_source_is_a_usage_error() {
-    let output = ppk(&["fetch", "dev.peios.hello@1.0-1"]);
-    assert_eq!(output.status.code(), Some(2));
+fn fetch_without_a_source_needs_a_configured_repository() {
+    let config = tempfile::tempdir().unwrap();
+    let config = config.path().to_str().unwrap();
+    let output = ppk(&["fetch", "dev.peios.hello@1.0-1", "--config-dir", config]);
+    assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         stderr(&output),
-        "ppk: missing option --from <dir>\nTry 'ppk --help' for more information.\n"
+        "ppk: no repository is configured to fetch from\n"
     );
+    let output = ppk(&["fetch", "--no-deps", "dev.peios.hello@1.0-1?arch=noarch"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).starts_with("ppk: --no-deps needs --from\n"));
 }
 
 #[test]

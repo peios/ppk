@@ -14,7 +14,8 @@
 //! A bracket holds who wants the package: `*` for a request made of the
 //! closure itself, or the name of a package in it. Then, if what was asked
 //! for is a capability rather than the package by name, the capability.
-//! Then the constraint, one token per expression, such as `>=8.22`, none
+//! Then, for a request from an index or channel, `#` and its name. Then the
+//! constraint, one token per expression, such as `>=8.22`, none
 //! for any version. A capability never starts with an operator and a
 //! constraint token always does, so the two can't be confused.
 //!
@@ -37,6 +38,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::id::check_name;
 use crate::metadata::check_capability;
+use crate::repo::check_ref_name;
 use crate::resolve::{Request, Wanted};
 use crate::{Constraint, Identity, Metadata, PackageId};
 
@@ -57,6 +59,8 @@ pub struct Want {
     pub requester: String,
     /// The capability asked for, if the package wasn't asked for by name.
     pub capability: Option<String>,
+    /// The index or channel a request asked for it from.
+    pub index: Option<String>,
     /// The versions that would do.
     pub constraint: Constraint,
 }
@@ -67,6 +71,10 @@ impl Want {
         if let Some(capability) = &self.capability {
             out.push(' ');
             out.push_str(capability);
+        }
+        if let Some(index) = &self.index {
+            out.push_str(" #");
+            out.push_str(index);
         }
         for token in self.constraint.tokens() {
             out.push(' ');
@@ -83,6 +91,7 @@ impl Want {
         key(self)
             .cmp(&key(other))
             .then_with(|| self.capability.cmp(&other.capability))
+            .then_with(|| self.index.cmp(&other.index))
             .then_with(|| self.constraint.tokens().cmp(&other.constraint.tokens()))
     }
 }
@@ -122,8 +131,10 @@ impl Inventory {
         for request in requests {
             let mut satisfied = false;
             for (index, (_, id, metadata)) in packages.iter().enumerate() {
-                if let Some(want) = wants(USER, &request.wanted, &request.constraint, id, metadata)
+                if let Some(mut want) =
+                    wants(USER, &request.wanted, &request.constraint, id, metadata)
                 {
+                    want.index.clone_from(&request.index);
                     wanted[index].push(want);
                     satisfied = true;
                 }
@@ -248,6 +259,7 @@ fn wants(
     satisfied.then(|| Want {
         requester: requester.to_owned(),
         capability,
+        index: None,
         constraint: constraint.clone(),
     })
 }
@@ -256,9 +268,11 @@ fn describe(request: &Request) -> String {
     let name = match &request.wanted {
         Wanted::Package(name) | Wanted::Capability(name) => name,
     };
-    match request.constraint.is_any() {
+    let versions = request.versions();
+    match versions.is_empty() {
         true => name.clone(),
-        false => format!("{name} {}", request.constraint),
+        false if versions.starts_with('#') => format!("{name}{versions}"),
+        false => format!("{name} {versions}"),
     }
 }
 
@@ -341,15 +355,24 @@ fn parse_want(bracket: &str) -> Result<Want> {
     }
     let mut rest: Vec<&str> = tokens.collect();
     let capability = match rest.first() {
-        Some(token) if token.starts_with('#') => {
-            bail!("{token}: requests for an index aren't supported yet")
-        }
-        Some(token) if !token.starts_with(['=', '<', '>', '!']) => {
+        Some(token) if !token.starts_with(['=', '<', '>', '!', '#']) => {
             check_capability(token)?;
             Some(rest.remove(0).to_owned())
         }
         _ => None,
     };
+    let index = match rest.first().and_then(|token| token.strip_prefix('#')) {
+        Some(index) => {
+            check_ref_name(index)?;
+            let index = index.to_owned();
+            rest.remove(0);
+            Some(index)
+        }
+        None => None,
+    };
+    if index.is_some() && requester != USER {
+        bail!("only a request of the closure itself names an index");
+    }
     let constraint = Constraint::from_tokens(&rest)?;
     if constraint.tokens() != rest {
         bail!("constraint not in canonical form");
@@ -357,6 +380,7 @@ fn parse_want(bracket: &str) -> Result<Want> {
     Ok(Want {
         requester: requester.to_owned(),
         capability,
+        index,
         constraint,
     })
 }

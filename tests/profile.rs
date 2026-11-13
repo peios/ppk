@@ -329,3 +329,21 @@ fn several_profiles_merge_as_fragments_do() {
             .is_err()
     );
 }
+
+#[test]
+fn a_profile_can_ask_for_what_an_index_holds() {
+    let text = "[packages]\n\"a.b.c\" = \"#stable\"\n\"d.e.f\" = \"#2026.10 >= 2\"\n\"g.h.i\" = \"1.0-1\"\n";
+    let profile = Profile::parse(text).unwrap();
+    let indexes: Vec<Option<&str>> = (profile.packages.iter())
+        .map(|request| request.index.as_deref())
+        .collect();
+    assert_eq!(indexes, [Some("stable"), Some("2026.10"), None]);
+    assert_eq!(Profile::parse(&profile.render().unwrap()).unwrap(), profile);
+    assert!(
+        profile
+            .render()
+            .unwrap()
+            .contains("\"d.e.f\" = \"#2026.10 >= 2\"\n")
+    );
+    assert!(Profile::parse("[packages]\n\"a.b.c\" = \"#.bad\"\n").is_err());
+}

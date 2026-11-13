@@ -58,6 +58,8 @@ ID, its identity, and a bracket for each thing that wants it.
   package in the closure.
 - **What it asked for:** a capability, such as a library's soname, if the
   package wasn't asked for by name.
+- **Where from:** `#` and an index or channel, such as `#stable`, for a
+  request that named one.
 - **Which versions would do:** one token per expression of the constraint,
   such as `>=8.22`, or none for any version.
 

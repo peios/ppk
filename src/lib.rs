@@ -59,6 +59,7 @@
 mod access;
 mod closure;
 mod compose;
+pub mod config;
 mod derive;
 pub mod environment;
 mod fetch;
@@ -70,6 +71,7 @@ mod metadata;
 mod names;
 mod pack;
 mod profile;
+pub mod repo;
 mod resolve;
 mod security;
 #[cfg(test)]

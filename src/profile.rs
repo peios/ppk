@@ -16,7 +16,8 @@
 //!
 //! `packages` maps each package asked for to the versions that will do, as
 //! a constraint such as `">= 1.36"`, or `""` for any. A bare version asks for
-//! exactly that version. A profile holds requests, not their answer: what it
+//! exactly that version. `#` and an index or channel, as in `"#stable"` or
+//! `"#stable >= 1.36"`, asks for the version that index holds. A profile holds requests, not their answer: what it
 //! asks for is resolved when it is composed, with what that needs, and the
 //! closure's inventory records the answer. Every package is for `arch`, the
 //! host's by default. A symlink's value is what follows `<path>:` in `--symlink`, so
@@ -170,9 +171,9 @@ impl Profile {
                 let Wanted::Package(name) = &request.wanted else {
                     bail!("a profile asks only for packages");
                 };
-                let versions = match request.constraint.exact() {
-                    Some(version) => version.to_string(),
-                    None => request.constraint.to_manifest_string(),
+                let versions = match (&request.index, request.constraint.exact()) {
+                    (None, Some(version)) => version.to_string(),
+                    _ => request.versions(),
                 };
                 out.push_str(&format!("{} = {}\n", quote(name), quote(&versions)));
             }
@@ -445,9 +446,11 @@ fn flat(doc: &toml::Table) -> Result<Profile> {
         let versions = versions
             .as_str()
             .ok_or_else(|| anyhow!("packages: {name:?} has versions that are not a string"))?;
-        let constraint = Constraint::from_manifest_string(versions)
-            .with_context(|| format!("packages: {name:?}"))?;
-        let request = Request::package(name, constraint).context("packages")?;
+        let (index, constraint) =
+            Request::parse_versions(versions).with_context(|| format!("packages: {name:?}"))?;
+        let request = Request::package(name, constraint)
+            .and_then(|request| request.from_index(index.as_deref()))
+            .context("packages")?;
         profile.packages.push(request);
     }
     for (path, target) in table(doc, "symlinks")? {

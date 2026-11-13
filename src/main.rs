@@ -102,9 +102,26 @@ enum Command {
             hide_default_value = true,
         )]
         artifact_dir: PathBuf,
-        /// Copy from the artifact directory <dir>
+        /// Copy from the artifact directory <dir>, rather than from the
+        /// configured repositories
         #[arg(long, value_name = "dir")]
-        from: PathBuf,
+        from: Option<PathBuf>,
+        /// Read the repositories from <dir> (default: /conf/ppk)
+        #[arg(
+            long,
+            value_name = "dir",
+            default_value = ppk::config::DEFAULT_CONFIG_DIR,
+            hide_default_value = true
+        )]
+        config_dir: PathBuf,
+        /// Keep what is seen of each repository in <dir> (default: /var/state/ppk)
+        #[arg(
+            long,
+            value_name = "dir",
+            default_value = ppk::config::DEFAULT_STATE_DIR,
+            hide_default_value = true
+        )]
+        state_dir: PathBuf,
         /// Copy exactly the package ID given, without resolving what it needs
         #[arg(long)]
         no_deps: bool,
@@ -138,6 +155,16 @@ enum Command {
         /// Copy each file from its blob, rather than hardlink it
         #[arg(long)]
         copy_files: bool,
+    },
+    /// Publish a repository: its catalog, indexes and channels
+    #[command(
+        override_usage = "ppk repo <command> [options]",
+        subcommand_value_name = "command",
+        after_help = SEE_ALSO
+    )]
+    Repo {
+        #[command(subcommand)]
+        command: RepoCommand,
     },
     /// Name a closure, or show what names name
     #[command(
@@ -433,6 +460,324 @@ fn main() -> ExitCode {
     }
 }
 
+/// The options every command that publishes a repository takes.
+#[derive(Args)]
+struct Publishing {
+    /// The repository, an artifact directory (default: /system/artifacts)
+    #[arg(
+        long,
+        value_name = "dir",
+        default_value = ppk::DEFAULT_ARTIFACT_DIR,
+        hide_default_value = true,
+    )]
+    artifact_dir: PathBuf,
+    /// Sign with the ML-DSA-65 private key in the PEM file <file>
+    /// (default: $PPK_REPO_KEY)
+    #[arg(long, value_name = "file")]
+    key: Option<PathBuf>,
+}
+
+#[derive(Subcommand)]
+enum RepoCommand {
+    /// Publish the catalog and leading from what the repository holds
+    #[command(override_usage = "ppk repo update [options]", after_help = SEE_ALSO)]
+    Update {
+        #[command(flatten)]
+        publishing: Publishing,
+        /// Refuse to publish if leading would leave a package out
+        #[arg(long)]
+        strict: bool,
+    },
+    /// Make a new index a snapshot of an index or channel
+    #[command(
+        override_usage = "ppk repo snapshot [options] <name> [--from <index>]",
+        after_help = SEE_ALSO
+    )]
+    Snapshot {
+        /// The new index's name, such as 2026.10.0
+        #[arg(value_name = "name")]
+        name: String,
+        /// The index or channel to take (default: leading)
+        #[arg(long, value_name = "index", default_value = ppk::repo::LEADING)]
+        from: String,
+        #[command(flatten)]
+        publishing: Publishing,
+    },
+    /// Make a channel follow an index or channel
+    #[command(
+        override_usage = "ppk repo channel [options] <name> <target>",
+        after_help = SEE_ALSO
+    )]
+    Channel {
+        /// The channel, such as stable
+        #[arg(value_name = "name")]
+        name: String,
+        /// The index or channel it follows
+        #[arg(value_name = "target")]
+        target: String,
+        /// Mark the channel as one that won't move again
+        #[arg(long)]
+        ended: bool,
+        #[command(flatten)]
+        publishing: Publishing,
+    },
+    /// Take a version back from new resolutions, or with --undo, restore it
+    #[command(override_usage = "ppk repo yank [options] <package>", after_help = SEE_ALSO)]
+    Yank {
+        /// The version, as <name>@<version>[?arch=<arch>]
+        #[arg(value_name = "package")]
+        package: PackageId,
+        /// Restore a yanked version
+        #[arg(long)]
+        undo: bool,
+        #[command(flatten)]
+        publishing: Publishing,
+    },
+    /// Delete a version, its manifest and files, leaving a tombstone
+    #[command(
+        override_usage = "ppk repo delete [options] <package> --reason <text>",
+        after_help = SEE_ALSO
+    )]
+    Delete {
+        /// The version, as <name>@<version>[?arch=<arch>]
+        #[arg(value_name = "package")]
+        package: PackageId,
+        /// Why, which the tombstone records
+        #[arg(long, value_name = "text")]
+        reason: String,
+        #[command(flatten)]
+        publishing: Publishing,
+    },
+    /// Print a repository's pointer file, checking its signature with a key
+    #[command(override_usage = "ppk repo show [options]", after_help = SEE_ALSO)]
+    Show {
+        /// The repository (default: /system/artifacts)
+        #[arg(
+            long,
+            value_name = "dir",
+            default_value = ppk::DEFAULT_ARTIFACT_DIR,
+            hide_default_value = true,
+        )]
+        artifact_dir: PathBuf,
+        /// Check the signature against the public key <key>
+        #[arg(long, value_name = "key")]
+        public_key: Option<String>,
+    },
+    /// Add a repository for this machine to fetch from
+    #[command(
+        override_usage = "ppk repo add [options] <name> <path>",
+        after_help = SEE_ALSO
+    )]
+    Add {
+        /// Its name, such as peios
+        #[arg(value_name = "name")]
+        name: String,
+        /// Where it is
+        #[arg(value_name = "path")]
+        path: PathBuf,
+        /// Check its pointer file against the public key <key>
+        #[arg(long, value_name = "key")]
+        public_key: Option<String>,
+        /// Follow the index or channel <index> for bare names, such as stable
+        #[arg(long, value_name = "index")]
+        track: Option<String>,
+        /// Write it in <dir> (default: /lcl/conf/ppk)
+        #[arg(
+            long,
+            value_name = "dir",
+            default_value = ppk::config::DEFAULT_LOCAL_CONFIG_DIR,
+            hide_default_value = true
+        )]
+        config_dir: PathBuf,
+    },
+    /// Stop fetching from a repository
+    #[command(override_usage = "ppk repo remove [options] <name>", after_help = SEE_ALSO)]
+    Remove {
+        /// Its name
+        #[arg(value_name = "name")]
+        name: String,
+        /// Remove it from <dir> (default: /lcl/conf/ppk)
+        #[arg(
+            long,
+            value_name = "dir",
+            default_value = ppk::config::DEFAULT_LOCAL_CONFIG_DIR,
+            hide_default_value = true
+        )]
+        config_dir: PathBuf,
+    },
+    /// List the repositories this machine fetches from, checking each
+    #[command(override_usage = "ppk repo list [options]", after_help = SEE_ALSO)]
+    List {
+        /// Read the repositories from <dir> (default: /conf/ppk)
+        #[arg(
+            long,
+            value_name = "dir",
+            default_value = ppk::config::DEFAULT_CONFIG_DIR,
+            hide_default_value = true
+        )]
+        config_dir: PathBuf,
+        /// Keep what is seen of each in <dir> (default: /var/state/ppk)
+        #[arg(
+            long,
+            value_name = "dir",
+            default_value = ppk::config::DEFAULT_STATE_DIR,
+            hide_default_value = true
+        )]
+        state_dir: PathBuf,
+    },
+    /// Print the public key of a private key, for a repository's configuration
+    #[command(override_usage = "ppk repo public-key --key <file>", after_help = SEE_ALSO)]
+    PublicKey {
+        /// The ML-DSA-65 private key in the PEM file <file> (default: $PPK_REPO_KEY)
+        #[arg(long, value_name = "file")]
+        key: Option<PathBuf>,
+    },
+}
+
+/// The private key at `path`, or at `$PPK_REPO_KEY` if no path is given.
+fn load_key(path: Option<&Path>) -> anyhow::Result<ppk::repo::PrivateKey> {
+    let from_env = std::env::var_os("PPK_REPO_KEY").map(PathBuf::from);
+    let Some(path) = path.map(Path::to_path_buf).or(from_env) else {
+        anyhow::bail!("no key: give --key <file>, or set PPK_REPO_KEY");
+    };
+    ppk::repo::PrivateKey::load(&path)
+}
+
+/// Run the repository command `command`.
+fn repo(program: &str, command: RepoCommand) -> anyhow::Result<()> {
+    let key = |publishing: &Publishing| load_key(publishing.key.as_deref());
+    let report = |published: ppk::repo::Published| {
+        for left in &published.left_out {
+            eprintln!(
+                "{program}: warning: {} left out of leading: {}",
+                left.id, left.reason
+            );
+        }
+        print!("{}", published.pointer.render());
+    };
+    match command {
+        RepoCommand::Update { publishing, strict } => {
+            report(ppk::repo::update(
+                &publishing.artifact_dir,
+                &key(&publishing)?,
+                strict,
+            )?);
+        }
+        RepoCommand::Snapshot {
+            name,
+            from,
+            publishing,
+        } => {
+            let pointer =
+                ppk::repo::snapshot(&publishing.artifact_dir, &key(&publishing)?, &name, &from)?;
+            print!("{}", pointer.render());
+        }
+        RepoCommand::Channel {
+            name,
+            target,
+            ended,
+            publishing,
+        } => {
+            let pointer = ppk::repo::channel(
+                &publishing.artifact_dir,
+                &key(&publishing)?,
+                &name,
+                &target,
+                ended,
+            )?;
+            print!("{}", pointer.render());
+        }
+        RepoCommand::Yank {
+            package,
+            undo,
+            publishing,
+        } => {
+            report(ppk::repo::yank(
+                &publishing.artifact_dir,
+                &key(&publishing)?,
+                &package,
+                undo,
+            )?);
+        }
+        RepoCommand::Delete {
+            package,
+            reason,
+            publishing,
+        } => {
+            report(ppk::repo::delete(
+                &publishing.artifact_dir,
+                &key(&publishing)?,
+                &package,
+                &reason,
+            )?);
+        }
+        RepoCommand::Show {
+            artifact_dir,
+            public_key,
+        } => {
+            let public_key: Option<ppk::repo::PublicKey> =
+                public_key.as_deref().map(str::parse).transpose()?;
+            match ppk::repo::read_pointer(&artifact_dir, public_key.as_ref())? {
+                Some(pointer) => print!("{}", pointer.render()),
+                None => anyhow::bail!("{}: not published as a repository", artifact_dir.display()),
+            }
+        }
+        RepoCommand::Add {
+            name,
+            path,
+            public_key,
+            track,
+            config_dir,
+        } => {
+            let key = public_key.as_deref().map(str::parse).transpose()?;
+            if let Some(track) = &track {
+                ppk::repo::check_ref_name(track)?;
+            }
+            ppk::config::add_repository(
+                &config_dir,
+                &ppk::config::Repository {
+                    name,
+                    path,
+                    key,
+                    track,
+                },
+            )?;
+        }
+        RepoCommand::Remove { name, config_dir } => {
+            ppk::config::remove_repository(&config_dir, &name)?;
+        }
+        RepoCommand::List {
+            config_dir,
+            state_dir,
+        } => {
+            for repository in ppk::config::repositories(&config_dir)? {
+                let published = match repository.pointer(&state_dir)? {
+                    Some(pointer) => format!(
+                        "sequence {}, signed {}{}",
+                        pointer.sequence,
+                        pointer.signed,
+                        match repository.key {
+                            Some(_) => ", signature checked",
+                            None => "",
+                        }
+                    ),
+                    None => "not published".to_owned(),
+                };
+                let track = repository.track.as_deref().unwrap_or("-");
+                println!(
+                    "{} {} #{track} ({published})",
+                    repository.name,
+                    repository.path.display()
+                );
+            }
+        }
+        RepoCommand::PublicKey { key } => {
+            println!("{}", load_key(key.as_deref())?.public());
+        }
+    }
+    Ok(())
+}
+
 /// The environment the profiles at `profiles` describe together, with
 /// `packages` added. It must hold a package.
 fn environment(profiles: &[PathBuf], packages: Vec<PackageId>) -> anyhow::Result<ppk::Profile> {
@@ -467,10 +812,35 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             package,
             artifact_dir,
             from,
+            config_dir,
+            state_dir,
             replace,
             no_deps,
             arch,
         } => {
+            let Some(from) = from else {
+                if no_deps {
+                    return Ok(report_usage_error(program, "--no-deps needs --from"));
+                }
+                let inputs = match resolution_inputs(&[package], Vec::new(), arch.as_deref()) {
+                    Ok(inputs) => inputs,
+                    Err(err) => return Ok(report_usage_error(program, &describe(&err))),
+                };
+                let mut requests = ppk::exact_requests(&inputs.pins)?;
+                requests.extend(inputs.requests);
+                let repositories = ppk::config::repositories(&config_dir)?;
+                let settled =
+                    ppk::config::resolve(&requests, &repositories, &state_dir, &inputs.arch)?;
+                for package in settled.resolution.packages {
+                    if ppk::packed(&package.id, &artifact_dir)? == Some(package.identity) {
+                        continue;
+                    }
+                    let fetched = ppk::fetch(&package.id, &package.artifact_dir, &artifact_dir)?;
+                    warn_unstamped(program, fetched.unstamped);
+                    println!("{}", fetched.identity);
+                }
+                return Ok(ExitCode::SUCCESS);
+            };
             if no_deps {
                 let id = match package.parse() {
                     Ok(id) => id,
@@ -550,6 +920,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             warn_unstamped(program, closed.unstamped);
             println!("{}", closed.identity);
         }
+        Command::Repo { command } => repo(program, command)?,
         Command::Name {
             name,
             closure,

@@ -91,8 +91,8 @@ tools/vm-shell
 ```
 
 It needs the `kernel`, `peiosutils`, `peiso`, `pekit`, `pkgs` and
-`prelude` repositories beside `ppk`, OVMF, `mkfs.vfat`, mtools and
-`xorriso` on the host, Docker with the kernel build's pinned image, and a
+`prelude` repositories beside `ppk`, OVMF, `mkfs.vfat`, mtools,
+`xorriso` and squashfs-tools 4.6 or later on the host, Docker with the kernel build's pinned image, and a
 static musl Peios SDK for building `seed-sd`. Prepare the SDK
 once with prelude's `tools/prepare-sdk.py`, as prelude's `docs/building.md`
 describes, into `~/.cache/peios/prelude-sdk-musl`, or pass `--sdk` or set
@@ -126,7 +126,7 @@ the SDK from `PEIOS_SDK`, which the script sets from `--sdk`.
 
 The script then writes a spec for `peiso`: the kernel is the one in
 `dev.peios.kernel`, the live system is busybox and `ppk`, and the
-initramfs holds those two, which the hook runs, with prelude and
+initramfs holds those two, busybox's shell for the hook, with prelude and
 live-root. `peiso` composes the initramfs's root: the closure
 of its four packages as `/usr` and, around it:
 
@@ -140,9 +140,13 @@ line into a unified kernel image. `peiso` writes the ISO with the image as
 its UEFI boot loader and, beside it:
 
 - `/artifacts`, a store holding every package;
-- `/live.toml`, the live system's environment profile, which names busybox
-  and `ppk`, links `/bin` and `/sbin` to `usr/bin` and `usr/sbin`, and
-  gives an empty `/tmp`;
+- `/live.sqfs`, the live system's `/usr`, the closure of busybox and `ppk`,
+  as a squashfs image whose files carry their security descriptors and
+  signatures, made with `mksquashfs`; the initramfs holds its SHA-256 as
+  `/system/live-image`;
+- `/live.toml`, the live system's environment profile, which the image is
+  the closure of, and `/live.layout`, which links `/bin` and `/sbin` to
+  `usr/bin` and `usr/sbin` and gives an empty `/tmp`;
 - `/peios-medium`, the same identifier as the initramfs's.
 
 Pass `--mkirf`,
@@ -157,30 +161,33 @@ At boot:
 2. The `ppk-live-root` hook finds the ISO: it mounts each disk, disc and
    stick with an ISO9660 filesystem at `/mnt/medium` in turn, and keeps the
    one whose `/peios-medium` matches `/system/medium`, waiting up to ten
-   seconds for one to appear. In QEMU it is `/dev/sr0`. The hook mounts a
-   tmpfs at `/mnt/live` and gives it a descriptor with `seed-sd`: a tmpfs
-   refuses all access, even to SYSTEM, until its root has one. It then
-   runs `ppk compose-env` with the medium's `live.toml` and `artifacts`
-   and `--copy-artifacts`, so the system's root has its own copy of its
-   packages, adds `/proc`, `/sys` and `/dev` for prelude to move its mounts
-   onto. It applies the root's skeleton file, `/usr/share/skeleton`, with
+   seconds for one to appear. In QEMU it is `/dev/sr0`. The hook checks the
+   medium's `/live.sqfs` against `/system/live-image`. It mounts a tmpfs at
+   `/mnt/live` and gives it a descriptor with `seed-sd`: a tmpfs refuses
+   all access, even to SYSTEM, until its root has one. In it, it makes the
+   system's root, with an installed root's descriptor, and `/usr`, `/proc`,
+   `/sys` and `/dev` in that, bind-mounts the root onto `/mnt/rootfs`, and
+   mounts the image read-only on its `/usr`. It makes what `/live.layout`
+   lists, and applies the root's skeleton file, `/usr/share/skeleton`, with
    `skeleton apply`, warning and continuing if the closure has none. If the
-   medium carries `/lcl`, the hook copies that tree into the
-   root, preserving modes, before unmounting the medium and bind-mounting
-   the root onto `/mnt/rootfs`. A copy failure fails the boot. This carries
-   the image's registry seed queues and executable autorun script outside
-   the package closure; peinit applies the common and live queues after
-   registryd starts. The install queue is reserved for an installer.
-   The root lives on its own tmpfs because prelude deletes what is left on
-   the initramfs's filesystem once it hands over.
+   medium carries `/lcl`, the hook copies that tree into the root,
+   preserving modes. A copy failure fails the boot. This carries the
+   image's registry seed queues and executable autorun script outside the
+   package closure; peinit applies the common and live queues after
+   registryd starts. The install queue is reserved for an installer. Last,
+   it moves the medium's mount to `/media/peios` in the root, where the
+   image goes on being read from. The root lives on its own tmpfs because
+   prelude deletes what is left on the initramfs's filesystem once it
+   hands over.
 3. prelude moves `/proc`, `/sys` and `/dev` into the new root, switches to
    it, and starts its first fallback init that exists, `/sbin/init`, which
    is busybox's `init`.
 
 busybox's `init` complains that `/etc/init.d/rcS` is missing, then offers a
 shell on the console when you press <kbd>Enter</kbd>. In the system, `/usr`
-is the closure of busybox and `ppk`, and `ppk` finds the system's packages
-in `/system/artifacts`. Run `poweroff -f` to power the guest off, or press
+is the closure of busybox and `ppk`, and `ppk list` lists its packages
+from `/usr/inventory`; `ppk fetch --from /media/peios/artifacts` takes
+others from the medium. Run `poweroff -f` to power the guest off, or press
 <kbd>Ctrl</kbd>+<kbd>A</kbd> then <kbd>X</kbd>. Nothing in the guest
 survives. Pass `--kernel` or set `PPK_VM_KERNEL` to boot another kernel;
 `--help` lists the options.

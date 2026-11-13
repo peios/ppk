@@ -102,6 +102,26 @@ package shares. The catalog keeps a tombstone with the reason, so that
 anything still asking for it can say why it's gone. Snapshots that hold it
 aren't changed; publish a new one without it to keep a release installable.
 
+## Install from a repository
+
+Anything that resolves packages from a repository can ask for what an index
+or channel holds, with `#` after the name:
+
+```sh
+ppk fetch 'se.curl.curl#stable' --from artifacts
+ppk run -p 'se.curl.curl#2026.10.0' -- /usr/bin/curl --version
+```
+
+The version the index holds is chosen, and so is everything it depends on or
+requires: a request for a release takes the release's versions of what it
+needs too. A constraint after the index, as in `'se.curl.curl#stable >= 8'`,
+must also hold. A closure records the index of each request that named one,
+so its inventory shows what it was asked for from where.
+
+A yanked version is chosen only by a request for exactly it, such as
+`'org.example.tool = 1.2-1'`. A request that only a deleted version would
+satisfy fails, giving the reason it was deleted.
+
 ## Check what a repository publishes
 
 `ppk repo show` prints the pointer file. Give the repository's public key to

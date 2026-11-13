@@ -297,6 +297,12 @@ dirs = ["proc", "sys", "tmp"]
 .B packages
 maps each package asked for to the versions that will do, as a constraint;
 a bare version asks for exactly that version, and the empty string for any.
+.B #
+and an index or channel, as in
+.B """#stable"""
+or
+.BR """#stable >= 1.36""" ,
+asks for the version that index holds, as under REPOSITORIES.
 A profile holds requests, not their answer: composing it resolves them, with
 what they need, and the closure's inventory records the packages chosen.
 Every package is for the architecture
@@ -349,6 +355,32 @@ and
 to its own.
 Another version of a package the profile holds, or a link at a path the
 profile links elsewhere, is an error.
+.SH REPOSITORIES
+A repository, an artifact directory that
+.B repo update
+has published, can be asked for packages by index or channel:
+.B #stable
+after a name takes the version the channel
+.B stable
+leads to, and the dependencies and requirements of a package chosen that way
+are settled from the same index, so that a request for a release takes the
+release's versions of what it needs too.
+A package asked for by name or with an exact ID is settled as usual.
+The request
+.B se.curl.curl#stable
+fails if that index holds no version of
+.B se.curl.curl
+that satisfies it, or if no repository among the artifact directories
+publishes
+.BR stable .
+.PP
+A version a repository has yanked is chosen only by a request for exactly
+it.
+A request a deleted version would have satisfied fails, and says why it was
+deleted.
+.PP
+An inventory records the index of each request that named one, as in
+.BR "[* #stable >=8]" .
 .SH METADATA
 Besides its files, a package's manifest can say what the package needs and
 offers, and describe it.
@@ -625,6 +657,13 @@ Print one identity per fetched package on standard output, in package-name order
 A request is a bare name, a name with a constraint as for
 .BR resolve ,
 or an exact package ID, including its version's spelling and architecture.
+A name followed by
+.B #
+and an index or channel of a repository, as in
+.BR se.curl.curl#stable ,
+asks for the version that index holds, optionally with a constraint after
+it; what that version needs comes from the same index too, as described
+under REPOSITORIES.
 Unqualified requests use
 .BR \-\-arch ,
 or the architecture ppk was built for.
@@ -1434,7 +1473,9 @@ thing that wants it:
 .B *
 for a request of the closure itself, or the name of a package in the
 closure; then, if what was asked for is a capability rather than the package
-by name, the capability; then the constraint, one token per expression, such
+by name, the capability; then, for a request from an index or channel,
+.B #
+and its name; then the constraint, one token per expression, such
 as
 .BR >=8.22 ,
 and none for any version:

@@ -28,7 +28,8 @@ fn id(value: &str) -> PackageId {
 /// Pack `package` into `repo`, depending on each of `depends`.
 fn pack(repo: &Path, package: &str, depends: &[&str]) {
     let tree = tempfile::tempdir().unwrap();
-    fs::write(tree.path().join("file"), package).unwrap();
+    let name = package.split_once('@').unwrap().0;
+    fs::write(tree.path().join(name), package).unwrap();
     let mut options = ppk::PackOptions::default();
     for name in depends {
         options
@@ -163,4 +164,98 @@ fn a_yanked_version_leaves_leading_and_a_deleted_one_leaves_a_tombstone() {
         .unwrap();
     assert!(repo.join("manifests/sha256").join(kept.hex()).exists());
     assert_ne!(kept, Identity::of(b""));
+}
+
+/// What `request` resolves to from `repo`, as `name@version` for each
+/// package, or the error.
+fn resolve(repo: &Path, request: &str) -> Result<Vec<String>, String> {
+    let request = ppk::Request::parse_package(request).unwrap();
+    ppk::resolve(&[request], &[repo.to_path_buf()], "x86_64")
+        .map(|resolution| {
+            (resolution.packages.iter())
+                .map(|p| format!("{}@{}", p.id.name(), p.id.version()))
+                .collect()
+        })
+        .map_err(|err| format!("{err:#}"))
+}
+
+#[test]
+fn a_request_from_an_index_takes_that_index_and_so_does_what_it_needs() {
+    let work = tempfile::tempdir().unwrap();
+    let repo = work.path();
+    pack(repo, "dev.peios.base@1.0-1?arch=x86_64", &[]);
+    pack(repo, "dev.peios.app@1.0-1?arch=x86_64", &["dev.peios.base"]);
+    repo::update(repo, &key(), false).unwrap();
+    repo::snapshot(repo, &key(), "2026.10.0", repo::LEADING).unwrap();
+    repo::channel(repo, &key(), "stable", "2026.10.0", false).unwrap();
+    pack(repo, "dev.peios.base@2.0-1?arch=x86_64", &[]);
+    pack(repo, "dev.peios.app@2.0-1?arch=x86_64", &["dev.peios.base"]);
+    repo::update(repo, &key(), false).unwrap();
+
+    let old = ["dev.peios.app@1.0-1", "dev.peios.base@1.0-1"];
+    let new = ["dev.peios.app@2.0-1", "dev.peios.base@2.0-1"];
+    assert_eq!(resolve(repo, "dev.peios.app#2026.10.0").unwrap(), old);
+    assert_eq!(resolve(repo, "dev.peios.app#stable").unwrap(), old);
+    assert_eq!(resolve(repo, "dev.peios.app#leading").unwrap(), new);
+    assert_eq!(resolve(repo, "dev.peios.app").unwrap(), new);
+    let err = resolve(repo, "dev.peios.app#stable >= 2").unwrap_err();
+    assert!(err.contains("no version in #stable satisfies it"), "{err}");
+    let err = resolve(repo, "dev.peios.app#nowhere").unwrap_err();
+    assert!(err.contains("#nowhere: no repository"), "{err}");
+
+    // The closure records the index it was asked for from.
+    let request = ppk::Request::parse_package("dev.peios.app#stable").unwrap();
+    let packages: Vec<PackageId> = ppk::resolve(
+        std::slice::from_ref(&request),
+        &[repo.to_path_buf()],
+        "x86_64",
+    )
+    .unwrap()
+    .ids();
+    let closed = ppk::closure_for(
+        &packages,
+        &[request],
+        repo,
+        &repo.join("closures"),
+        ppk::UsrFiles::Hardlink,
+    )
+    .unwrap();
+    let inventory = fs::read_to_string(closed.tree_path.join("inventory")).unwrap();
+    assert!(
+        inventory.contains("dev.peios.app@1.0-1?arch=x86_64 ")
+            && inventory.contains(" [* #stable]\n"),
+        "{inventory}"
+    );
+    assert!(ppk::read_inventory(&closed.tree_path).unwrap().is_some());
+}
+
+#[test]
+fn yanked_versions_need_an_exact_request_and_deleted_ones_say_why() {
+    let work = tempfile::tempdir().unwrap();
+    let repo = work.path();
+    pack(repo, "dev.peios.app@1.0-1?arch=x86_64", &[]);
+    pack(repo, "dev.peios.app@2.0-1?arch=x86_64", &[]);
+    repo::update(repo, &key(), false).unwrap();
+    repo::yank(repo, &key(), &id("dev.peios.app@2.0-1?arch=x86_64"), false).unwrap();
+    assert_eq!(
+        resolve(repo, "dev.peios.app").unwrap(),
+        ["dev.peios.app@1.0-1"]
+    );
+    assert_eq!(
+        resolve(repo, "dev.peios.app = 2.0-1").unwrap(),
+        ["dev.peios.app@2.0-1"]
+    );
+
+    repo::delete(
+        repo,
+        &key(),
+        &id("dev.peios.app@2.0-1?arch=x86_64"),
+        "legal takedown",
+    )
+    .unwrap();
+    let err = resolve(repo, "dev.peios.app = 2.0-1").unwrap_err();
+    assert!(
+        err.contains("dev.peios.app@2.0-1 was deleted from") && err.contains("legal takedown"),
+        "{err}"
+    );
 }

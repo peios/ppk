@@ -69,9 +69,12 @@ dirs = ["proc", "sys", "tmp"]
 
 `packages` maps each package the environment asks for to the versions that
 will do, as a constraint. A bare version asks for exactly that version, and
-`""` for any. A profile holds the requests, not their answer: composing it
-resolves them, choosing a version of each package they need, and the
-closure's [inventory](~peios/packaging/closures) records what was chosen.
+`""` for any. `"#stable"` asks for the version a repository's `stable`
+channel holds, and `"#stable >= 1.36"` for that version if it satisfies the
+constraint; see
+[Publishing a Repository](~peios/packaging/publishing-a-repository). A
+profile holds the requests, not their answer: composing it resolves them,
+choosing a version of each package they need, and the closure's [inventory](~peios/packaging/closures) records what was chosen.
 The same requests against the same packages always resolve the same way. A
 profile that asks for exact versions of everything, as
 [`ppk resolve`](~peios/packaging/choosing-packages-for-an-environment)

@@ -36,6 +36,7 @@ hook_log_init ppk-live-root
 medium=/mnt/medium
 live=/mnt/live
 rootfs=/mnt/rootfs
+root_sddl='O:SYG:SYD:(A;OICI;GA;;;SY)(A;OICI;GA;;;BA)(A;OICI;GRGX;;;WD)(A;OICIIO;GA;;;S-1-3-0)'
 # Seconds to wait for the medium, which on a USB stick can appear well
 # into boot.
 wait=10
@@ -90,10 +91,15 @@ mount -t tmpfs tmpfs "$live" || exit 1
 # A tmpfs has no security descriptor until its mounter gives it one, and
 # until then refuses everyone.
 seed-sd "$live" || exit 1
+# The root's own descriptor is an installed system's root's, as the
+# installer formats it: SYSTEM and Administrators control it, and everyone
+# may read and traverse it, which what's made in it inherits.
+mkdir "$live/root" || exit 1
+seed-sd --sddl "$root_sddl" "$live/root" || exit 1
 # prelude moves /proc, /sys and /dev into the new root, so the root has
 # them whatever else it holds.
 for dir in usr proc sys dev; do
-    mkdir -p "$live/root/$dir" || exit 1
+    mkdir "$live/root/$dir" || exit 1
 done
 mount --bind "$live/root" "$rootfs" || exit 1
 # Every file and directory of the image carries its descriptor, so a

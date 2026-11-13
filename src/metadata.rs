@@ -24,7 +24,7 @@ use crate::{Constraint, Version};
 /// read.
 #[derive(Debug, Clone, Default)]
 pub struct Metadata {
-    /// A one-line description, in printable ASCII (PSPU 5.18).
+    /// A one-line description, in printable ASCII (PSPU 5.19).
     pub description: Option<String>,
     /// The upstream project's `http` or `https` URL.
     pub homepage: Option<String>,
@@ -47,7 +47,7 @@ pub struct Metadata {
     pub claims: BTreeMap<String, String>,
 }
 
-/// Which kind of terms a package's license is (PSPU 5.18). A manifest says
+/// Which kind of terms a package's license is (PSPU 5.19). A manifest says
 /// nothing for [`LicenseClass::Unknown`], which is the default, because
 /// saying nothing and saying `unknown` mean the same.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -99,8 +99,8 @@ impl Metadata {
 
     /// Check every part against its rules, naming the first that breaks one:
     ///
-    /// - `description` is printable ASCII (PSPU 5.18).
-    /// - `homepage` is an `http` or `https` URL (PSPU 5.18).
+    /// - `description` is printable ASCII (PSPU 5.19).
+    /// - `homepage` is an `http` or `https` URL (PSPU 5.19).
     /// - `license` and `source_license` have no control characters.
     /// - None of these is empty: an absent field is how a manifest says there
     ///   is nothing.
@@ -275,7 +275,7 @@ fn read_table<T>(
     Ok(out)
 }
 
-/// PSPU 5.18: printable ASCII only, which closes off terminal escapes and
+/// PSPU 5.19: printable ASCII only, which closes off terminal escapes and
 /// lookalike characters in what an operator reads.
 fn check_description(s: &str) -> Result<()> {
     check_not_empty(s)?;
@@ -289,7 +289,7 @@ fn check_description(s: &str) -> Result<()> {
     Ok(())
 }
 
-/// PSPU 5.18: an `http` or `https` URL. This checks the scheme, that a host
+/// PSPU 5.19: an `http` or `https` URL. This checks the scheme, that a host
 /// follows it, and that the rest is printable ASCII without spaces, as a URL
 /// is. It does not check the URL's syntax further.
 fn check_homepage(s: &str) -> Result<()> {

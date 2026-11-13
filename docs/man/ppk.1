@@ -758,7 +758,11 @@ fails and writes nothing, unless
 is given. Earlier packages fetched successfully remain if a later fetch fails.
 .IP
 These checks prove that the package matches the source's ref.
-They do not prove who published it, so fetch only from sources you trust.
+They do not prove who published it, so fetch only from sources you trust,
+or from a configured repository with a key: then the package must also be in
+the repository's catalog, at the identity the catalog gives, and the
+catalog is reached from the pointer file the key signed, so a package the
+repository didn't publish, or a ref changed since, is refused.
 .TP
 .BI closure " package\fR...\fP"
 Compose the packages, each already in the artifact directory, into a

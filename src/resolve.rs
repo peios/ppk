@@ -223,6 +223,20 @@ pub fn resolve(requests: &[Request], artifact_dirs: &[PathBuf], arch: &str) -> R
     resolve_pinned(requests, &[], artifact_dirs, arch)
 }
 
+/// Resolve as [`resolve`] does, where each repository `signed` names must
+/// have signed its pointer file with the key it gives. A package of such a
+/// repository is a candidate only if its signed catalog lists it, and only
+/// at the identity the catalog gives: its ref and manifest are checked
+/// against what the key vouches for, not trusted for themselves.
+pub fn resolve_signed(
+    requests: &[Request],
+    artifact_dirs: &[PathBuf],
+    arch: &str,
+    signed: &BTreeMap<PathBuf, repo::PublicKey>,
+) -> Result<Resolution> {
+    resolve_with(requests, &[], artifact_dirs, arch, signed)
+}
+
 /// Resolve `requests` together with exact package IDs. Pins keep the version's
 /// spelling as well as its value, and must all be for `arch`. They are chosen
 /// before requests, so profiles and explicit IDs cannot be silently upgraded.
@@ -232,8 +246,18 @@ pub fn resolve_pinned(
     artifact_dirs: &[PathBuf],
     arch: &str,
 ) -> Result<Resolution> {
+    resolve_with(requests, pins, artifact_dirs, arch, &BTreeMap::new())
+}
+
+fn resolve_with(
+    requests: &[Request],
+    pins: &[PackageId],
+    artifact_dirs: &[PathBuf],
+    arch: &str,
+    signed: &BTreeMap<PathBuf, repo::PublicKey>,
+) -> Result<Resolution> {
     let wanted_indexes = requests.iter().filter_map(|r| r.index.clone()).collect();
-    let mut index = Index::read(artifact_dirs, arch, &wanted_indexes)?;
+    let mut index = Index::read(artifact_dirs, arch, &wanted_indexes, signed)?;
     let mut pinned = BTreeMap::new();
     let mut pin_requests = Vec::new();
     for id in pins {
@@ -374,15 +398,33 @@ struct Published {
     /// `name@version`.
     indexes: BTreeMap<String, BTreeSet<String>>,
     deleted: Vec<(String, String, String)>,
+    /// For a repository whose signature was checked, the identity its
+    /// catalog gives each version published, as `name@version`; `None`
+    /// where refs are trusted for themselves.
+    catalog: Option<BTreeMap<String, Identity>>,
 }
 
 impl Published {
     /// What the repository at `dir` publishes, if it is one.
-    fn read(dir: &Path, arch: &str, wanted: &BTreeSet<String>) -> Result<Self> {
+    fn read(
+        dir: &Path,
+        arch: &str,
+        wanted: &BTreeSet<String>,
+        key: Option<&repo::PublicKey>,
+    ) -> Result<Self> {
         let mut published = Self::default();
-        let Some(pointer) = repo::read_pointer(dir, None)? else {
+        let Some(pointer) = repo::read_pointer(dir, key)? else {
+            if key.is_some() {
+                bail!(
+                    "{}: not published as a repository, which its key needs",
+                    dir.display()
+                );
+            }
             return Ok(published);
         };
+        if key.is_some() {
+            published.catalog = Some(BTreeMap::new());
+        }
         let trees = Trees::new(dir);
         let held = |packages: &repo::Packages| {
             (packages.iter())
@@ -395,6 +437,14 @@ impl Published {
         };
         if let Some(catalog) = &pointer.catalog {
             for (name, release) in held(&trees.read_tree(catalog)?) {
+                if let Some(identities) = &mut published.catalog
+                    && !matches!(release.standing, Standing::Deleted(_))
+                {
+                    identities.insert(
+                        format!("{name}@{}", release.version),
+                        release.identity.clone(),
+                    );
+                }
                 match release.standing {
                     Standing::Current => {}
                     Standing::Yanked => {
@@ -422,7 +472,12 @@ impl Published {
 }
 
 impl Index {
-    fn read(artifact_dirs: &[PathBuf], arch: &str, wanted: &BTreeSet<String>) -> Result<Self> {
+    fn read(
+        artifact_dirs: &[PathBuf],
+        arch: &str,
+        wanted: &BTreeSet<String>,
+        signed: &BTreeMap<PathBuf, repo::PublicKey>,
+    ) -> Result<Self> {
         if artifact_dirs.is_empty() {
             bail!("no artifact directory to choose packages from");
         }
@@ -431,7 +486,7 @@ impl Index {
         let mut found = BTreeSet::new();
         for dir in artifact_dirs {
             let layout = ArtifactDir::new(dir);
-            let published = Published::read(dir, arch, wanted)?;
+            let published = Published::read(dir, arch, wanted, signed.get(dir))?;
             found.extend(published.indexes.keys().cloned());
             for (name, version, reason) in published.deleted {
                 deleted
@@ -445,6 +500,18 @@ impl Index {
                     let Some(identity) = store::read_ref(&layout.ref_path(&id))? else {
                         continue;
                     };
+                    if let Some(catalog) = &published.catalog {
+                        match catalog.get(&format!("{name}@{version}")) {
+                            // Not published: a ref the key doesn't vouch for.
+                            None => continue,
+                            Some(listed) if *listed != identity => bail!(
+                                "{id}: its ref in {} names {identity}, but the repository's \
+                                 signed catalog lists {listed}",
+                                dir.display()
+                            ),
+                            Some(_) => {}
+                        }
+                    }
                     let held = names.entry(name.clone()).or_default();
                     if let Some(first) = held.iter().find(|c| c.id == id) {
                         if first.identity != identity {

@@ -247,7 +247,10 @@ pub fn resolve(
         settled.push(request);
     }
     let paths: Vec<PathBuf> = repositories.iter().map(|r| r.path.clone()).collect();
-    let resolution = crate::resolve(&settled, &paths, arch)?;
+    let signed = (repositories.iter())
+        .filter_map(|r| r.key.clone().map(|key| (r.path.clone(), key)))
+        .collect();
+    let resolution = crate::resolve_signed(&settled, &paths, arch, &signed)?;
     for package in &resolution.packages {
         one(package.id.name())?;
     }

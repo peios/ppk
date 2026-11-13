@@ -115,7 +115,10 @@ package. Only the files missing from your artifact directory are copied, so
 fetching a new version transfers only what changed.
 
 These checks prove that the package is the one the source's ref names. They
-don't prove who published it, so fetch only from sources you trust.
+don't prove who published it, so fetch only from sources you trust. A
+configured repository with a key proves that too: a package must be in the
+catalog its signed pointer file leads to, at the identity the catalog gives,
+so a package it didn't publish, or a ref changed since, is refused.
 
 ## When the package is already present
 

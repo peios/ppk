@@ -202,6 +202,9 @@ pub fn closure_for(
         )?;
     }
     inventory.write(tmp.path())?;
+    // The tree's files aren't synced as they're written; this is their one
+    // sync, before anything names the tree.
+    store::sync_filesystem(tmp.path())?;
     // Last, so that a tree that can't be built leaves nothing behind.
     write_manifest(closure_dir, &manifest_path, &manifest)?;
 

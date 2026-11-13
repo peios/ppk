@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::access::{Security, Stamp};
 use crate::store::{self, ArtifactDir};
-use crate::{Entry, Identity, PackageId, parse_manifest};
+use crate::{Entry, Identity, Manifest, PackageId, parse_manifest};
 
 /// The result of a successful fetch.
 #[derive(Debug)]
@@ -45,7 +45,17 @@ pub struct Fetched {
 /// check stops the fetch after earlier blobs were copied; they are named by
 /// their content, so they are correct and harmless.
 pub fn fetch(id: &PackageId, source: &Path, artifact_dir: &Path) -> Result<Fetched> {
-    fetch_as(id, source, artifact_dir, false)
+    let mut fetched = fetch_as(std::slice::from_ref(id), source, artifact_dir, false)?;
+    Ok(fetched.remove(0))
+}
+
+/// Copy each of `ids` from `source` into `artifact_dir`, as [`fetch`] does,
+/// together: every package's blobs, then every manifest, then every ref. It
+/// syncs the store a few times in all, not a few times a package, so a set
+/// of packages is much quicker to fetch this way than one by one. It checks
+/// every package before it writes anything.
+pub fn fetch_all(ids: &[PackageId], source: &Path, artifact_dir: &Path) -> Result<Vec<Fetched>> {
+    fetch_as(ids, source, artifact_dir, false)
 }
 
 /// Copy package `id` from `source` into `artifact_dir`, as [`fetch`] does,
@@ -57,10 +67,24 @@ pub fn fetch(id: &PackageId, source: &Path, artifact_dir: &Path) -> Result<Fetch
 /// packages are rebuilt at the same versions before it is published. Only
 /// the ref changes: the replaced manifest and its blobs stay.
 pub fn fetch_replacing(id: &PackageId, source: &Path, artifact_dir: &Path) -> Result<Fetched> {
-    fetch_as(id, source, artifact_dir, true)
+    let mut fetched = fetch_as(std::slice::from_ref(id), source, artifact_dir, true)?;
+    Ok(fetched.remove(0))
 }
 
-fn fetch_as(id: &PackageId, source: &Path, artifact_dir: &Path, replace: bool) -> Result<Fetched> {
+/// A package checked in the source, to be copied.
+struct Source {
+    id: PackageId,
+    identity: Identity,
+    bytes: Vec<u8>,
+    manifest: Manifest,
+}
+
+fn fetch_as(
+    ids: &[PackageId],
+    source: &Path,
+    artifact_dir: &Path,
+    replace: bool,
+) -> Result<Vec<Fetched>> {
     if !fs::metadata(source)
         .with_context(|| format!("{}", source.display()))?
         .is_dir()
@@ -70,14 +94,155 @@ fn fetch_as(id: &PackageId, source: &Path, artifact_dir: &Path, replace: bool) -
     let from = ArtifactDir::new(source);
     let to = ArtifactDir::new(artifact_dir);
 
+    let mut packages = Vec::new();
+    for id in ids {
+        packages.push(check(id, &from, &to, source, replace)?);
+    }
+
+    let blob_dir = to.blob_dir();
+    store::create_dirs(&blob_dir)?;
+    let mut done = HashSet::new();
+    let mut counts = vec![(0, 0); packages.len()];
+    // Signatures first, so that a stored file's signature is in the store
+    // before the file is, and its stamp can read it there. Everything is
+    // named only once it's on disk, kind by kind; see `store::copy_pending`.
+    let mut pending = Vec::new();
+    for (package, (blobs_written, unstamped)) in packages.iter().zip(&mut counts) {
+        for (_, entry) in &package.manifest.entries {
+            let Entry::Blob {
+                signature: Some(signature),
+                ..
+            } = entry
+            else {
+                continue;
+            };
+            let blob = to.blob_path(signature, false);
+            if !done.insert(blob.clone()) || blob.exists() {
+                continue;
+            }
+            let source_blob = from.blob_path(signature, false);
+            let Some(copied) = store::copy_pending(
+                &source_blob,
+                &blob,
+                (signature.as_str(), false),
+                Security::default(),
+                unstamped,
+            )?
+            else {
+                bail!("{}: does not match its hash", source_blob.display());
+            };
+            pending.push(copied);
+            *blobs_written += 1;
+        }
+    }
+    store::place_pending(&blob_dir, std::mem::take(&mut pending))?;
+    for (package, (blobs_written, unstamped)) in packages.iter().zip(&mut counts) {
+        for (_, entry) in &package.manifest.entries {
+            let Entry::Blob {
+                hex,
+                exec,
+                descriptor,
+                signature,
+            } = entry
+            else {
+                continue;
+            };
+            let blob = to.file_path(entry);
+            if !done.insert(blob.clone()) {
+                continue;
+            }
+            let signature = signature
+                .as_deref()
+                .map(|signature| to.read_signature(signature))
+                .transpose()?;
+            let security = Security {
+                descriptor: descriptor.as_ref(),
+                signature: signature.as_deref(),
+            };
+            if blob.exists() {
+                if entry.has_security() && security.ensure(&blob)? == Stamp::Skipped {
+                    *unstamped += 1;
+                }
+                continue;
+            }
+            let source_blob = from.file_path(entry);
+            let Some(copied) = store::copy_pending(
+                &source_blob,
+                &blob,
+                (hex.as_str(), *exec),
+                security,
+                unstamped,
+            )?
+            else {
+                bail!("{}: does not match its hash", source_blob.display());
+            };
+            pending.push(copied);
+            *blobs_written += 1;
+        }
+    }
+    store::place_pending(&blob_dir, std::mem::take(&mut pending))?;
+
+    let manifest_dir = to.manifest_dir();
+    store::create_dirs(&manifest_dir)?;
+    for package in &packages {
+        let manifest_path = to.manifest_path(&package.identity);
+        pending.push(store::write_pending(
+            &manifest_dir,
+            &manifest_path,
+            &package.bytes,
+            false,
+            || format!("{}: does not match its hash", manifest_path.display()),
+        )?);
+    }
+    store::place_pending(&manifest_dir, std::mem::take(&mut pending))?;
+
+    for package in &packages {
+        let id = &package.id;
+        let ref_dir = to.ref_dir(id);
+        store::create_dirs(&ref_dir)?;
+        pending.push(store::write_pending(
+            &ref_dir,
+            &to.ref_path(id),
+            store::ref_contents(&package.identity).as_bytes(),
+            replace,
+            || format!("{id}: another package was stored under this name during the fetch"),
+        )?);
+    }
+    store::place_pending(artifact_dir, pending)?;
+    // The refs' names, which nothing syncs once they're placed.
+    store::sync_filesystem(artifact_dir)?;
+
+    Ok(packages
+        .into_iter()
+        .zip(counts)
+        .map(|(package, (blobs_written, unstamped))| Fetched {
+            identity: package.identity.to_string(),
+            manifest_path: to.manifest_path(&package.identity),
+            ref_path: to.ref_path(&package.id),
+            blobs_written,
+            unstamped,
+        })
+        .collect())
+}
+
+/// Check package `id` in the source: its ref, and a manifest that hashes to
+/// it, names `id` and parses. Unless `replace`, `artifact_dir` must not hold
+/// another package as `id`.
+fn check(
+    id: &PackageId,
+    from: &ArtifactDir,
+    to: &ArtifactDir,
+    source: &Path,
+    replace: bool,
+) -> Result<Source> {
     let Some(identity) = store::read_ref(&from.ref_path(id))? else {
         bail!("{id}: no such package in {}", source.display());
     };
-    let ref_path = to.ref_path(id);
     // The ref write at the end still refuses to replace a ref that appears
     // after this check.
     if !replace
-        && let Some(existing) = store::read_ref(&ref_path)?.filter(|existing| *existing != identity)
+        && let Some(existing) =
+            store::read_ref(&to.ref_path(id))?.filter(|existing| *existing != identity)
     {
         bail!(
             "{id}: already present as {existing}, but {} has {identity}",
@@ -100,107 +265,10 @@ fn fetch_as(id: &PackageId, source: &Path, artifact_dir: &Path, replace: bool) -
             manifest.id
         );
     }
-
-    let blob_dir = to.blob_dir();
-    store::create_dirs(&blob_dir)?;
-    let mut done = HashSet::new();
-    let mut blobs_written = 0;
-    let mut unstamped = 0;
-    // Signatures first, so that a stored file's signature is in the store
-    // before the file is.
-    for (_, entry) in &manifest.entries {
-        let Entry::Blob {
-            signature: Some(signature),
-            ..
-        } = entry
-        else {
-            continue;
-        };
-        let blob = to.blob_path(signature, false);
-        if !done.insert(blob.clone()) || blob.exists() {
-            continue;
-        }
-        let source_blob = from.blob_path(signature, false);
-        if !store::copy_blob(
-            &source_blob,
-            &blob,
-            (signature.as_str(), false),
-            Security::default(),
-            &mut unstamped,
-        )? {
-            bail!("{}: does not match its hash", source_blob.display());
-        }
-        blobs_written += 1;
-    }
-    for (_, entry) in &manifest.entries {
-        let Entry::Blob {
-            hex,
-            exec,
-            descriptor,
-            signature,
-        } = entry
-        else {
-            continue;
-        };
-        let blob = to.file_path(entry);
-        if !done.insert(blob.clone()) {
-            continue;
-        }
-        let signature = signature
-            .as_deref()
-            .map(|signature| to.read_signature(signature))
-            .transpose()?;
-        let security = Security {
-            descriptor: descriptor.as_ref(),
-            signature: signature.as_deref(),
-        };
-        if blob.exists() {
-            if entry.has_security() && security.ensure(&blob)? == Stamp::Skipped {
-                unstamped += 1;
-            }
-            continue;
-        }
-        let source_blob = from.file_path(entry);
-        if !store::copy_blob(
-            &source_blob,
-            &blob,
-            (hex.as_str(), *exec),
-            security,
-            &mut unstamped,
-        )? {
-            bail!("{}: does not match its hash", source_blob.display());
-        }
-        blobs_written += 1;
-    }
-
-    let manifest_dir = to.manifest_dir();
-    store::create_dirs(&manifest_dir)?;
-    let manifest_path = to.manifest_path(&identity);
-    if !store::write_new(&manifest_dir, &manifest_path, &bytes)? {
-        bail!("{}: does not match its hash", manifest_path.display());
-    }
-
-    let ref_dir = to.ref_dir(id);
-    store::create_dirs(&ref_dir)?;
-    if replace {
-        store::write_replacing(
-            &ref_dir,
-            &ref_path,
-            store::ref_contents(&identity).as_bytes(),
-        )?;
-    } else if !store::write_new(
-        &ref_dir,
-        &ref_path,
-        store::ref_contents(&identity).as_bytes(),
-    )? {
-        bail!("{id}: another package was stored under this name during the fetch");
-    }
-
-    Ok(Fetched {
-        identity: identity.to_string(),
-        manifest_path,
-        ref_path,
-        blobs_written,
-        unstamped,
+    Ok(Source {
+        id: id.clone(),
+        identity,
+        bytes,
+        manifest,
     })
 }

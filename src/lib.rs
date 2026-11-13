@@ -84,7 +84,7 @@ pub use compose::{
     Composed, EnvDir, EnvSymlink, Extras, RootArtifacts, compose_env, compose_env_for,
 };
 pub use derive::{SYMBOL_CAPABILITIES, SYMBOL_VERSION_FLOORS};
-pub use fetch::{Fetched, fetch, fetch_replacing};
+pub use fetch::{Fetched, fetch, fetch_all, fetch_replacing};
 pub use id::{HOST_ARCH, PackageId};
 pub use identity::Identity;
 pub use inventory::{Inventory, InventoryPackage, USER, Want, read_inventory};

@@ -167,6 +167,63 @@ fn only_missing_blobs_are_copied() {
 }
 
 #[test]
+fn fetching_together_stores_each_package_and_copies_a_shared_blob_once() {
+    let source = tempfile::tempdir().unwrap();
+    let together = tempfile::tempdir().unwrap();
+    let one_by_one = tempfile::tempdir().unwrap();
+    let packages = [
+        "dev.peios.hello@1.0-1?arch=x86_64",
+        "dev.peios.hello@2.0-1?arch=x86_64",
+    ];
+    let identities = [
+        pack(
+            packages[0],
+            &[("bin/hello", b"v1"), ("COPYING", b"license")],
+            source.path(),
+        ),
+        pack(
+            packages[1],
+            &[("bin/hello", b"v2"), ("COPYING", b"license")],
+            source.path(),
+        ),
+    ];
+
+    let ids: Vec<PackageId> = packages.iter().map(|each| id(each)).collect();
+    let fetched = ppk::fetch_all(&ids, source.path(), together.path()).unwrap();
+    let got: Vec<_> = fetched.iter().map(|each| each.identity.clone()).collect();
+    assert_eq!(got, identities);
+    let written: Vec<_> = fetched.iter().map(|each| each.blobs_written).collect();
+    assert_eq!(written, [2, 1], "COPYING is copied once");
+
+    for package in packages {
+        fetch(package, source.path(), one_by_one.path()).unwrap();
+    }
+    // The same store, and no temporary file left behind.
+    assert_eq!(
+        contents_under(together.path()),
+        contents_under(one_by_one.path())
+    );
+}
+
+#[test]
+fn fetching_together_checks_every_package_before_writing_anything() {
+    let source = tempfile::tempdir().unwrap();
+    let local = tempfile::tempdir().unwrap();
+    pack(HELLO, &[("a", b"hello")], source.path());
+
+    let ids = [id(HELLO), id("dev.peios.missing@1.0-1?arch=x86_64")];
+    let err = ppk::fetch_all(&ids, source.path(), local.path()).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "dev.peios.missing@1.0-1?arch=x86_64: no such package in {}",
+            source.path().display()
+        )
+    );
+    assert_eq!(contents_under(local.path()), []);
+}
+
+#[test]
 fn a_different_local_package_is_refused_and_nothing_is_written() {
     let source = tempfile::tempdir().unwrap();
     let local = tempfile::tempdir().unwrap();

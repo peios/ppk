@@ -21,7 +21,7 @@ use crate::closure::{
     UsrFiles, build_entry, exact_requests, link_blob, merge, package_identities, read_packages,
 };
 use crate::environment::MOUNT_POINT;
-use crate::fetch::fetch;
+use crate::fetch::fetch_all;
 use crate::inventory::Inventory;
 use crate::manifest::{check_path, toml_string};
 use crate::resolve::Request;
@@ -216,9 +216,7 @@ pub fn compose_env_for(
             )?;
         }
         RootArtifacts::Copy => {
-            for id in packages {
-                fetch(id, artifact_dir, &root_store)?;
-            }
+            fetch_all(packages, artifact_dir, &root_store)?;
         }
     }
     let usr_layout = match extras.artifacts {

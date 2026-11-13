@@ -1,0 +1,118 @@
+#!/usr/bin/sh
+# /// hook
+# contributes = ["rootfs-ready"]
+# ///
+#
+# Disk boot: mount an installed system's root filesystem, the partition
+# root= names, and make the closure its store names SYSTEM its /usr, then
+# offer the root to prelude at /mnt/rootfs.
+#
+# An installed root holds a ppk store, /system/artifacts, with its closures
+# beside it, and names the one that is its /usr SYSTEM (PSPU 5.27). The
+# root's own /usr is only a mountpoint: what the system runs is chosen by
+# that name, so changing it changes the system as one step, and nothing
+# writes /usr in place. The root's directories outside /usr were made from
+# its skeleton file when it was installed.
+#
+# root= is read for the device it names, not to decide whether this hook is
+# wanted: an installed system's initramfs holds this hook and a live
+# medium's live-root, never both. So a missing root= is a failure.
+
+# prelude installs its hook logger at this path on the booted system.
+# shellcheck source=/dev/null
+. /usr/libexec/prelude/hook-log.sh
+hook_log_init ppk-disk-root
+
+rootfs=/mnt/rootfs
+store=$rootfs/system/artifacts
+# Seconds to wait for the root's device, which a storage driver can make
+# well into boot.
+wait=10
+
+# The last root= wins, as the kernel takes repeated parameters. The words
+# are never taken as globs.
+root_spec=
+read -r cmdline </proc/cmdline || exit 1
+set -f
+for word in $cmdline; do
+    case "$word" in
+    root=*) root_spec=${word#root=} ;;
+    esac
+done
+set +f
+if [ -z "$root_spec" ]; then
+    log_fail "no root= on the kernel command line; nothing names the root to mount"
+    exit 1
+fi
+case "$root_spec" in
+/dev/* | UUID=* | PARTUUID=* | LABEL=*) ;;
+*)
+    log_fail "unsupported root= form '$root_spec'"
+    exit 1
+    ;;
+esac
+
+# The initramfs runs no udev, so /dev/disk/by-* is empty: a tag is found by
+# probing each device.
+find_by_tag() {
+    lsblk -p -n -l -o PATH,"$1" 2>/dev/null | while read -r dev value; do
+        if [ "$value" = "$2" ]; then
+            printf '%s\n' "$dev"
+            break
+        fi
+    done
+}
+
+resolve_root() {
+    case "$root_spec" in
+    /dev/*) [ -b "$root_spec" ] && printf '%s\n' "$root_spec" ;;
+    UUID=*) find_by_tag UUID "${root_spec#UUID=}" ;;
+    PARTUUID=*) find_by_tag PARTUUID "${root_spec#PARTUUID=}" ;;
+    LABEL=*) find_by_tag LABEL "${root_spec#LABEL=}" ;;
+    esac
+}
+
+dev=
+waited=0
+until dev=$(resolve_root) && [ -n "$dev" ]; do
+    if [ "$waited" -ge "$((wait * 10))" ]; then
+        log_fail "no device matched root=$root_spec"
+        exit 1
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+done
+log "root=$root_spec is $dev"
+
+# The initramfs checks the root, since peinit must never repair a root it
+# is running on. Without fsck, a journal still replays at mount.
+if command -v fsck >/dev/null 2>&1; then
+    fsck -p "$dev"
+    status=$?
+    # 1 is errors corrected, which is fine to mount.
+    if [ "$status" -gt 1 ]; then
+        log_fail "fsck $dev failed (status $status)"
+        exit 1
+    fi
+else
+    log_warn "no fsck in the initramfs; relying on journal replay"
+fi
+
+# An installed root carries real security descriptors, so a file without one
+# is a fault to show, not a gap to fill in.
+mkdir -p "$rootfs" || exit 1
+if ! mount -o policy=deny-missing "$dev" "$rootfs"; then
+    log_fail "could not mount $dev at $rootfs"
+    exit 1
+fi
+
+if ! system=$(ppk name SYSTEM --artifact-dir "$store" 2>/dev/null) || [ -z "$system" ]; then
+    log_fail "the root's store names no SYSTEM closure"
+    exit 1
+fi
+tree=$store/closures/${system#sha256:}
+if ! mount --bind -o ro "$tree" "$rootfs/usr"; then
+    log_fail "could not mount the SYSTEM closure, $system, at /usr"
+    exit 1
+fi
+log_ok "system root mounted at $rootfs, with $system at /usr"

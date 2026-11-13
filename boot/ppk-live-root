@@ -18,9 +18,9 @@
 # is attached, and the identifier keeps another Peios medium attached
 # alongside from being taken for it. The root lives on its own tmpfs
 # because prelude deletes what is left on the initramfs's filesystem once
-# it hands over; --copy-artifacts gives it a store of its own there, so
-# the medium is unmounted afterwards. The root's own skeleton file then
-# gives it what it needs outside /usr.
+# it hands over; --copy-artifacts gives it a store of its own there. The
+# medium is moved into the root, for an installer to read. The root's own
+# skeleton file then gives it what it needs outside /usr.
 
 # prelude installs its hook logger at this path on the booted system.
 # shellcheck source=/dev/null
@@ -99,6 +99,10 @@ if [ -d "$medium/lcl" ]; then
         exit 1
     fi
 fi
-umount "$medium" || exit 1
 mount --bind "$live/root" "$rootfs" || exit 1
-log_ok "system root composed at $rootfs"
+# The medium stays mounted, read-only, at /media/peios in the system root:
+# an installer composes an installed system from the packages its store
+# holds, which are more than the live system's.
+mkdir -p "$rootfs/media/peios" || exit 1
+mount --move "$medium" "$rootfs/media/peios" || exit 1
+log_ok "system root composed at $rootfs, with the medium at /media/peios"

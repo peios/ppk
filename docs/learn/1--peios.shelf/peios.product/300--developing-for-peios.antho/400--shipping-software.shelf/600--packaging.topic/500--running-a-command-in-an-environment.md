@@ -40,10 +40,11 @@ Unqualified requests use ppk's own architecture, or `--arch` if given.
 An explicit architecture in a full ID selects that architecture when all
 requests are qualified. One resolution holds one architecture.
 
-To use the packages of an environment profile, give the profile first. With
-`-p`, the profile's packages are exact pins in the same resolution. They
-cannot be upgraded, and conflicting requests fail before composition. A
-profile without `-p` stays exact: its dependencies are not resolved again.
+To use the packages of an environment profile, give the profile first. Its
+requests are resolved together with any after `-p`, with what they need, and
+a request the others can't satisfy fails before composition. The closure's
+inventory records every request, so `ppk list` and `/usr/inventory` show
+what was asked for as well as what was chosen.
 A run keeps the rest of the filesystem as it is, so a
 profile's links and directories don't apply:
 
@@ -55,7 +56,8 @@ The command runs with the chosen packages at `/usr`.
 
 To compose exactly the IDs you name, pass `--no-deps`. This mode accepts
 full IDs with an optional architecture, as before; names and constraints
-are not accepted. Profiles remain exact in this mode too:
+are not accepted. A profile used with it must ask for one exact version of
+each package:
 
 ```sh
 ppk run --no-deps -p org.figlet.figlet@2.2.5-1 -- /usr/bin/figlet Peios
@@ -97,5 +99,6 @@ The mounted closure includes its own `/usr/inventory`, so `ppk list`
 inside the command reports that closure's packages. Include ppk and its
 runtime packages if you want to run it there. `ppk list --all` reads the
 store in the caller's root and marks membership in the mounted closure.
-Closures built by an older ppk without an inventory are reused unchanged;
-use a separate `--closure-dir` to build one with an inventory.
+A closure is named by its requests as well as its packages, so a closure
+built by an older ppk, named by its packages alone, is never mistaken for a
+new one.

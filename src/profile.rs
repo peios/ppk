@@ -14,10 +14,12 @@
 //! "bin" = ":bin"
 //! ```
 //!
-//! `packages` maps each package's name to its exact version: a profile is
-//! the resolved answer, so whatever chooses versions does so when writing
-//! it, never when composing. Every package is for `arch`, the host's by
-//! default. A symlink's value is what follows `<path>:` in `--symlink`, so
+//! `packages` maps each package asked for to the versions that will do, as
+//! a constraint such as `">= 1.36"`, or `""` for any. A bare version asks for
+//! exactly that version. A profile holds requests, not their answer: what it
+//! asks for is resolved when it is composed, with what that needs, and the
+//! closure's inventory records the answer. Every package is for `arch`, the
+//! host's by default. A symlink's value is what follows `<path>:` in `--symlink`, so
 //! a leading `:` stands for `usr`. `dirs` are empty directories, and
 //! `include_artifacts = true` gives a composed root its packages in an
 //! artifact directory of its own, as `--include-artifacts` does. Every key
@@ -38,7 +40,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::{EnvDir, EnvSymlink, HOST_ARCH, PackageId};
+use crate::resolve::{Request, Wanted};
+use crate::{Constraint, EnvDir, EnvSymlink, HOST_ARCH, PackageId};
 
 /// The keys a profile may have.
 const KEYS: [&str; 6] = [
@@ -53,8 +56,11 @@ const KEYS: [&str; 6] = [
 /// What an environment holds.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Profile {
-    /// Its packages, at most one version of each name.
-    pub packages: Vec<PackageId>,
+    /// The architecture its packages are for, if it says.
+    pub arch: Option<String>,
+    /// The packages it asks for, by name, each with the versions that will
+    /// do, at most one request for each name.
+    pub packages: Vec<Request>,
     /// Symlinks a composed root holds besides its `usr`.
     pub symlinks: Vec<EnvSymlink>,
     /// Empty directories a composed root holds.
@@ -110,17 +116,46 @@ impl Profile {
         Ok(())
     }
 
+    /// A profile asking for exactly each of `packages`, which must all be
+    /// for one architecture.
+    pub fn exact(packages: &[PackageId]) -> Result<Self> {
+        let mut profile = Self::default();
+        profile.add_packages(packages.iter().cloned())?;
+        Ok(profile)
+    }
+
+    /// The architecture the profile's packages are for: the one it names,
+    /// or the host's.
+    pub fn arch(&self) -> &str {
+        self.arch.as_deref().unwrap_or(HOST_ARCH)
+    }
+
+    /// The exact package each request asks for, when every request asks
+    /// for exactly one version, as an environment composed without
+    /// resolving needs.
+    pub fn exact_packages(&self) -> Result<Vec<PackageId>> {
+        (self.packages.iter())
+            .map(|request| {
+                let Wanted::Package(name) = &request.wanted else {
+                    bail!("a profile asks only for packages");
+                };
+                let Some(version) = request.constraint.exact() else {
+                    bail!(
+                        "{name}: asks for {}, not one exact version",
+                        request.constraint
+                    );
+                };
+                PackageId::new(name, &version.to_string(), self.arch())
+            })
+            .collect()
+    }
+
     /// The profile as TOML, which [`Profile::parse`] reads back as it is.
-    /// Every package must be for one architecture, which a profile names
-    /// once.
     pub fn render(&self) -> Result<String> {
         let quote = |s: &str| toml::Value::String(s.to_owned()).to_string();
         let mut out = String::new();
-        if let Some(first) = self.packages.first() {
-            if let Some(other) = self.packages.iter().find(|id| id.arch() != first.arch()) {
-                bail!("{first} and {other} are for different architectures");
-            }
-            out.push_str(&format!("arch = {}\n", quote(first.arch())));
+        if let Some(arch) = &self.arch {
+            out.push_str(&format!("arch = {}\n", quote(arch)));
         }
         if self.include_artifacts {
             out.push_str("include_artifacts = true\n");
@@ -131,8 +166,15 @@ impl Profile {
         }
         if !self.packages.is_empty() {
             out.push_str("\n[packages]\n");
-            for id in &self.packages {
-                out.push_str(&format!("{} = {}\n", quote(id.name()), quote(id.version())));
+            for request in &self.packages {
+                let Wanted::Package(name) = &request.wanted else {
+                    bail!("a profile asks only for packages");
+                };
+                let versions = match request.constraint.exact() {
+                    Some(version) => version.to_string(),
+                    None => request.constraint.to_manifest_string(),
+                };
+                out.push_str(&format!("{} = {}\n", quote(name), quote(&versions)));
             }
         }
         if !self.symlinks.is_empty() {
@@ -150,15 +192,34 @@ impl Profile {
         Ok(out)
     }
 
-    /// Adds `packages` to the profile's. One it holds already is added
-    /// once; another version of a package it holds is an error, since an
-    /// environment holds one version of each.
+    /// Adds a request for exactly each of `packages` to the profile's. One
+    /// it asks for already, exactly so, is added once; any other request for
+    /// one of the names, or a package for another architecture, is an error.
     pub fn add_packages(&mut self, packages: impl IntoIterator<Item = PackageId>) -> Result<()> {
         for id in packages {
-            match self.packages.iter().find(|held| held.name() == id.name()) {
-                Some(held) if *held == id => {}
-                Some(held) => bail!("{id}: the environment holds {held} already"),
-                None => self.packages.push(id),
+            match &self.arch {
+                Some(arch) if arch != id.arch() => {
+                    bail!("{id}: the environment's packages are for {arch}")
+                }
+                Some(_) => {}
+                None => self.arch = Some(id.arch().to_owned()),
+            }
+            let request = Request::package(
+                id.name(),
+                Constraint::parse(&format!("= {}", id.version()))?,
+            )?;
+            match self
+                .packages
+                .iter()
+                .find(|held| held.wanted == request.wanted)
+            {
+                Some(held) if *held == request => {}
+                Some(held) => bail!(
+                    "{id}: the environment asks for {} {} already",
+                    id.name(),
+                    held.constraint
+                ),
+                None => self.packages.push(request),
             }
         }
         Ok(())
@@ -248,32 +309,39 @@ impl Merged {
     /// Add `profile`, from `origin`, refusing what disagrees with what is
     /// held already.
     fn add(&mut self, profile: Profile, origin: &str) -> Result<()> {
-        for id in profile.packages {
-            if let Some(held) = self
-                .profile
-                .packages
-                .iter()
-                .find(|held| held.name() == id.name())
+        if !profile.packages.is_empty() {
+            let arch = profile.arch().to_owned();
+            match &self.profile.arch {
+                Some(held) if *held != arch => bail!(
+                    "{origin} has packages for {arch}, but {} has packages for another architecture, {held}",
+                    self.packages
+                        .values()
+                        .next()
+                        .map_or("another", String::as_str)
+                ),
+                Some(_) => {}
+                None => self.profile.arch = Some(arch),
+            }
+        }
+        for request in profile.packages {
+            let Wanted::Package(name) = &request.wanted else {
+                bail!("{origin}: a profile asks only for packages");
+            };
+            if let Some(held) =
+                (self.profile.packages.iter()).find(|held| held.wanted == request.wanted)
             {
-                if *held != id {
+                if *held != request {
                     bail!(
-                        "{origin} has {id}, but {} has {held}",
-                        self.packages[id.name()]
+                        "{origin} asks for {name} {}, but {} asks for {name} {}",
+                        request.constraint,
+                        self.packages[name],
+                        held.constraint
                     );
                 }
                 continue;
             }
-            if let Some(other) = self.profile.packages.first()
-                && other.arch() != id.arch()
-            {
-                bail!(
-                    "{origin} has {id}, but {} has {other}, for another architecture",
-                    self.packages[other.name()]
-                );
-            }
-            self.packages
-                .insert(id.name().to_owned(), origin.to_owned());
-            self.profile.packages.push(id);
+            self.packages.insert(name.clone(), origin.to_owned());
+            self.profile.packages.push(request);
         }
         for link in profile.symlinks {
             if let Some(dir_origin) = self.dirs.get(link.path()) {
@@ -369,13 +437,18 @@ fn flat(doc: &toml::Table) -> Result<Profile> {
         None => HOST_ARCH,
     };
 
-    let mut profile = Profile::default();
-    for (name, version) in table(doc, "packages")? {
-        let version = version
+    let mut profile = Profile {
+        arch: doc.get("arch").map(|_| arch.to_owned()),
+        ..Profile::default()
+    };
+    for (name, versions) in table(doc, "packages")? {
+        let versions = versions
             .as_str()
-            .ok_or_else(|| anyhow!("packages: {name:?} has a version that is not a string"))?;
-        let id = PackageId::new(name, version, arch).context("packages")?;
-        profile.packages.push(id);
+            .ok_or_else(|| anyhow!("packages: {name:?} has versions that are not a string"))?;
+        let constraint = Constraint::from_manifest_string(versions)
+            .with_context(|| format!("packages: {name:?}"))?;
+        let request = Request::package(name, constraint).context("packages")?;
+        profile.packages.push(request);
     }
     for (path, target) in table(doc, "symlinks")? {
         let target = target

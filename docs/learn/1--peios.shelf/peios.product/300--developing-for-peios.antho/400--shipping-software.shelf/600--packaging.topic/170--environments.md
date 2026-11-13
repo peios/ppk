@@ -52,27 +52,30 @@ environment, not to any package.
 
 ## Described by a profile
 
-An environment profile is a TOML file that describes an environment
-exactly, so that it can be named and reused rather than spelt out on the
-command line each time:
+An environment profile is a TOML file that describes an environment, so
+that it can be named and reused rather than spelt out on the command line
+each time:
 
 ```toml
 dirs = ["proc", "sys", "tmp"]
 
 [packages]
 "net.busybox.busybox" = "1.37.0-1"
-"dev.peios.prelude" = "0.0.7-1"
+"dev.peios.prelude" = ">= 0.0.7"
 
 [symlinks]
 "init" = ":sbin/prelude"
 ```
 
-`packages` maps each package's name to its exact version, so a profile
-holds one version of each package and always describes the same
-environment. Whatever chooses the versions does so when it writes the
-profile, as
+`packages` maps each package the environment asks for to the versions that
+will do, as a constraint. A bare version asks for exactly that version, and
+`""` for any. A profile holds the requests, not their answer: composing it
+resolves them, choosing a version of each package they need, and the
+closure's [inventory](~peios/packaging/closures) records what was chosen.
+The same requests against the same packages always resolve the same way. A
+profile that asks for exact versions of everything, as
 [`ppk resolve`](~peios/packaging/choosing-packages-for-an-environment)
-does from the packages and capabilities you need. `symlinks` and `dirs`
+writes one, always describes the same environment. `symlinks` and `dirs`
 are what the root holds outside `/usr`, besides any links its packages
 claim there, and a leading `:` in a link's target
 stands for `usr`. `include_artifacts = true` gives a composed root its

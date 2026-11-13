@@ -139,6 +139,33 @@ enum Command {
         #[arg(long)]
         copy_files: bool,
     },
+    /// Name a closure, or show what names name
+    #[command(
+        override_usage = "ppk name [options] [<name> [<closure>]]\n       ppk name [options] --remove <name>",
+        after_help = SEE_ALSO
+    )]
+    Name {
+        /// The name, such as SYSTEM or INITRAMFS
+        #[arg(value_name = "name")]
+        name: Option<String>,
+        /// The closure to name, as its identity: sha256:<hex>
+        #[arg(value_name = "closure", conflicts_with = "remove")]
+        closure: Option<ppk::Identity>,
+        /// Remove the name, leaving its closure
+        #[arg(long, requires = "name")]
+        remove: bool,
+        /// Read packages from <dir> (default: /system/artifacts)
+        #[arg(
+            long,
+            value_name = "dir",
+            default_value = ppk::DEFAULT_ARTIFACT_DIR,
+            hide_default_value = true,
+        )]
+        artifact_dir: PathBuf,
+        /// Use closures in <dir> (default: <artifact-dir>/closures)
+        #[arg(long, value_name = "dir")]
+        closure_dir: Option<PathBuf>,
+    },
     /// Lay out a root with the closure of packages as its usr
     #[command(
         override_usage = "ppk compose-env [<profile>...] [options] [-p <package>...] --out <dir>",
@@ -490,7 +517,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
                         inventory
                             .packages
                             .iter()
-                            .any(|(current, package)| *current == identity && *package == id)
+                            .any(|package| package.identity == identity && package.id == id)
                     });
                     println!("{} {id}", if member { '*' } else { ' ' });
                 }
@@ -504,7 +531,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
                 let mut ids: Vec<_> = inventory
                     .packages
                     .iter()
-                    .map(|(_, id)| id.to_string())
+                    .map(|package| package.id.to_string())
                     .collect();
                 ids.sort();
                 for id in ids {
@@ -522,6 +549,28 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             let closed = closure(&packages, &artifact_dir, &closure_dir, copy_files)?;
             warn_unstamped(program, closed.unstamped);
             println!("{}", closed.identity);
+        }
+        Command::Name {
+            name,
+            closure,
+            remove,
+            artifact_dir,
+            closure_dir,
+        } => {
+            let closure_dir = closure_dir.unwrap_or_else(|| artifact_dir.join(ppk::CLOSURE_SUBDIR));
+            match (name, closure) {
+                (Some(name), _) if remove => ppk::remove_closure_name(&closure_dir, &name)?,
+                (Some(name), Some(closure)) => ppk::name_closure(&closure_dir, &name, &closure)?,
+                (Some(name), None) => match ppk::named_closure(&closure_dir, &name)? {
+                    Some(identity) => println!("{identity}"),
+                    None => anyhow::bail!("{name}: names no closure in {}", closure_dir.display()),
+                },
+                (None, _) => {
+                    for (name, identity) in ppk::closure_names(&closure_dir)? {
+                        println!("{name} {identity}");
+                    }
+                }
+            }
         }
         Command::ComposeEnv {
             profiles,
@@ -554,7 +603,14 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
                     ppk::UsrFiles::Hardlink
                 },
             };
-            let composed = ppk::compose_env(&env.packages, &artifact_dir, &out, &extras)?;
+            // The profile asks; resolving answers, with what that needs.
+            let resolved = ppk::resolve(
+                &env.packages,
+                std::slice::from_ref(&artifact_dir),
+                env.arch.as_deref().unwrap_or(ppk::HOST_ARCH),
+            )?;
+            let composed =
+                ppk::compose_env_for(&resolved.ids(), &env.packages, &artifact_dir, &out, &extras)?;
             warn_unstamped(program, composed.unstamped);
             println!("{}", composed.identity);
         }
@@ -569,30 +625,49 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             arch,
         } => {
             // A run keeps the caller's root, so it takes only the packages.
-            let env = if no_deps {
+            // What was asked for is what the closure's inventory records: an
+            // exact ID asks for exactly that package.
+            let (packages, requests) = if no_deps {
                 let packages = match packages.iter().map(|s| s.parse()).collect() {
                     Ok(packages) => packages,
                     Err(err) => return Ok(report_usage_error(program, &describe(&err))),
                 };
-                environment(&profiles, packages)?
+                let env = environment(&profiles, packages)?;
+                (env.exact_packages()?, env.packages)
             } else if packages.is_empty() {
-                environment(&profiles, Vec::new())?
+                let env = environment(&profiles, Vec::new())?;
+                let resolved = ppk::resolve(
+                    &env.packages,
+                    std::slice::from_ref(&artifact_dir),
+                    env.arch(),
+                )?;
+                (resolved.ids(), env.packages)
             } else {
                 let profile = ppk::Profile::read_all(&profiles)?;
-                let inputs = match resolution_inputs(&packages, profile.packages, arch.as_deref()) {
+                let arch = arch.as_deref().or(profile.arch.as_deref());
+                let inputs = match resolution_inputs(&packages, Vec::new(), arch) {
                     Ok(inputs) => inputs,
                     Err(err) => return Ok(report_usage_error(program, &describe(&err))),
                 };
-                ppk::resolve_pinned(
-                    &inputs.requests,
+                let mut requests = profile.packages;
+                requests.extend(inputs.requests);
+                let resolved = ppk::resolve_pinned(
+                    &requests,
                     &inputs.pins,
                     std::slice::from_ref(&artifact_dir),
                     &inputs.arch,
-                )?
-                .profile()
+                )?;
+                let mut asked = ppk::exact_requests(&inputs.pins)?;
+                asked.extend(requests);
+                (resolved.ids(), asked)
             };
             let closure_dir = closure_dir.unwrap_or_else(|| artifact_dir.join(ppk::CLOSURE_SUBDIR));
-            let closed = closure(&env.packages, &artifact_dir, &closure_dir, copy_files)?;
+            let files = match copy_files {
+                true => ppk::UsrFiles::Copy,
+                false => ppk::UsrFiles::Hardlink,
+            };
+            let closed =
+                ppk::closure_for(&packages, &requests, &artifact_dir, &closure_dir, files)?;
             warn_unstamped(program, closed.unstamped);
             ppk::environment::enter(&closed.tree_path)?;
             let command = if command.is_empty() {
@@ -614,7 +689,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
                 Err(err) => return Ok(report_usage_error(program, &describe(&err))),
             };
             let arch = arch.as_deref().unwrap_or(ppk::HOST_ARCH);
-            let profile = ppk::resolve(&requests, &from, arch)?.profile().render()?;
+            let profile = ppk::resolve(&requests, &from, arch)?.profile()?.render()?;
             match out {
                 Some(out) => {
                     std::fs::write(&out, profile).map_err(|err| {

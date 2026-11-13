@@ -67,6 +67,7 @@ mod identity;
 mod inventory;
 mod manifest;
 mod metadata;
+mod names;
 mod pack;
 mod profile;
 mod resolve;
@@ -76,15 +77,21 @@ mod stamp_tests;
 mod store;
 mod version;
 
-pub use closure::{Closed, UsrFiles, closure, closure_copying};
-pub use compose::{Composed, EnvDir, EnvSymlink, Extras, RootArtifacts, compose_env};
+pub use closure::{Closed, UsrFiles, closure, closure_copying, closure_for, exact_requests};
+pub use compose::{
+    Composed, EnvDir, EnvSymlink, Extras, RootArtifacts, compose_env, compose_env_for,
+};
 pub use derive::{SYMBOL_CAPABILITIES, SYMBOL_VERSION_FLOORS};
 pub use fetch::{Fetched, fetch, fetch_replacing};
 pub use id::{HOST_ARCH, PackageId};
 pub use identity::Identity;
-pub use inventory::{Inventory, read_inventory};
+pub use inventory::{Inventory, InventoryPackage, USER, Want, read_inventory};
 pub use manifest::{Entry, Manifest, parse_manifest, render_manifest};
 pub use metadata::{LicenseClass, Metadata};
+pub use names::{
+    INITRAMFS, SYSTEM, check_closure_name, closure_names, name_closure, named_closure,
+    remove_closure_name,
+};
 pub use pack::{
     PackOptions, Packed, pack, pack_replacing, pack_replacing_with, pack_with, pack_with_options,
 };

@@ -306,8 +306,8 @@ fn compose_env_composes_a_profile_and_what_the_options_add() {
     assert_eq!(
         stderr(&output),
         format!(
-            "ppk: dev.peios.hello@2.0-1?arch={arch}: the environment holds \
-             dev.peios.hello@1.0-1?arch={arch} already\n",
+            "ppk: dev.peios.hello@2.0-1?arch={arch}: the environment asks for \
+             dev.peios.hello = 1.0-1 already\n",
             arch = ppk::HOST_ARCH
         )
     );

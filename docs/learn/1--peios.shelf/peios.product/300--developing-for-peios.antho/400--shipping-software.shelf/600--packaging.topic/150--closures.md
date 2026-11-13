@@ -2,8 +2,9 @@
 title: Closures
 type: concept
 description: What a closure is, covering how packages are composed into one
-  tree of hardlinks, how a closure is named, the conflicts that stop a
-  closure being built, why an existing closure is reused, and what copying
+  tree of hardlinks, how its inventory records why each package is there,
+  how a closure is named and given names of its own, the conflicts that stop
+  a closure being built, why an existing closure is reused, and what copying
   a closure's files changes.
 related:
   - peios/packaging/packages
@@ -36,24 +37,49 @@ and the directories and links inside it inherit that, so any user can reach
 and run what a closure holds. Its files have the access their blobs grant,
 described in [Packages](~peios/packaging/packages).
 
-## Naming a closure
+## Why each package is there
 
-A closure has a manifest of its own, which lists the identities of its
-packages:
+Each closure records why it holds each package, in its inventory: a file at
+the top of its tree, visible as `/usr/inventory` when it's mounted.
+`ppk compose-env` writes the same file in the root's `usr`. It's a line
+format:
 
-```toml
-packages = [
-    "sha256:73a137f612f39b8ee1ffcbb7f51b7b9dc370b8662323d72b9e6b73b9d54413f8",
-    "sha256:a1ffa25de2f7bfac1c4bb1663a5691cee317b6a05509db67b08c6ffd0b10db17",
-]
+```text
+closure sha256:9c41…
+org.openssl.libssl@3.5.8-1?arch=x86_64 sha256:… [se.curl.curl libssl.so.3]
+se.curl.curl@8.22.0-1?arch=x86_64 sha256:… [* >=8.22]
 ```
 
-The identities are sorted, and each appears once. The closure's identity
-is the SHA-256 hash of this manifest, so the same set of packages always
-makes the same closure, whatever order you name them in.
+The first line names the closure. Each other line is a package: its full
+ID, its identity, and a bracket for each thing that wants it.
+
+- **Who wants it:** `*` for a request made of the closure itself, such as a
+  package named after `ppk run -p` or in a profile, or the name of another
+  package in the closure.
+- **What it asked for:** a capability, such as a library's soname, if the
+  package wasn't asked for by name.
+- **Which versions would do:** one token per expression of the constraint,
+  such as `>=8.22`, or none for any version.
+
+A package is wanted by every request, dependency or requirement it
+satisfies. Every package in a closure must be wanted by something, and
+every request satisfied. Lines are sorted by package ID, and brackets by who
+wants the package, `*` first.
+
+This generated file has mode `0444` and inherits the tree's security
+descriptor, like directories without manifest metadata.
+
+## Naming a closure
+
+A closure's identity is the SHA-256 hash of its inventory without the first
+line. So the same packages, asked for the same way, always make the same
+closure, whatever order you name them in. The same packages asked for
+differently, such as `*` asking for curl exactly in one and only through
+another package in the other, are two closures.
 
 Closures are kept in the `closures` directory of the artifact directory
-unless you name another. The tree is `closures/<hash>/` and the manifest is
+unless you name another. The tree is `closures/<hash>/`, and its manifest,
+the same lines as the inventory without the first, is
 `closures/<hash>.manifest`.
 
 Because the name is known before anything is built, `ppk closure` reuses
@@ -61,22 +87,26 @@ a closure that already exists. It builds a new tree in a temporary
 directory and moves it into place only when it's complete, so a closure
 that exists is never half-built.
 
+A closure can also be given a name of your own with `ppk name`:
+
+```sh
+ppk name SYSTEM sha256:9c41…   # SYSTEM now names that closure
+ppk name SYSTEM                # print the closure SYSTEM names
+ppk name                       # list every name
+ppk name --remove SYSTEM       # remove the name; the closure stays
+```
+
+A name is a symbolic link beside the closures, replaced by renaming, so it
+always names one closure or another. An installed system names the closure
+that is its `/usr` `SYSTEM`, and the one its initramfs is built from
+`INITRAMFS`.
+
 ## Identifying the mounted closure
 
-Each built closure also holds `inventory` at its top, visible as
-`/usr/inventory` when mounted. `ppk compose-env` writes the same file in
-the root's `usr`. `ppk run` exposes the inventory of the closure it mounts.
-This generated file has mode `0444` and inherits the tree's security
-descriptor, like directories without manifest metadata.
-
-The inventory uses canonical TOML, following the package manifest format.
-Its `closure` string records the closure identity. Its `[packages]` table
-maps each quoted package identity to its full package ID, one per line,
-sorted by identity. The inventory doesn't change how the closure is named.
-`ppk list` reconstructs the closure manifest from these identities and
-checks its hash against `closure` before printing the packages.
-This checks the recorded set of identities; it doesn't authenticate the
-package IDs or verify the files in the tree.
+`ppk list` checks that the inventory's identity is the hash of its other
+lines before printing the packages. This checks the recorded packages and
+requests; it doesn't authenticate the package IDs or verify the files in the
+tree.
 
 Run `ppk list` to print the current closure's full package IDs in byte
 order, one per line. No artifact directory is needed. Run `ppk list --all`

@@ -234,12 +234,12 @@ fn run_inventory(args: &[&str], closures: &Path) -> Vec<ppk::PackageId> {
         .unwrap()
         .packages
         .into_iter()
-        .map(|(_, id)| id)
+        .map(|package| package.id)
         .collect()
 }
 
 #[test]
-fn run_resolves_bare_names_and_constraints_but_no_deps_and_profiles_stay_exact() {
+fn run_resolves_names_constraints_and_profiles_but_no_deps_stays_exact() {
     let work = tempfile::tempdir().unwrap();
     let store = work.path().join("store");
     fixture(&store);
@@ -249,7 +249,7 @@ fn run_resolves_bare_names_and_constraints_but_no_deps_and_profiles_stay_exact()
         (0, vec!["-p", "dev.peios.app"], 1),
         (1, vec!["-p", "dev.peios.app < 2"], 3),
         (2, vec!["--no-deps", "-p", "dev.peios.app@1.0-1"], 1),
-        (3, vec![path(&profile)], 1),
+        (3, vec![path(&profile)], 3),
         (4, vec![path(&profile), "-p", "dev.peios.app"], 3),
     ] {
         let closures = work.path().join(format!("closures-{i}"));
@@ -304,4 +304,148 @@ fn run_reports_missing_requirements_without_composing() {
         "dev.peios.app@1.0-1 requires missing-runtime, but no package provides missing-runtime"
     ));
     assert!(!work.path().join("closures").exists());
+}
+
+/// Each line of the inventory at `usr`, as its package's name and its
+/// brackets.
+fn wanted_by(usr: &Path) -> Vec<(String, String)> {
+    let text = fs::read_to_string(usr.join("inventory")).unwrap();
+    text.lines()
+        .skip(1)
+        .map(|line| {
+            let (name, rest) = line.split_once('@').unwrap();
+            let (_, brackets) = rest.split_once(" [").unwrap();
+            (name.to_owned(), format!("[{brackets}"))
+        })
+        .collect()
+}
+
+#[test]
+fn the_inventory_records_what_wants_each_package_and_the_requests_name_the_closure() {
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("store");
+    fixture(&store);
+    let requests = [ppk::Request::parse_package("dev.peios.app < 2").unwrap()];
+    let resolved = ppk::resolve(&requests, std::slice::from_ref(&store), ppk::HOST_ARCH).unwrap();
+    let packages: Vec<_> = resolved.packages.iter().map(|p| p.id.clone()).collect();
+    let closures = work.path().join("closures");
+    let closed = ppk::closure_for(
+        &packages,
+        &requests,
+        &store,
+        &closures,
+        ppk::UsrFiles::Hardlink,
+    )
+    .unwrap();
+    assert_eq!(
+        wanted_by(&closed.tree_path),
+        [
+            ("dev.peios.app", "[* <2]"),
+            ("dev.peios.base", "[dev.peios.runtime]"),
+            ("dev.peios.runtime", "[dev.peios.app test-runtime >=1]"),
+        ]
+        .map(|(name, brackets)| (name.to_owned(), brackets.to_owned()))
+    );
+
+    // The same packages asked for differently are another closure.
+    let exact = ppk::closure(&packages, &store, &closures).unwrap();
+    assert_ne!(exact.identity, closed.identity);
+    assert_eq!(
+        wanted_by(&exact.tree_path),
+        [
+            ("dev.peios.app", "[* =1.0-1]"),
+            ("dev.peios.base", "[* =1.0-1] [dev.peios.runtime]"),
+            (
+                "dev.peios.runtime",
+                "[* =1.0-1] [dev.peios.app test-runtime >=1]"
+            ),
+        ]
+        .map(|(name, brackets)| (name.to_owned(), brackets.to_owned()))
+    );
+
+    // Resolving the same requests again gives the same closure.
+    let again = ppk::resolve(&requests, std::slice::from_ref(&store), ppk::HOST_ARCH).unwrap();
+    let again: Vec<_> = again.packages.iter().map(|p| p.id.clone()).collect();
+    let reused = ppk::closure_for(
+        &again,
+        &requests,
+        &store,
+        &closures,
+        ppk::UsrFiles::Hardlink,
+    )
+    .unwrap();
+    assert!(reused.reused);
+    assert_eq!(reused.identity, closed.identity);
+}
+
+#[test]
+fn every_package_of_a_closure_must_be_wanted_and_every_request_satisfied() {
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("store");
+    fixture(&store);
+    let resolved = ppk::resolve(
+        &[ppk::Request::parse_package("dev.peios.app < 2").unwrap()],
+        std::slice::from_ref(&store),
+        ppk::HOST_ARCH,
+    )
+    .unwrap();
+    let packages: Vec<_> = resolved.packages.iter().map(|p| p.id.clone()).collect();
+    let closures = work.path().join("closures");
+    let only_base = [ppk::Request::parse_package("dev.peios.base").unwrap()];
+    let err = ppk::closure_for(
+        &packages,
+        &only_base,
+        &store,
+        &closures,
+        ppk::UsrFiles::Hardlink,
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("nothing asks for it"),
+        "{err:#}"
+    );
+    let unmet = [
+        ppk::Request::parse_package("dev.peios.app < 2").unwrap(),
+        ppk::Request::parse_capability("sh").unwrap(),
+    ];
+    let err = ppk::closure_for(
+        &packages,
+        &unmet,
+        &store,
+        &closures,
+        ppk::UsrFiles::Hardlink,
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("sh: no package of the closure satisfies it"),
+        "{err:#}"
+    );
+}
+
+#[test]
+fn compose_env_resolves_a_profile_of_requests_and_records_them() {
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("store");
+    fixture(&store);
+    let profile = work.path().join("env.toml");
+    fs::write(&profile, "[packages]\n\"dev.peios.app\" = \"< 2\"\n").unwrap();
+    let root = work.path().join("root");
+    let output = ppk(&[
+        "compose-env",
+        path(&profile),
+        "--artifact-dir",
+        path(&store),
+        "--out",
+        path(&root),
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        wanted_by(&root.join("usr")),
+        [
+            ("dev.peios.app", "[* <2]"),
+            ("dev.peios.base", "[dev.peios.runtime]"),
+            ("dev.peios.runtime", "[dev.peios.app test-runtime >=1]"),
+        ]
+        .map(|(name, brackets)| (name.to_owned(), brackets.to_owned()))
+    );
 }

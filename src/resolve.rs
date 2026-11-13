@@ -35,7 +35,7 @@ pub enum Wanted {
 }
 
 /// Something asked for, at the versions that will do.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
     pub wanted: Wanted,
     pub constraint: Constraint,
@@ -112,12 +112,15 @@ pub struct Resolution {
 }
 
 impl Resolution {
-    /// A profile of the packages chosen, and nothing else.
-    pub fn profile(&self) -> Profile {
-        Profile {
-            packages: self.packages.iter().map(|p| p.id.clone()).collect(),
-            ..Profile::default()
-        }
+    /// A profile asking for exactly the packages chosen, and nothing else.
+    pub fn profile(&self) -> Result<Profile> {
+        let ids: Vec<PackageId> = self.packages.iter().map(|p| p.id.clone()).collect();
+        Profile::exact(&ids)
+    }
+
+    /// The packages chosen.
+    pub fn ids(&self) -> Vec<PackageId> {
+        self.packages.iter().map(|p| p.id.clone()).collect()
     }
 }
 

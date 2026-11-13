@@ -193,7 +193,7 @@ fn dependencies_and_requirements_are_followed_into_a_profile() {
             .all(|p| p.artifact_dir == dirs.path(0))
     );
     assert_eq!(
-        resolution.profile().render().unwrap(),
+        resolution.profile().unwrap().render().unwrap(),
         "arch = \"x86_64\"\n\n[packages]\n\"org.example.libexample\" = \"2.44-1\"\n\
          \"org.git.kernel.dash\" = \"0.5.13-1\"\n\"org.gnu.make\" = \"4.4-1\"\n"
     );

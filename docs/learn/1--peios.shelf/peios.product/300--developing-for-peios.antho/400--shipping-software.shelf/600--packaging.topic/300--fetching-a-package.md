@@ -67,6 +67,40 @@ made. Because the identity is the hash of the manifest, and the manifest
 names every file by its hash, the same identity means the same package,
 byte for byte.
 
+## Fetch from configured repositories
+
+A machine keeps a list of the repositories it fetches from, each a file in
+`/conf/ppk/repositories/`. Add one with `ppk repo add`, giving its public
+key, so that its pointer file must be signed with it, and the channel it
+follows:
+
+```sh
+ppk repo add peios /mnt/peios-repo --public-key 'ml-dsa-65:…' --track stable
+```
+
+That writes `/lcl/conf/ppk/repositories/peios.toml`, which `/conf/ppk` merges
+with whatever the system ships. Then fetch without `--from`:
+
+```sh
+ppk fetch se.curl.curl
+```
+
+A request for a bare name, or a name with a constraint, follows the channel
+its repository tracks, so this fetches the version `stable` holds, and what
+it needs from `stable` too. Naming an index, as in `se.curl.curl#leading`, or
+an exact version, takes that instead.
+
+Each package name belongs to one repository. If two of them publish one, for
+something you asked for or something it needs, `ppk` refuses rather than
+choose. A repository's pointer file goes up in sequence each time it's
+published, and `ppk` keeps the highest it has seen of each in
+`/var/state/ppk`, refusing a repository that offers an older one. A mirror
+might still be behind; `ppk repo list` shows when each was signed:
+
+```text
+peios /mnt/peios-repo #stable (sequence 42, signed 2026-11-13T13:11:46Z, signature checked)
+```
+
 ## What fetch checks
 
 `ppk fetch` trusts nothing it reads from the source:

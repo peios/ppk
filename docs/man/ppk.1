@@ -49,6 +49,17 @@ ppk \- create and manage Peios packages
 .B \-\-from
 .I dir request
 .br
+.B ppk fetch
+.RB [ \-\-artifact\-dir
+.IR dir ]
+.RB [ \-\-arch
+.IR arch ]
+.RB [ \-\-config\-dir
+.IR dir ]
+.RB [ \-\-state\-dir
+.IR dir ]
+.I request
+.br
 .B ppk closure
 .RB [ \-\-artifact\-dir
 .IR dir ]
@@ -91,6 +102,26 @@ ppk \- create and manage Peios packages
 .IR dir ]
 .RB [ \-\-public\-key
 .IR key ]
+.br
+.B ppk repo add
+.RB [ \-\-config\-dir
+.IR dir ]
+.RB [ \-\-public\-key
+.IR key ]
+.RB [ \-\-track
+.IR index ]
+.I name path
+.br
+.B ppk repo remove
+.RB [ \-\-config\-dir
+.IR dir ]
+.I name
+.br
+.B ppk repo list
+.RB [ \-\-config\-dir
+.IR dir ]
+.RB [ \-\-state\-dir
+.IR dir ]
 .br
 .B ppk repo public\-key
 .RB [ \-\-key
@@ -677,6 +708,23 @@ copy exactly the package ID given, without resolving anything it needs;
 bare names and constraints are not accepted in this mode.
 Blobs already present are not copied.
 .IP
+Without
+.BR \-\-from ,
+fetch from the repositories configured in
+.BR \-\-config\-dir ,
+.I /conf/ppk
+unless given, as under REPOSITORIES.
+A request for a package by a bare name or a constraint, naming no index and
+no exact version, follows the index or channel its repository tracks.
+Every package name belongs to one repository: one that two repositories
+publish is an error, for a request or anything it needs.
+A repository whose configuration gives a public key must have signed its
+pointer file with it, and none may publish a lower sequence than this machine
+has seen of it, which is kept in
+.BR \-\-state\-dir ,
+.I /var/state/ppk
+unless given.
+.IP
 Nothing read from the source is trusted.
 The source's ref must hold exactly one identity and a newline.
 The manifest must hash to that identity, be in exactly the form
@@ -837,6 +885,36 @@ Print the repository's pointer file.
 With
 .BR \-\-public\-key ,
 its signature must be that key's.
+.TP
+.BI "repo add" " name path"
+Add the repository at
+.I path
+to those this machine fetches from, as
+.IR name ,
+writing its configuration in
+.BR \-\-config\-dir ,
+.I /lcl/conf/ppk
+unless given, which
+.I /conf/ppk
+merges with what the system ships.
+With
+.BR \-\-public\-key ,
+its pointer file must be signed with that key; with
+.BR \-\-track ,
+a request for a bare name follows that index or channel, such as
+.BR stable .
+A repository of the same name is replaced.
+.TP
+.BI "repo remove" " name"
+Stop fetching from the repository
+.IR name .
+.TP
+.B repo list
+Print each repository this machine fetches from: its name, its path, the
+index or channel it follows, and the sequence and signing time of its
+pointer file, checked as
+.B fetch
+checks it.
 .TP
 .B repo public\-key
 Print the public key of
@@ -1528,6 +1606,26 @@ names another directory.
 .IR closures/ name
 A name for a closure: a symbolic link to its tree beside it, set by
 .BR name .
+.TP
+.IR /conf/ppk/repositories/ name .toml
+A repository this machine fetches from:
+.IP
+.EX
+path = "/mnt/peios\-repo"
+key = "ml\-dsa\-65:..."
+track = "stable"
+.EE
+.IP
+.B path
+is required;
+.B key
+and
+.B track
+are optional.
+.TP
+.IR /var/state/ppk/sequences/ name
+The highest sequence this machine has seen of the repository
+.IR name .
 .TP
 .I repository
 A published repository's pointer file, the one file of it that changes:

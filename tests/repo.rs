@@ -259,3 +259,154 @@ fn yanked_versions_need_an_exact_request_and_deleted_ones_say_why() {
         "{err}"
     );
 }
+
+fn ppk_cli(args: &[&str]) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_ppk"))
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+fn arg(path: &Path) -> &str {
+    path.to_str().unwrap()
+}
+
+#[test]
+fn a_machine_fetches_bare_names_through_the_channel_it_tracks() {
+    let work = tempfile::tempdir().unwrap();
+    let repo = work.path().join("repo");
+    pack(&repo, "dev.peios.app@1.0-1?arch=x86_64", &[]);
+    repo::update(&repo, &key(), false).unwrap();
+    repo::snapshot(&repo, &key(), "2026.10.0", repo::LEADING).unwrap();
+    repo::channel(&repo, &key(), "stable", "2026.10.0", false).unwrap();
+    pack(&repo, "dev.peios.app@2.0-1?arch=x86_64", &[]);
+    repo::update(&repo, &key(), false).unwrap();
+
+    let config = work.path().join("conf");
+    let state = work.path().join("state");
+    let store = work.path().join("store");
+    let public = key().public().to_string();
+    let added = ppk_cli(&[
+        "repo",
+        "add",
+        "peios",
+        arg(&repo),
+        "--public-key",
+        &public,
+        "--track",
+        "stable",
+        "--config-dir",
+        arg(&config),
+    ]);
+    assert!(
+        added.status.success(),
+        "{}",
+        String::from_utf8_lossy(&added.stderr)
+    );
+    let fetch = |request: &str| {
+        ppk_cli(&[
+            "fetch",
+            request,
+            "--artifact-dir",
+            arg(&store),
+            "--config-dir",
+            arg(&config),
+            "--state-dir",
+            arg(&state),
+        ])
+    };
+    let fetched = fetch("dev.peios.app");
+    assert!(
+        fetched.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fetched.stderr)
+    );
+    let stored: Vec<String> = (ppk::stored_packages(&store).unwrap().into_iter())
+        .map(|(id, _)| id.to_string())
+        .collect();
+    assert_eq!(stored, ["dev.peios.app@1.0-1?arch=x86_64"]);
+    // An index named, or an exact version, isn't the tracked channel's.
+    assert!(fetch("dev.peios.app#leading").status.success());
+    assert!(
+        ppk::packed(&id("dev.peios.app@2.0-1?arch=x86_64"), &store)
+            .unwrap()
+            .is_some()
+    );
+
+    let listed = ppk_cli(&[
+        "repo",
+        "list",
+        "--config-dir",
+        arg(&config),
+        "--state-dir",
+        arg(&state),
+    ]);
+    let listed = String::from_utf8(listed.stdout).unwrap();
+    assert!(listed.starts_with("peios "), "{listed}");
+    assert!(listed.contains("#stable (sequence 4, signed "), "{listed}");
+    assert!(listed.contains("signature checked"), "{listed}");
+
+    // A repository that goes back in sequence is refused.
+    fs::write(state.join("sequences/peios"), "9\n").unwrap();
+    let refused = fetch("dev.peios.app");
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("older than 9"));
+    fs::write(state.join("sequences/peios"), "4\n").unwrap();
+
+    // A repository signed by another key is refused.
+    let other = load(OTHER_KEY).public().to_string();
+    assert!(
+        ppk_cli(&[
+            "repo",
+            "add",
+            "peios",
+            arg(&repo),
+            "--public-key",
+            &other,
+            "--config-dir",
+            arg(&config),
+        ])
+        .status
+        .success()
+    );
+    let refused = fetch("dev.peios.app");
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("not signed by"));
+}
+
+#[test]
+fn a_name_two_repositories_publish_is_refused() {
+    let work = tempfile::tempdir().unwrap();
+    let config = work.path().join("conf");
+    for name in ["one", "two"] {
+        let repo = work.path().join(name);
+        pack(&repo, "dev.peios.app@1.0-1?arch=x86_64", &[]);
+        repo::update(&repo, &key(), false).unwrap();
+        assert!(
+            ppk_cli(&[
+                "repo",
+                "add",
+                name,
+                arg(&repo),
+                "--config-dir",
+                arg(&config)
+            ])
+            .status
+            .success()
+        );
+    }
+    let refused = ppk_cli(&[
+        "fetch",
+        "dev.peios.app",
+        "--artifact-dir",
+        arg(&work.path().join("store")),
+        "--config-dir",
+        arg(&config),
+        "--state-dir",
+        arg(&work.path().join("state")),
+    ]);
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains("published by the repositories one and two"),
+        "{stderr}"
+    );
+}

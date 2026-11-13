@@ -4,14 +4,21 @@ use std::path::{Path, PathBuf};
 use ppk::repo::{self, PrivateKey, PublicKey, Standing, Trees};
 use ppk::{Identity, PackageId};
 
-fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
+/// Test-only keys, built into the test, since its source isn't there when
+/// it runs.
+const TEST_KEY: &str = include_str!("fixtures/repo-test-key.pem");
+const OTHER_KEY: &str = include_str!("fixtures/repo-other-key.pem");
+
+/// The private key in the PEM text `pem`.
+fn load(pem: &str) -> PrivateKey {
+    let dir = tempfile::tempdir().unwrap();
+    let path: PathBuf = dir.path().join("key.pem");
+    fs::write(&path, pem).unwrap();
+    PrivateKey::load(&path).unwrap()
 }
 
 fn key() -> PrivateKey {
-    PrivateKey::load(&fixture("repo-test-key.pem")).unwrap()
+    load(TEST_KEY)
 }
 
 fn id(value: &str) -> PackageId {
@@ -71,9 +78,7 @@ fn publishing_signs_the_pointer_and_leading_holds_the_newest_that_can_install() 
     // The signature is the key's, and no other key's.
     let public = key().public();
     assert!(repo::read_pointer(repo, Some(&public)).unwrap().is_some());
-    let other = PrivateKey::load(&fixture("repo-other-key.pem"))
-        .unwrap()
-        .public();
+    let other = load(OTHER_KEY).public();
     let err = repo::read_pointer(repo, Some(&other)).unwrap_err();
     assert!(err.to_string().contains("not signed by"), "{err}");
     let round: PublicKey = public.to_string().parse().unwrap();

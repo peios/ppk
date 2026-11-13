@@ -57,6 +57,22 @@ ppk \- create and manage Peios packages
 .RB [ \-\-copy\-files ]
 .IR package ...
 .br
+.B ppk name
+.RB [ \-\-artifact\-dir
+.IR dir ]
+.RB [ \-\-closure\-dir
+.IR dir ]
+.RI [ name
+.RI [ closure ]]
+.br
+.B ppk name
+.RB [ \-\-artifact\-dir
+.IR dir ]
+.RB [ \-\-closure\-dir
+.IR dir ]
+.B \-\-remove
+.I name
+.br
 .B ppk compose\-env
 .RI [ profile ...]
 .RB [ \-\-artifact\-dir
@@ -219,8 +235,8 @@ No other qualifier is accepted, and
 .B arch
 can be given only once.
 .SH PROFILES
-An environment profile is a TOML file that says exactly what an environment
-holds, for
+An environment profile is a TOML file that says what an environment asks
+for, for
 .B compose\-env
 and
 .BR run :
@@ -232,7 +248,7 @@ dirs = ["proc", "sys", "tmp"]
 
 [packages]
 "net.busybox.busybox" = "1.37.0\-1"
-"dev.peios.prelude" = "0.0.7\-1"
+"dev.peios.prelude" = ">= 0.0.7"
 
 [symlinks]
 "init" = ":sbin/prelude"
@@ -240,8 +256,10 @@ dirs = ["proc", "sys", "tmp"]
 .RE
 .PP
 .B packages
-maps each package's name to its exact version: a profile holds one version
-of each package.
+maps each package asked for to the versions that will do, as a constraint;
+a bare version asks for exactly that version, and the empty string for any.
+A profile holds requests, not their answer: composing it resolves them, with
+what they need, and the closure's inventory records the packages chosen.
 Every package is for the architecture
 .B arch
 gives, or the one
@@ -493,10 +511,8 @@ Print the current closure's full package IDs, one per line in byte order,
 from
 .IR /usr/inventory .
 No artifact directory is needed.
-The inventory records the closure identity and a table mapping package
-identities to full IDs, sorted by identity.
-The closure identity is the hash of the existing closure manifest format,
-reconstructed from those package identities.
+The inventory records the closure's identity, then each package's full ID
+and identity and what wants it, as described under FILES.
 A malformed inventory or a mismatched closure identity is an error.
 The package IDs describe the recorded packages; checking the closure hash
 does not authenticate their manifests or the files in the tree.
@@ -622,6 +638,7 @@ They do not prove who published it, so fetch only from sources you trust.
 Compose the packages, each already in the artifact directory, into a
 closure: one directory tree, the contents of a
 .IR /usr .
+Each package is asked for exactly.
 Print the closure's identity on standard output.
 .IP
 Each built tree includes
@@ -647,9 +664,12 @@ with its descriptor, and so is each link a package claims under
 A closure is only
 .IR /usr ,
 so links claimed elsewhere are left out of it.
-The closure's manifest lists the identities of its packages, sorted and
-without duplicates, and the closure's identity is the SHA-256 hash of that
-manifest, so the order and repetition of the arguments do not matter.
+The closure's manifest is its inventory without the first line: its
+packages, sorted and without duplicates, and what wants each.
+The closure's identity is the SHA-256 hash of that manifest, so the order
+and repetition of the arguments do not matter, but the same packages asked
+for differently are another closure.
+Every package must be wanted by a request or by another package in it.
 An existing closure is reused, however its files were placed.
 A tree is built in a temporary directory and renamed into place when
 complete.
@@ -666,6 +686,42 @@ It fails, leaving nothing behind, if a hard link cannot be made because the
 closure directory is not on the same mount as the artifact directory, or if
 a blob it copies does not match its hash.
 .TP
+.BI name " \fR[\fPname \fR[\fPclosure\fR]]\fP"
+Name a closure in the closure directory, so that what a system runs can be
+chosen by name.
+Given a
+.I name
+and a
+.IR closure ,
+its identity as
+.B closure
+prints it, the name is set to that closure, replacing what it named.
+Given only a
+.IR name ,
+print the identity of the closure it names; naming none is an error.
+Given neither, print each name and the identity of its closure, one per
+line, sorted by name.
+With
+.BR \-\-remove ,
+remove the name, leaving its closure.
+.IP
+A name is a symbolic link beside the closures to the closure's tree,
+replaced by renaming a new link over it, so it always names one closure or
+another.
+It is 1 to 64 ASCII letters, digits and
+.BR \- ,
+.B .\&
+and
+.BR _ ,
+not starting with a dot, not ending in
+.BR .manifest ,
+and not a closure's hash.
+An installed system names the closure that is its
+.I /usr
+.B SYSTEM
+and the one its initramfs is built from
+.BR INITRAMFS .
+.TP
 .BI compose\-env " \fR[\fPprofile\fR...]\fP"
 Lay out the root of the environment that the
 .I profile
@@ -678,9 +734,13 @@ At least one of
 and
 .B \-p
 must be given, and the environment must hold a package.
+The profiles' requests, and the exact IDs after
+.BR \-p ,
+are resolved against the artifact directory, with what they need.
 The root's
 .I usr
-is the closure of the packages, built in place as
+is the closure of the packages chosen, made for those requests, built in
+place as
 .B closure
 builds it: every file is a hard link to its blob, in the root's own
 artifact directory if it has one and otherwise in the artifact directory
@@ -750,15 +810,16 @@ Requests after
 .B \-p
 accept the same names, constraints and exact IDs as
 .BR fetch .
-They are resolved against the artifact directory before composition.
-Profiles used with requests contribute exact pins to that resolution;
-conflicts fail rather than upgrading a pinned package.
-Profiles without requests stay exact and are not resolved again.
+They are resolved against the artifact directory before composition,
+together with the profiles' requests; an exact ID is a pin, and a request it
+doesn't satisfy is an error rather than an upgrade.
+The closure's inventory records the requests.
 With
 .BR \-\-no\-deps ,
-only the profile packages and exact IDs after
+only the exact IDs after
 .B \-p
-are composed, without resolving dependencies or requirements.
+and the profiles' requests, which must each ask for one exact version, are
+composed, without resolving dependencies or requirements.
 Missing packages must be fetched first.
 Everything outside
 .I /usr
@@ -1244,13 +1305,32 @@ has started its command, the exit status is the command's.
 .SH FILES
 .TP
 .I /usr/inventory
-The current closure's identity and packages in canonical TOML.
-The
+The current closure's identity and packages, and what wants each.
+The first line is
 .B closure
-string precedes a
-.B [packages]
-table, with one quoted identity key and full package ID value per line,
-sorted by identity.
+and the closure's identity.
+Each other line is a package's full ID, its identity, and a bracket for each
+thing that wants it:
+.B *
+for a request of the closure itself, or the name of a package in the
+closure; then, if what was asked for is a capability rather than the package
+by name, the capability; then the constraint, one token per expression, such
+as
+.BR >=8.22 ,
+and none for any version:
+.IP
+.EX
+closure sha256:9c41...
+org.openssl.libssl@3.5.8\-1?arch=x86_64 sha256:... [se.curl.curl libssl.so.3]
+se.curl.curl@8.22.0\-1?arch=x86_64 sha256:... [* >=8.22]
+.EE
+.IP
+A package is wanted by every request, and by every dependency or requirement
+of a package in the closure, that it satisfies.
+Lines are sorted by package ID, and brackets by requester,
+.B *
+first, then by capability, none first.
+The closure's identity is the SHA-256 hash of every line after the first.
 .PP
 Paths are relative to the artifact directory,
 .I /system/artifacts
@@ -1283,6 +1363,10 @@ followed by a newline.
 The tree of the closure with that identity, unless
 .B \-\-closure\-dir
 names another directory.
+.TP
+.IR closures/ name
+A name for a closure: a symbolic link to its tree beside it, set by
+.BR name .
 .TP
 .IR closures/ hash .manifest
 The manifest of that closure.

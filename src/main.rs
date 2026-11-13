@@ -603,7 +603,14 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
                     ppk::UsrFiles::Hardlink
                 },
             };
-            let composed = ppk::compose_env(&env.packages, &artifact_dir, &out, &extras)?;
+            // The profile asks; resolving answers, with what that needs.
+            let resolved = ppk::resolve(
+                &env.packages,
+                std::slice::from_ref(&artifact_dir),
+                env.arch.as_deref().unwrap_or(ppk::HOST_ARCH),
+            )?;
+            let composed =
+                ppk::compose_env_for(&resolved.ids(), &env.packages, &artifact_dir, &out, &extras)?;
             warn_unstamped(program, composed.unstamped);
             println!("{}", composed.identity);
         }
@@ -626,27 +633,33 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
                     Err(err) => return Ok(report_usage_error(program, &describe(&err))),
                 };
                 let env = environment(&profiles, packages)?;
-                let requests = ppk::exact_requests(&env.packages)?;
-                (env.packages, requests)
+                (env.exact_packages()?, env.packages)
             } else if packages.is_empty() {
                 let env = environment(&profiles, Vec::new())?;
-                let requests = ppk::exact_requests(&env.packages)?;
-                (env.packages, requests)
+                let resolved = ppk::resolve(
+                    &env.packages,
+                    std::slice::from_ref(&artifact_dir),
+                    env.arch(),
+                )?;
+                (resolved.ids(), env.packages)
             } else {
                 let profile = ppk::Profile::read_all(&profiles)?;
-                let inputs = match resolution_inputs(&packages, profile.packages, arch.as_deref()) {
+                let arch = arch.as_deref().or(profile.arch.as_deref());
+                let inputs = match resolution_inputs(&packages, Vec::new(), arch) {
                     Ok(inputs) => inputs,
                     Err(err) => return Ok(report_usage_error(program, &describe(&err))),
                 };
+                let mut requests = profile.packages;
+                requests.extend(inputs.requests);
                 let resolved = ppk::resolve_pinned(
-                    &inputs.requests,
+                    &requests,
                     &inputs.pins,
                     std::slice::from_ref(&artifact_dir),
                     &inputs.arch,
                 )?;
-                let mut requests = ppk::exact_requests(&inputs.pins)?;
-                requests.extend(inputs.requests);
-                (resolved.profile().packages, requests)
+                let mut asked = ppk::exact_requests(&inputs.pins)?;
+                asked.extend(requests);
+                (resolved.ids(), asked)
             };
             let closure_dir = closure_dir.unwrap_or_else(|| artifact_dir.join(ppk::CLOSURE_SUBDIR));
             let files = match copy_files {
@@ -676,7 +689,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
                 Err(err) => return Ok(report_usage_error(program, &describe(&err))),
             };
             let arch = arch.as_deref().unwrap_or(ppk::HOST_ARCH);
-            let profile = ppk::resolve(&requests, &from, arch)?.profile().render()?;
+            let profile = ppk::resolve(&requests, &from, arch)?.profile()?.render()?;
             match out {
                 Some(out) => {
                     std::fs::write(&out, profile).map_err(|err| {

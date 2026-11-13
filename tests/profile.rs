@@ -25,7 +25,7 @@ dirs = ["proc", "sys"]
 "#,
     )
     .unwrap();
-    let mut packages = profile.packages.clone();
+    let mut packages = profile.exact_packages().unwrap();
     packages.sort_by(|a, b| a.name().cmp(b.name()));
     assert_eq!(
         packages,
@@ -64,10 +64,14 @@ fn a_rendered_profile_reads_back_as_itself() {
     assert_eq!(Profile::default().render().unwrap(), "");
 
     // A profile names one architecture.
-    profile.add_packages([id("g.h.i@3-1?arch=x86_64")]).unwrap();
     assert_eq!(
-        format!("{:#}", profile.render().unwrap_err()),
-        "a.b.c@1.0-1?arch=aarch64 and g.h.i@3-1?arch=x86_64 are for different architectures"
+        format!(
+            "{:#}",
+            profile
+                .add_packages([id("g.h.i@3-1?arch=x86_64")])
+                .unwrap_err()
+        ),
+        "g.h.i@3-1?arch=x86_64: the environment's packages are for aarch64"
     );
 }
 
@@ -75,7 +79,10 @@ fn a_rendered_profile_reads_back_as_itself() {
 fn every_key_is_optional_and_arch_applies_to_every_package() {
     assert_eq!(Profile::parse("").unwrap(), Profile::default());
     let profile = Profile::parse("arch = \"aarch64\"\n[packages]\n\"a.b.c\" = \"1-1\"\n").unwrap();
-    assert_eq!(profile.packages, [id("a.b.c@1-1?arch=aarch64")]);
+    assert_eq!(
+        profile.exact_packages().unwrap(),
+        [id("a.b.c@1-1?arch=aarch64")]
+    );
     assert!(!profile.include_artifacts);
     assert!(
         Profile::parse("include_artifacts = true")
@@ -91,7 +98,7 @@ fn a_malformed_profile_is_refused() {
         ("packages = 1", "packages is not a table"),
         (
             "[packages]\n\"a.b.c\" = 1",
-            "packages: \"a.b.c\" has a version that is not a string",
+            "packages: \"a.b.c\" has versions that are not a string",
         ),
         (
             "[packages]\n\"a b\" = \"1\"",
@@ -128,11 +135,11 @@ fn added_packages_and_extras_must_agree_with_the_profile() {
     let other = PackageId::new("d.e.f", "2-1", HOST_ARCH).unwrap();
     // The same package again is added once; a new one is added.
     profile.add_packages([held.clone(), other.clone()]).unwrap();
-    assert_eq!(profile.packages, [held.clone(), other]);
+    assert_eq!(profile.exact_packages().unwrap(), [held.clone(), other]);
     let newer = PackageId::new("a.b.c", "2-1", HOST_ARCH).unwrap();
     assert_eq!(
         format!("{:#}", profile.add_packages([newer.clone()]).unwrap_err()),
-        format!("{newer}: the environment holds {held} already")
+        format!("{newer}: the environment asks for a.b.c = 1-1 already")
     );
 
     let same: EnvSymlink = "bin::bin".parse().unwrap();
@@ -181,7 +188,7 @@ fn a_profile_holds_what_its_fragments_hold_found_from_each_file() {
         ("layout/lib64.toml", "[symlinks]\n\"lib64\" = \":lib\"\n"),
     ]);
     let profile = Profile::read(&dir.path().join("env.toml")).unwrap();
-    assert_eq!(profile.packages, [id("a.b.c@1.0-1")]);
+    assert_eq!(profile.exact_packages().unwrap(), [id("a.b.c@1.0-1")]);
     let links: Vec<(&str, &str)> = profile
         .symlinks
         .iter()
@@ -207,7 +214,7 @@ fn a_fragment_included_twice_by_different_routes_is_merged_once() {
         ),
     ]);
     let profile = Profile::read(&dir.path().join("env.toml")).unwrap();
-    assert_eq!(profile.packages, [id("a.b.c@1.0-1")]);
+    assert_eq!(profile.exact_packages().unwrap(), [id("a.b.c@1.0-1")]);
     assert_eq!(profile.dirs.len(), 1);
 }
 
@@ -230,8 +237,8 @@ fn fragments_that_disagree_are_refused_naming_both() {
         ),
     ]);
     let err = read_error(&dir, "versions.toml");
-    assert!(err.contains("two.toml has a.b.c@2.0-1"), "{err}");
-    assert!(err.contains("one.toml has a.b.c@1.0-1"), "{err}");
+    assert!(err.contains("two.toml asks for a.b.c = 2.0-1"), "{err}");
+    assert!(err.contains("one.toml asks for a.b.c = 1.0-1"), "{err}");
     let err = read_error(&dir, "links.toml");
     assert!(
         err.contains("links.toml links \"bin\" to \"usr/sbin\""),
@@ -302,14 +309,14 @@ fn several_profiles_merge_as_fragments_do() {
     ]);
     let path = |name: &str| dir.path().join(name);
     let profile = Profile::read_all(&[path("root.toml"), path("layout.toml")]).unwrap();
-    assert_eq!(profile.packages, [id("a.b.c@1.0-1")]);
+    assert_eq!(profile.exact_packages().unwrap(), [id("a.b.c@1.0-1")]);
     // Only true can be said, so true in any is true.
     assert!(profile.include_artifacts);
     let err = format!(
         "{:#}",
         Profile::read_all(&[path("root.toml"), path("other.toml")]).unwrap_err()
     );
-    assert!(err.contains("other.toml has a.b.c@1.1-1"), "{err}");
+    assert!(err.contains("other.toml asks for a.b.c = 1.1-1"), "{err}");
 
     let mut merged = Profile::read(&path("root.toml")).unwrap();
     merged

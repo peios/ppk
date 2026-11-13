@@ -239,7 +239,7 @@ fn run_inventory(args: &[&str], closures: &Path) -> Vec<ppk::PackageId> {
 }
 
 #[test]
-fn run_resolves_bare_names_and_constraints_but_no_deps_and_profiles_stay_exact() {
+fn run_resolves_names_constraints_and_profiles_but_no_deps_stays_exact() {
     let work = tempfile::tempdir().unwrap();
     let store = work.path().join("store");
     fixture(&store);
@@ -249,7 +249,7 @@ fn run_resolves_bare_names_and_constraints_but_no_deps_and_profiles_stay_exact()
         (0, vec!["-p", "dev.peios.app"], 1),
         (1, vec!["-p", "dev.peios.app < 2"], 3),
         (2, vec!["--no-deps", "-p", "dev.peios.app@1.0-1"], 1),
-        (3, vec![path(&profile)], 1),
+        (3, vec![path(&profile)], 3),
         (4, vec![path(&profile), "-p", "dev.peios.app"], 3),
     ] {
         let closures = work.path().join(format!("closures-{i}"));
@@ -419,5 +419,33 @@ fn every_package_of_a_closure_must_be_wanted_and_every_request_satisfied() {
     assert!(
         format!("{err:#}").contains("sh: no package of the closure satisfies it"),
         "{err:#}"
+    );
+}
+
+#[test]
+fn compose_env_resolves_a_profile_of_requests_and_records_them() {
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("store");
+    fixture(&store);
+    let profile = work.path().join("env.toml");
+    fs::write(&profile, "[packages]\n\"dev.peios.app\" = \"< 2\"\n").unwrap();
+    let root = work.path().join("root");
+    let output = ppk(&[
+        "compose-env",
+        path(&profile),
+        "--artifact-dir",
+        path(&store),
+        "--out",
+        path(&root),
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        wanted_by(&root.join("usr")),
+        [
+            ("dev.peios.app", "[* <2]"),
+            ("dev.peios.base", "[dev.peios.runtime]"),
+            ("dev.peios.runtime", "[dev.peios.app test-runtime >=1]"),
+        ]
+        .map(|(name, brackets)| (name.to_owned(), brackets.to_owned()))
     );
 }

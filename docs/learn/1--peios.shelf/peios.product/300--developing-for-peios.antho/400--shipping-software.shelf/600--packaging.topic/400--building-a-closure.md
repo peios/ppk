@@ -52,15 +52,15 @@ The tree holds the files of every package, laid out as they appear under
 hello
 ```
 
-The closure's manifest, which lists its packages, is beside the tree with
-the same name and a `.manifest` suffix. Running the same command again
-reuses the closure and prints the same identity.
+The closure's manifest, which lists its packages and what wants each, is
+beside the tree with the same name and a `.manifest` suffix. Running the
+same command again reuses the closure and prints the same identity.
+`ppk closure` asks for each package you name exactly.
 
-The tree also holds `inventory`, recording the closure identity and each
-package's identity and full ID. When mounted at `/usr`, this file lets
-`ppk list` identify the closure without an artifact directory. For its
-format and the treatment of older closures, see
-[Identifying the mounted closure](~peios/packaging/closures#identifying-the-mounted-closure).
+The tree also holds `inventory`, the same lines with the closure's identity
+first. When mounted at `/usr`, this file lets `ppk list` identify the
+closure without an artifact directory. For its format, see
+[Why each package is there](~peios/packaging/closures#why-each-package-is-there).
 
 ## Resolving a conflict
 

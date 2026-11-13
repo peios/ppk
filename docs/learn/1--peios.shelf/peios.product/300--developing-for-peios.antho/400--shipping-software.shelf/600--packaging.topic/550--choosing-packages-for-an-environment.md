@@ -16,8 +16,11 @@ needs, from what you ask for and the packages in one or more artifact
 directories, and writes them as a profile. It follows each package's
 dependencies and requirements, as
 [Recording Dependencies and Metadata](~peios/packaging/recording-dependencies-and-metadata)
-records them. Use it to write the profile for a build root, then compose
-it as [Composing an Environment](~peios/packaging/composing-an-environment)
+records them. Composing a profile resolves its requests anyway, so use
+`ppk resolve` when you want the answer fixed: a profile of exact versions
+always composes the same environment, whatever else the artifact
+directories come to hold. Compose it as
+[Composing an Environment](~peios/packaging/composing-an-environment)
 describes.
 
 ## Before you start

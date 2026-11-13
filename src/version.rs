@@ -532,6 +532,15 @@ impl Constraint {
         }
     }
 
+    /// The version the constraint asks for exactly, if it is a single `=`
+    /// expression.
+    pub fn exact(&self) -> Option<&Version> {
+        match self.exprs.as_slice() {
+            [expr] if expr.op == Operator::Equal => Some(&expr.operand),
+            _ => None,
+        }
+    }
+
     /// The constraint as an inventory writes it: each expression as one token
     /// of its operator and operand with no space between, such as `>=8.22`.
     /// The default constraint has no tokens.
@@ -560,6 +569,16 @@ impl Constraint {
         }
     }
 }
+
+/// Two constraints are equal if they are written alike, expression by
+/// expression, as their canonical form writes them.
+impl PartialEq for Constraint {
+    fn eq(&self, other: &Self) -> bool {
+        self.tokens() == other.tokens()
+    }
+}
+
+impl Eq for Constraint {}
 
 /// Parses a constraint, as [`Constraint::parse`] does.
 impl FromStr for Constraint {

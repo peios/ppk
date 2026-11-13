@@ -42,6 +42,11 @@ pub struct ClosureImage {
     /// Everything beneath the root, each parent before what's in it, sorted
     /// by path.
     pub entries: Vec<ImageEntry>,
+    /// The links its packages claim outside `/usr`, each a path relative to
+    /// the root a system has around it, and the link's target, sorted. An
+    /// image of `/usr` can't hold them, so whatever mounts it must make
+    /// them, as a composed root has them.
+    pub root_links: Vec<(String, String)>,
 }
 
 /// A file, directory or symlink of a [`ClosureImage`].
@@ -76,6 +81,11 @@ pub enum ImageKind {
 /// Each file and directory carries the descriptor ppk would give it: its
 /// package's, if it has one, and otherwise the store's, owned by SYSTEM.
 /// A signed file carries its signature as well.
+///
+/// A composed tree's directories and links that no package describes
+/// inherit what the directory they're in passes down. Here they get the
+/// store's descriptor, even beneath a directory a package gave its own:
+/// what that directory would pass down isn't computed yet (PEI-183).
 pub fn closure_image(
     packages: &[PackageId],
     requests: &[Request],
@@ -162,9 +172,14 @@ pub fn closure_image(
     });
     entries.sort_by(|a, b| a.path.cmp(&b.path));
 
+    let root_links = (merged.root_claims.into_iter())
+        .map(|(path, (target, _))| (path, target))
+        .collect();
+
     Ok(ClosureImage {
         identity: inventory.identity.clone(),
         root: dir(String::new()),
         entries,
+        root_links,
     })
 }

@@ -97,3 +97,26 @@ fn everything_in_an_image_carries_a_whole_descriptor() {
             .unwrap_or_else(|err| panic!("{}: {err:#}", each.path));
     }
 }
+
+#[test]
+fn an_image_names_the_links_its_packages_claim_outside_usr() {
+    let artifacts = tempfile::tempdir().unwrap();
+    let content = tempfile::tempdir().unwrap();
+    fs::create_dir_all(content.path().join("sbin")).unwrap();
+    fs::write(content.path().join("sbin/init"), b"init").unwrap();
+    let metadata = ppk::Metadata {
+        claims: [("/init".to_owned(), "usr/sbin/init".to_owned())].into(),
+        ..ppk::Metadata::default()
+    };
+    let id: PackageId = "dev.peios.init@1.0-1?arch=x86_64".parse().unwrap();
+    ppk::pack_with(&id, &metadata, content.path(), artifacts.path()).unwrap();
+    let requests = ppk::exact_requests(std::slice::from_ref(&id)).unwrap();
+
+    let image = ppk::closure_image(std::slice::from_ref(&id), &requests, artifacts.path()).unwrap();
+
+    assert_eq!(
+        image.root_links,
+        [("init".to_owned(), "usr/sbin/init".to_owned())]
+    );
+    assert!(image.entries.iter().all(|each| each.path != "init"));
+}

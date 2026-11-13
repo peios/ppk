@@ -103,13 +103,14 @@ for dir in usr proc sys dev; do
 done
 mount --bind "$live/root" "$rootfs" || exit 1
 # Every file and directory of the image carries its descriptor, so a
-# missing one is a fault, as the mount's default policy has it.
-if ! mount -t squashfs -o loop,ro "$image" "$rootfs/usr"; then
+# missing one is a fault, as the kernel's default for squashfs has it too.
+if ! mount -t squashfs -o loop,ro,policy=deny-missing "$image" "$rootfs/usr"; then
     log_fail "could not mount the live system's image"
     exit 1
 fi
-# What the spec gives the root outside /usr: links, such as /bin into
-# /usr, and empty directories.
+# What the root has outside /usr besides its skeleton: the links the
+# spec gives, such as /bin into /usr, and those its packages claim, and
+# the empty directories the spec gives.
 while read -r kind path target; do
     case $kind in
     l) ln -s "$target" "$rootfs/$path" || exit 1 ;;

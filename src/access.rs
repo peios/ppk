@@ -106,6 +106,18 @@ pub(crate) enum Inherit {
 /// Everyone read and execute, and SYSTEM and Administrators full control. It
 /// has no owner, group or SACL, because only the DACL is ever set.
 pub(crate) fn descriptor(inherit: Inherit) -> Vec<u8> {
+    build_descriptor(inherit, None)
+}
+
+/// [`descriptor`] as a whole stored descriptor, owned by SYSTEM with SYSTEM
+/// its group: what a file or directory ppk writes as SYSTEM on Peios ends up
+/// holding, for an image that carries its descriptors itself.
+pub(crate) fn stored_descriptor(inherit: Inherit) -> Vec<u8> {
+    build_descriptor(inherit, Some(SYSTEM))
+}
+
+/// [`descriptor`]'s DACL, after an owner and group of `owner_and_group`.
+fn build_descriptor(inherit: Inherit, owner_and_group: Option<&[u8]>) -> Vec<u8> {
     let flags = match inherit {
         Inherit::No => 0,
         Inherit::ToContents => {
@@ -133,13 +145,24 @@ pub(crate) fn descriptor(inherit: Inherit) -> Vec<u8> {
     let control = (uapi::KACS_SD_SELF_RELATIVE
         | uapi::KACS_SD_DACL_PRESENT
         | uapi::KACS_SD_DACL_PROTECTED) as u16;
-    let mut sd = Vec::with_capacity(header_bytes + acl_size as usize);
+    let sid_bytes = owner_and_group.map_or(0, <[u8]>::len);
+    let mut sd = Vec::with_capacity(header_bytes + 2 * sid_bytes + acl_size as usize);
     sd.push(SD_REVISION);
     sd.push(0);
     sd.extend_from_slice(&control.to_le_bytes());
-    for offset in [0u32, 0, 0, header_bytes as u32] {
-        // Owner, group and SACL are absent; the DACL follows the header.
+    // The owner and group, if any, follow the header, and the DACL follows
+    // them. There is no SACL.
+    let (owner, group) = match owner_and_group {
+        Some(_) => (header_bytes as u32, (header_bytes + sid_bytes) as u32),
+        None => (0, 0),
+    };
+    let dacl = (header_bytes + 2 * sid_bytes) as u32;
+    for offset in [owner, group, 0, dacl] {
         sd.extend_from_slice(&offset.to_le_bytes());
+    }
+    if let Some(sid) = owner_and_group {
+        sd.extend_from_slice(sid);
+        sd.extend_from_slice(sid);
     }
     sd.push(ACL_REVISION);
     sd.push(0);

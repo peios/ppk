@@ -74,7 +74,8 @@ channel holds, and `"#stable >= 1.36"` for that version if it satisfies the
 constraint; see
 [Publishing a Repository](~peios/packaging/publishing-a-repository). A
 profile holds the requests, not their answer: composing it resolves them,
-choosing a version of each package they need, and the closure's [inventory](~peios/packaging/closures) records what was chosen.
+choosing a version of each package they need, and the closure's
+[inventory](~peios/packaging/closures) records what was chosen.
 The same requests against the same packages always resolve the same way. A
 profile that asks for exact versions of everything, as
 [`ppk resolve`](~peios/packaging/choosing-packages-for-an-environment)

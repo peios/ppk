@@ -18,12 +18,13 @@ use anyhow::{Context, Result, bail};
 
 use crate::access;
 use crate::closure::{
-    UsrFiles, build_entry, link_blob, merge, package_identities, render_closure_manifest,
+    UsrFiles, build_entry, exact_requests, link_blob, merge, package_identities, read_packages,
 };
 use crate::environment::MOUNT_POINT;
 use crate::fetch::fetch;
 use crate::inventory::Inventory;
 use crate::manifest::{check_path, toml_string};
+use crate::resolve::Request;
 use crate::store::ArtifactDir;
 use crate::{DEFAULT_ARTIFACT_DIR, Entry, Identity, PackageId};
 
@@ -159,9 +160,29 @@ pub fn compose_env(
     out: &Path,
     extras: &Extras,
 ) -> Result<Composed> {
+    compose_env_for(
+        packages,
+        &exact_requests(packages)?,
+        artifact_dir,
+        out,
+        extras,
+    )
+}
+
+/// Compose a root as [`compose_env`] does, its `usr` the closure of
+/// `packages` made for `requests`, as [`closure_for`](crate::closure_for)
+/// makes one.
+pub fn compose_env_for(
+    packages: &[PackageId],
+    requests: &[Request],
+    artifact_dir: &Path,
+    out: &Path,
+    extras: &Extras,
+) -> Result<Composed> {
     let layout = ArtifactDir::new(artifact_dir);
     let identities = package_identities(&layout, packages, artifact_dir)?;
-    let identity = Identity::of(render_closure_manifest(&identities).as_bytes());
+    let inventory = Inventory::of(&read_packages(&layout, &identities)?, requests)?;
+    let identity = inventory.identity.clone();
     let merged = merge(&layout, &identities)?;
     check_extras(extras, &merged.root_claims)?;
     if out.symlink_metadata().is_ok() {
@@ -217,7 +238,7 @@ pub fn compose_env(
             &mut unstamped,
         )?;
     }
-    Inventory::new(merged.packages).write(&usr)?;
+    inventory.write(&usr)?;
     for dir in &extras.dirs {
         let dest = tmp.path().join(dir.path());
         fs::create_dir_all(&dest).with_context(|| format!("{}", dest.display()))?;

@@ -56,13 +56,8 @@ fn inventories_preserve_closure_identity_for_both_file_modes() {
     let store = work.path().join("store");
     let first = pack(FIRST, &store);
     let second = pack(SECOND, &store);
-    let mut entries = [(first.as_str(), FIRST), (second.as_str(), SECOND)];
-    entries.sort();
-    let manifest = format!(
-        "packages = [\n    \"{}\",\n    \"{}\",\n]\n",
-        entries[0].0, entries[1].0
-    );
-    let expected = Identity::of(manifest.as_bytes()).to_string();
+    let body = format!("{FIRST} {first} [* =1.0-1]\n{SECOND} {second} [* =2.0-1]\n");
+    let expected = Identity::of(body.as_bytes()).to_string();
     for (number, files) in [UsrFiles::Hardlink, UsrFiles::Copy].into_iter().enumerate() {
         let closures = work.path().join(format!("closures-{number}"));
         let packages = [id(SECOND), id(FIRST), id(FIRST)];
@@ -88,13 +83,7 @@ fn inventories_preserve_closure_identity_for_both_file_modes() {
             text,
             fs::read_to_string(closed.tree_path.join("inventory")).unwrap()
         );
-        assert_eq!(
-            text,
-            format!(
-                "closure = \"{expected}\"\n\n[packages]\n\"{}\" = \"{}\"\n\"{}\" = \"{}\"\n",
-                entries[0].0, entries[0].1, entries[1].0, entries[1].1
-            )
-        );
+        assert_eq!(text, format!("closure {expected}\n{body}"));
         assert_eq!(
             fs::metadata(root.join("usr/inventory"))
                 .unwrap()
@@ -166,15 +155,17 @@ fn malformed_inventories_are_errors_even_with_all() {
     let path = root.join("usr/inventory");
     let valid = fs::read_to_string(&path).unwrap();
     for bad in [
-        String::from("not TOML"),
+        String::from("not an inventory"),
         valid.replace(&hash, &Identity::of(b"wrong package").to_string()),
         valid.replace(FIRST, "dev.peios.first@1.0-1"),
         valid.replace(FIRST, "invalid"),
-        valid.replace("[packages]", "[other]"),
-        format!("{valid}\"{hash}\" = \"{FIRST}\"\n"),
-        valid.replace("\n\n", "\n"),
-        valid.replace("[packages]", "unknown = true\n[packages]"),
-        valid.lines().take(3).collect::<Vec<_>>().join("\n"),
+        valid.replace(" [* =1.0-1]", ""),
+        valid.replace("[* =1.0-1]", "[* = 1.0-1]"),
+        valid.replace("[* =1.0-1]", "[* #stable]"),
+        valid.replace("[* =1.0-1]", "[nobody =1.0-1]"),
+        format!("{valid}{}", valid.lines().nth(1).unwrap()),
+        valid.replace("closure ", "closure  "),
+        valid.lines().skip(1).collect::<Vec<_>>().join("\n"),
     ] {
         replace(&path, &bad);
         assert!(ppk::read_inventory(&root.join("usr")).is_err(), "{bad}");

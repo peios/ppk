@@ -13,8 +13,9 @@ use crate::access::{self, Security, Stamp};
 use crate::environment::MOUNT_POINT;
 use crate::inventory::{INVENTORY, Inventory, read_inventory};
 use crate::manifest::toml_string;
+use crate::resolve::Request;
 use crate::store::{self, ArtifactDir};
-use crate::{Entry, Identity, PackageId, parse_manifest};
+use crate::{Constraint, Entry, Identity, Metadata, PackageId, parse_manifest};
 
 /// The mode of a closure's root, so that anyone can read the tree; the
 /// temporary directory it is built in would otherwise be private.
@@ -61,11 +62,12 @@ pub struct Closed {
 }
 
 /// Compose `packages`, each already in `artifact_dir`, into a closure in
-/// `closure_dir`.
+/// `closure_dir`, each package requested exactly.
 ///
-/// A closure is named by the hash of its manifest, which lists the
-/// identities of its packages sorted and without duplicates, so the order
-/// and repetition of `packages` do not matter. An existing closure is reused.
+/// A closure is named by the hash of its manifest, the body of its
+/// inventory: its packages, sorted and without duplicates, and what wants
+/// each of them. So the order and repetition of `packages` do not matter. An
+/// existing closure is reused.
 ///
 /// Every package file is a hardlink to its blob in the form its entry
 /// needs, which carries the entry's security metadata; symlinks and
@@ -84,31 +86,61 @@ pub struct Closed {
 /// is complete.
 /// `closure_dir` must be on the same mount as `artifact_dir`.
 pub fn closure(packages: &[PackageId], artifact_dir: &Path, closure_dir: &Path) -> Result<Closed> {
-    closure_as(packages, artifact_dir, closure_dir, UsrFiles::Hardlink)
+    closure_for(
+        packages,
+        &exact_requests(packages)?,
+        artifact_dir,
+        closure_dir,
+        UsrFiles::Hardlink,
+    )
 }
 
 /// Compose a closure as [`closure`] does, but copy every file from its blob
 /// instead of hardlinking it, so that `closure_dir` can be on any mount. See
 /// [`UsrFiles`] for what that gives up. A closure is named by its packages
-/// alone, so one that exists is reused however it was built.
+/// and requests alone, so one that exists is reused however it was built.
 pub fn closure_copying(
     packages: &[PackageId],
     artifact_dir: &Path,
     closure_dir: &Path,
 ) -> Result<Closed> {
-    closure_as(packages, artifact_dir, closure_dir, UsrFiles::Copy)
+    closure_for(
+        packages,
+        &exact_requests(packages)?,
+        artifact_dir,
+        closure_dir,
+        UsrFiles::Copy,
+    )
 }
 
-fn closure_as(
+/// A request for exactly each of `packages`, as a closure of exact package
+/// IDs asks for them.
+pub fn exact_requests(packages: &[PackageId]) -> Result<Vec<Request>> {
+    (packages.iter())
+        .map(|id| {
+            Request::package(
+                id.name(),
+                Constraint::parse(&format!("= {}", id.version()))?,
+            )
+        })
+        .collect()
+}
+
+/// Compose `packages` into a closure as [`closure`] does, made for
+/// `requests`, which its inventory records. Every package must be wanted by
+/// a request or by another package, and every request satisfied by one.
+pub fn closure_for(
     packages: &[PackageId],
+    requests: &[Request],
     artifact_dir: &Path,
     closure_dir: &Path,
     files: UsrFiles,
 ) -> Result<Closed> {
     let layout = ArtifactDir::new(artifact_dir);
     let identities = package_identities(&layout, packages, artifact_dir)?;
-    let manifest = render_closure_manifest(&identities);
-    let identity = Identity::of(manifest.as_bytes());
+    let inventory = Inventory::of(&read_packages(&layout, &identities)?, requests)?;
+    let manifest = inventory.body();
+    let identity = inventory.identity.clone();
     let tree_path = closure_dir.join(identity.hex());
     let manifest_path = closure_dir.join(format!("{}{MANIFEST_SUFFIX}", identity.hex()));
     let closed = |reused, unstamped| Closed {
@@ -169,7 +201,7 @@ fn closure_as(
             &mut unstamped,
         )?;
     }
-    Inventory::new(merged.packages).write(tmp.path())?;
+    inventory.write(tmp.path())?;
     // Last, so that a tree that can't be built leaves nothing behind.
     write_manifest(closure_dir, &manifest_path, &manifest)?;
 
@@ -208,16 +240,23 @@ pub(crate) fn package_identities(
     Ok(identities)
 }
 
-/// The manifest naming a closure of `identities`, which must be sorted and
-/// without duplicates. Each identity is on its own line, so that the closure
-/// manifest has exactly one spelling.
-pub(crate) fn render_closure_manifest(identities: &[Identity]) -> String {
-    let mut out = String::from("packages = [\n");
+/// Each package of `identities`, with its ID and metadata, from its
+/// manifest, which must match its hash.
+pub(crate) fn read_packages(
+    layout: &ArtifactDir,
+    identities: &[Identity],
+) -> Result<Vec<(Identity, PackageId, Metadata)>> {
+    let mut packages = Vec::with_capacity(identities.len());
     for identity in identities {
-        out.push_str(&format!("    \"{identity}\",\n"));
+        let path = layout.manifest_path(identity);
+        let bytes = fs::read(&path).with_context(|| format!("{}", path.display()))?;
+        if Identity::of(&bytes) != *identity {
+            bail!("{}: does not match its hash", path.display());
+        }
+        let manifest = parse_manifest(&bytes).with_context(|| format!("{}", path.display()))?;
+        packages.push((identity.clone(), manifest.id, manifest.metadata));
     }
-    out.push_str("]\n");
-    out
+    Ok(packages)
 }
 
 fn write_manifest(closure_dir: &Path, manifest_path: &Path, manifest: &str) -> Result<()> {
@@ -231,8 +270,6 @@ fn write_manifest(closure_dir: &Path, manifest_path: &Path, manifest: &str) -> R
 /// with its entry and the package that provides or claims it, and the links
 /// they claim outside `/usr`.
 pub(crate) struct Merged {
-    /// Verified package identities and full IDs, in closure identity order.
-    pub(crate) packages: Vec<(Identity, PackageId)>,
     /// Each path, relative to `/usr`.
     pub(crate) usr: BTreeMap<String, (Entry, PackageId)>,
     /// Each link claimed outside `/usr`, relative to the root, with its
@@ -249,7 +286,6 @@ pub(crate) struct Merged {
 /// provides a name; for a claim to be a path in a package's files; or for a
 /// path to lie under another's claim. `/usr` itself can't be claimed.
 pub(crate) fn merge(layout: &ArtifactDir, identities: &[Identity]) -> Result<Merged> {
-    let mut packages = Vec::with_capacity(identities.len());
     let mut merged: BTreeMap<String, (Entry, PackageId)> = BTreeMap::new();
     // Every claim, keyed by its absolute path.
     let mut claims: BTreeMap<String, (String, PackageId)> = BTreeMap::new();
@@ -260,7 +296,6 @@ pub(crate) fn merge(layout: &ArtifactDir, identities: &[Identity]) -> Result<Mer
             bail!("{}: does not match its hash", path.display());
         }
         let manifest = parse_manifest(&bytes).with_context(|| format!("{}", path.display()))?;
-        packages.push((identity.clone(), manifest.id.clone()));
         for (file, entry) in manifest.entries {
             match merged.get(&file) {
                 Some((existing, owner)) if *existing != entry => bail!(
@@ -346,7 +381,6 @@ pub(crate) fn merge(layout: &ArtifactDir, identities: &[Identity]) -> Result<Mer
         }
     }
     Ok(Merged {
-        packages,
         usr: merged,
         root_claims,
     })

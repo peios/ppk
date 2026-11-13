@@ -120,20 +120,26 @@ fn the_root_is_readable_by_everyone() {
 }
 
 #[test]
-fn the_manifest_lists_sorted_identities_and_names_the_closure() {
+fn the_manifest_is_the_inventory_body_and_names_the_closure() {
     let store = Store::new();
     let hello = store.pack(HELLO, &[("a", b"a", 0o644)]);
     let libz = store.pack(LIBZ, &[("b", b"b", 0o644)]);
-    let closed = store.closure(&[HELLO, LIBZ]).unwrap();
+    let closed = store.closure(&[LIBZ, HELLO]).unwrap();
 
-    let mut identities = [hello, libz];
-    identities.sort();
-    let expected = format!(
-        "packages = [\n    \"{}\",\n    \"{}\",\n]\n",
-        identities[0], identities[1]
-    );
+    let line = |id: &str, identity: &str| {
+        let version = id.split_once('@').unwrap().1.split_once('?').unwrap().0;
+        format!("{id} {identity} [* ={version}]\n")
+    };
+    let mut lines = [line(HELLO, &hello), line(LIBZ, &libz)];
+    lines.sort();
+    let expected = lines.concat();
     let manifest = fs::read_to_string(&closed.manifest_path).unwrap();
     assert_eq!(manifest, expected);
+    let inventory = fs::read_to_string(closed.tree_path.join("inventory")).unwrap();
+    assert_eq!(
+        inventory,
+        format!("closure {}\n{expected}", closed.identity)
+    );
     let identity = Identity::of(manifest.as_bytes());
     assert_eq!(closed.identity, identity.to_string());
     assert_eq!(closed.tree_path, store.closures().join(identity.hex()));

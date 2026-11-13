@@ -98,7 +98,7 @@ pub use pack::{
     PackOptions, Packed, pack, pack_replacing, pack_replacing_with, pack_with, pack_with_options,
 };
 pub use profile::Profile;
-pub use resolve::{Request, Resolution, Resolved, Wanted, resolve, resolve_pinned};
+pub use resolve::{Request, Resolution, Resolved, Wanted, resolve, resolve_pinned, resolve_signed};
 pub use security::SecurityDescriptor;
 pub use store::{packed, prepare_artifact_dir, stored_packages, versions};
 pub use version::{Constraint, Operator, Version};

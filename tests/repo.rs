@@ -410,3 +410,50 @@ fn a_name_two_repositories_publish_is_refused() {
         "{stderr}"
     );
 }
+
+#[test]
+fn a_signed_repository_vouches_for_its_refs_through_its_catalog() {
+    let work = tempfile::tempdir().unwrap();
+    let repo = work.path().join("repo");
+    pack(&repo, "dev.peios.app@1.0-1?arch=x86_64", &[]);
+    pack(&repo, "dev.peios.other@1.0-1?arch=x86_64", &[]);
+    repo::update(&repo, &key(), false).unwrap();
+    // Packed after the last publication: in the refs, not in the catalog.
+    pack(&repo, "dev.peios.app@2.0-1?arch=x86_64", &[]);
+
+    let signed = [(repo.clone(), key().public())].into_iter().collect();
+    let resolve = |request: &str| {
+        let request = ppk::Request::parse_package(request).unwrap();
+        ppk::resolve_signed(&[request], std::slice::from_ref(&repo), "x86_64", &signed)
+            .map(|resolution| resolution.ids())
+            .map_err(|err| format!("{err:#}"))
+    };
+    assert_eq!(
+        resolve("dev.peios.app").unwrap(),
+        [id("dev.peios.app@1.0-1?arch=x86_64")]
+    );
+    // Without a key, the refs are trusted for themselves.
+    assert_eq!(
+        ppk::resolve(
+            &[ppk::Request::parse_package("dev.peios.app").unwrap()],
+            std::slice::from_ref(&repo),
+            "x86_64"
+        )
+        .unwrap()
+        .ids(),
+        [id("dev.peios.app@2.0-1?arch=x86_64")]
+    );
+
+    // A ref changed to name another package's manifest is refused.
+    let other = ppk::packed(&id("dev.peios.other@1.0-1?arch=x86_64"), &repo)
+        .unwrap()
+        .unwrap();
+    let path = repo.join("refs/dev.peios.app/1.0-1/x86_64");
+    let mut perms = fs::metadata(&path).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    fs::set_permissions(&path, perms).unwrap();
+    fs::write(&path, format!("{other}\n")).unwrap();
+    let err = resolve("dev.peios.app").unwrap_err();
+    assert!(err.contains("signed catalog lists"), "{err}");
+}

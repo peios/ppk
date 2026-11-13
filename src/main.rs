@@ -864,13 +864,16 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
                     std::slice::from_ref(&from),
                     &inputs.arch,
                 )?;
+                let mut wanted = Vec::new();
                 for package in resolved.packages {
-                    if ppk::packed(&package.id, &artifact_dir)? == Some(package.identity) {
-                        continue;
+                    if ppk::packed(&package.id, &artifact_dir)? != Some(package.identity) {
+                        wanted.push(package.id);
                     }
-                    let fetched = ppk::fetch(&package.id, &from, &artifact_dir)?;
-                    warn_unstamped(program, fetched.unstamped);
-                    println!("{}", fetched.identity);
+                }
+                let fetched = ppk::fetch_all(&wanted, &from, &artifact_dir)?;
+                warn_unstamped(program, fetched.iter().map(|each| each.unstamped).sum());
+                for each in fetched {
+                    println!("{}", each.identity);
                 }
             }
         }

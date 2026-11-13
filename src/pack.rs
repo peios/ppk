@@ -1,6 +1,6 @@
 //! Packing a directory into the artifact directory.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::os::unix::fs::PermissionsExt;
@@ -267,6 +267,8 @@ pub fn pack_with_options(
             blobs_written += 1;
         }
     }
+    let mut copied = HashSet::new();
+    let mut pending = Vec::new();
     for (entry, path, signature) in &sources {
         let Entry::Blob {
             hex,
@@ -282,15 +284,23 @@ pub fn pack_with_options(
             signature: signature.map(|signature| signature.bytes.as_slice()),
         };
         let blob = layout.file_path(entry);
+        if !copied.insert(blob.clone()) {
+            continue;
+        }
         if !blob.exists() {
-            if !store::copy_blob(path, &blob, (hex.as_str(), *exec), security, &mut unstamped)? {
+            let Some(copy) =
+                store::copy_pending(path, &blob, (hex.as_str(), *exec), security, &mut unstamped)?
+            else {
                 bail!("{}: file changed while being packed", path.display());
-            }
+            };
+            pending.push(copy);
             blobs_written += 1;
         } else if security.ensure(&blob)? == Stamp::Skipped {
             unstamped += 1;
         }
     }
+    // Named only once they're on disk; see `store::copy_pending`.
+    store::place_pending(&blob_dir, pending)?;
 
     let manifest_dir = layout.manifest_dir();
     store::create_dirs(&manifest_dir)?;

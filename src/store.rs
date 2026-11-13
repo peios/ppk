@@ -2,6 +2,7 @@
 
 use std::fs::{self, File, Permissions};
 use std::io::{self, Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -233,11 +234,15 @@ pub(crate) fn ref_contents(identity: &Identity) -> String {
 
 /// Copy `path` to `dest`, as a blob's form is stored: read-only, executable
 /// if `exec`, with the store's security descriptor, and carrying `security`,
-/// given before `dest` exists. `dest` is that form in an artifact directory,
-/// as [`ArtifactDir::file_path`] gives it, or a file of a tree that copies
-/// its blobs. Returns false, writing nothing, if the content does not hash to
-/// `hex`; the caller knows what that means. Adds one to `unstamped` if this
-/// system would not let the copy carry all of `security`.
+/// given before `dest` exists. `dest` is a file of a tree that copies its
+/// blobs; an artifact directory's blobs are copied with [`copy_pending`].
+/// Returns false, writing nothing, if the content does not hash to `hex`;
+/// the caller knows what that means. Adds one to `unstamped` if this system
+/// would not let the copy carry all of `security`.
+///
+/// The copy isn't synced: a tree has thousands of files, and a sync for each
+/// is most of the time it takes to write them. The caller calls
+/// [`sync_filesystem`] once, before it gives the tree its name.
 pub(crate) fn copy_blob(
     path: &Path,
     dest: &Path,
@@ -245,6 +250,80 @@ pub(crate) fn copy_blob(
     security: Security,
     unstamped: &mut usize,
 ) -> Result<bool> {
+    let Some(pending) = copy_pending(path, dest, (hex, exec), security, unstamped)? else {
+        return Ok(false);
+    };
+    pending.place()?;
+    Ok(true)
+}
+
+/// A file written under a temporary name beside `dest`, to be given its name
+/// by [`place_pending`].
+pub(crate) struct Pending {
+    tmp: tempfile::TempPath,
+    dest: PathBuf,
+    /// For a file that must not replace another: what `dest` may already
+    /// hold, and what to say if it holds something else.
+    new: Option<(Vec<u8>, String)>,
+}
+
+impl Pending {
+    fn place(self) -> Result<()> {
+        let Some((bytes, conflict)) = self.new else {
+            return self
+                .tmp
+                .persist(&self.dest)
+                .map_err(|err| err.error)
+                .with_context(|| format!("{}", self.dest.display()));
+        };
+        match self.tmp.persist_noclobber(&self.dest) {
+            Ok(()) => Ok(()),
+            Err(err) if err.error.kind() == io::ErrorKind::AlreadyExists => {
+                if fs::read(&self.dest).with_context(|| format!("{}", self.dest.display()))?
+                    != bytes
+                {
+                    bail!("{conflict}");
+                }
+                Ok(())
+            }
+            Err(err) => Err(err.error).with_context(|| format!("{}", self.dest.display())),
+        }
+    }
+}
+
+/// Write `bytes` under a temporary name in `dir`, to be named `dest` by
+/// [`place_pending`]. Unless `replace`, it doesn't replace a `dest` that
+/// exists already, which must then hold `bytes`, or placing it fails, saying
+/// `conflict`.
+pub(crate) fn write_pending(
+    dir: &Path,
+    dest: &Path,
+    bytes: &[u8],
+    replace: bool,
+    conflict: impl FnOnce() -> String,
+) -> Result<Pending> {
+    let mut tmp = new_temp(dir, ARTIFACT_MODE)?;
+    tmp.write_all(bytes)
+        .with_context(|| format!("{}", dest.display()))?;
+    Ok(Pending {
+        tmp: tmp.into_temp_path(),
+        dest: dest.to_owned(),
+        new: (!replace).then(|| (bytes.to_vec(), conflict())),
+    })
+}
+
+/// Copy `path` as [`copy_blob`] does, but under a temporary name beside
+/// `dest`. A blob already named is trusted without being read again, so an
+/// artifact directory's blobs are named only once their content is on disk:
+/// [`place_pending`] syncs them all at once and then names them. Returns
+/// `None`, writing nothing, if the content does not hash to `hex`.
+pub(crate) fn copy_pending(
+    path: &Path,
+    dest: &Path,
+    (hex, exec): (&str, bool),
+    security: Security,
+    unstamped: &mut usize,
+) -> Result<Option<Pending>> {
     let file = File::open(path).with_context(|| format!("{}", path.display()))?;
     let mut reader = HashingReader {
         inner: file,
@@ -257,13 +336,43 @@ pub(crate) fn copy_blob(
     let mut tmp = new_temp(dir, mode)?;
     io::copy(&mut reader, &mut tmp).with_context(|| format!("{}", path.display()))?;
     if Identity::from_digest(reader.hasher.finalize()).hex() != hex {
-        return Ok(false);
+        return Ok(None);
     }
     if security.stamp(tmp.path())? == Stamp::Skipped {
         *unstamped += 1;
     }
-    persist(tmp, dest)?;
-    Ok(true)
+    // Closed, so that a package of thousands of files doesn't hold thousands
+    // of descriptors open until they're named.
+    Ok(Some(Pending {
+        tmp: tmp.into_temp_path(),
+        dest: dest.to_owned(),
+        new: None,
+    }))
+}
+
+/// Sync the filesystem holding `dir`, once, and then name each of `pending`,
+/// in order.
+pub(crate) fn place_pending(dir: &Path, pending: Vec<Pending>) -> Result<()> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    sync_filesystem(dir)?;
+    for each in pending {
+        each.place()?;
+    }
+    Ok(())
+}
+
+/// Write everything written to the filesystem that holds `path` to its disk,
+/// as one sync rather than one for each file.
+pub(crate) fn sync_filesystem(path: &Path) -> Result<()> {
+    let dir = File::open(path).with_context(|| format!("{}", path.display()))?;
+    // SAFETY: syncfs reads only the descriptor, which `dir` holds open.
+    if unsafe { libc::syncfs(dir.as_raw_fd()) } != 0 {
+        return Err(io::Error::last_os_error())
+            .with_context(|| format!("{}: cannot sync", path.display()));
+    }
+    Ok(())
 }
 
 /// Create `dest` holding `bytes`, via a temporary file in `dir` so readers

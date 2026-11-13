@@ -139,6 +139,16 @@ enum Command {
         #[arg(long)]
         copy_files: bool,
     },
+    /// Publish a repository: its catalog, indexes and channels
+    #[command(
+        override_usage = "ppk repo <command> [options]",
+        subcommand_value_name = "command",
+        after_help = SEE_ALSO
+    )]
+    Repo {
+        #[command(subcommand)]
+        command: RepoCommand,
+    },
     /// Name a closure, or show what names name
     #[command(
         override_usage = "ppk name [options] [<name> [<closure>]]\n       ppk name [options] --remove <name>",
@@ -433,6 +443,213 @@ fn main() -> ExitCode {
     }
 }
 
+/// The options every command that publishes a repository takes.
+#[derive(Args)]
+struct Publishing {
+    /// The repository, an artifact directory (default: /system/artifacts)
+    #[arg(
+        long,
+        value_name = "dir",
+        default_value = ppk::DEFAULT_ARTIFACT_DIR,
+        hide_default_value = true,
+    )]
+    artifact_dir: PathBuf,
+    /// Sign with the ML-DSA-65 private key in the PEM file <file>
+    /// (default: $PPK_REPO_KEY)
+    #[arg(long, value_name = "file")]
+    key: Option<PathBuf>,
+}
+
+#[derive(Subcommand)]
+enum RepoCommand {
+    /// Publish the catalog and leading from what the repository holds
+    #[command(override_usage = "ppk repo update [options]", after_help = SEE_ALSO)]
+    Update {
+        #[command(flatten)]
+        publishing: Publishing,
+        /// Refuse to publish if leading would leave a package out
+        #[arg(long)]
+        strict: bool,
+    },
+    /// Make a new index a snapshot of an index or channel
+    #[command(
+        override_usage = "ppk repo snapshot [options] <name> [--from <index>]",
+        after_help = SEE_ALSO
+    )]
+    Snapshot {
+        /// The new index's name, such as 2026.10.0
+        #[arg(value_name = "name")]
+        name: String,
+        /// The index or channel to take (default: leading)
+        #[arg(long, value_name = "index", default_value = ppk::repo::LEADING)]
+        from: String,
+        #[command(flatten)]
+        publishing: Publishing,
+    },
+    /// Make a channel follow an index or channel
+    #[command(
+        override_usage = "ppk repo channel [options] <name> <target>",
+        after_help = SEE_ALSO
+    )]
+    Channel {
+        /// The channel, such as stable
+        #[arg(value_name = "name")]
+        name: String,
+        /// The index or channel it follows
+        #[arg(value_name = "target")]
+        target: String,
+        /// Mark the channel as one that won't move again
+        #[arg(long)]
+        ended: bool,
+        #[command(flatten)]
+        publishing: Publishing,
+    },
+    /// Take a version back from new resolutions, or with --undo, restore it
+    #[command(override_usage = "ppk repo yank [options] <package>", after_help = SEE_ALSO)]
+    Yank {
+        /// The version, as <name>@<version>[?arch=<arch>]
+        #[arg(value_name = "package")]
+        package: PackageId,
+        /// Restore a yanked version
+        #[arg(long)]
+        undo: bool,
+        #[command(flatten)]
+        publishing: Publishing,
+    },
+    /// Delete a version, its manifest and files, leaving a tombstone
+    #[command(
+        override_usage = "ppk repo delete [options] <package> --reason <text>",
+        after_help = SEE_ALSO
+    )]
+    Delete {
+        /// The version, as <name>@<version>[?arch=<arch>]
+        #[arg(value_name = "package")]
+        package: PackageId,
+        /// Why, which the tombstone records
+        #[arg(long, value_name = "text")]
+        reason: String,
+        #[command(flatten)]
+        publishing: Publishing,
+    },
+    /// Print a repository's pointer file, checking its signature with a key
+    #[command(override_usage = "ppk repo show [options]", after_help = SEE_ALSO)]
+    Show {
+        /// The repository (default: /system/artifacts)
+        #[arg(
+            long,
+            value_name = "dir",
+            default_value = ppk::DEFAULT_ARTIFACT_DIR,
+            hide_default_value = true,
+        )]
+        artifact_dir: PathBuf,
+        /// Check the signature against the public key <key>
+        #[arg(long, value_name = "key")]
+        public_key: Option<String>,
+    },
+    /// Print the public key of a private key, for a repository's configuration
+    #[command(override_usage = "ppk repo public-key --key <file>", after_help = SEE_ALSO)]
+    PublicKey {
+        /// The ML-DSA-65 private key in the PEM file <file> (default: $PPK_REPO_KEY)
+        #[arg(long, value_name = "file")]
+        key: Option<PathBuf>,
+    },
+}
+
+/// The private key at `path`, or at `$PPK_REPO_KEY` if no path is given.
+fn load_key(path: Option<&Path>) -> anyhow::Result<ppk::repo::PrivateKey> {
+    let from_env = std::env::var_os("PPK_REPO_KEY").map(PathBuf::from);
+    let Some(path) = path.map(Path::to_path_buf).or(from_env) else {
+        anyhow::bail!("no key: give --key <file>, or set PPK_REPO_KEY");
+    };
+    ppk::repo::PrivateKey::load(&path)
+}
+
+/// Run the repository command `command`.
+fn repo(program: &str, command: RepoCommand) -> anyhow::Result<()> {
+    let key = |publishing: &Publishing| load_key(publishing.key.as_deref());
+    let report = |published: ppk::repo::Published| {
+        for left in &published.left_out {
+            eprintln!(
+                "{program}: warning: {} left out of leading: {}",
+                left.id, left.reason
+            );
+        }
+        print!("{}", published.pointer.render());
+    };
+    match command {
+        RepoCommand::Update { publishing, strict } => {
+            report(ppk::repo::update(
+                &publishing.artifact_dir,
+                &key(&publishing)?,
+                strict,
+            )?);
+        }
+        RepoCommand::Snapshot {
+            name,
+            from,
+            publishing,
+        } => {
+            let pointer =
+                ppk::repo::snapshot(&publishing.artifact_dir, &key(&publishing)?, &name, &from)?;
+            print!("{}", pointer.render());
+        }
+        RepoCommand::Channel {
+            name,
+            target,
+            ended,
+            publishing,
+        } => {
+            let pointer = ppk::repo::channel(
+                &publishing.artifact_dir,
+                &key(&publishing)?,
+                &name,
+                &target,
+                ended,
+            )?;
+            print!("{}", pointer.render());
+        }
+        RepoCommand::Yank {
+            package,
+            undo,
+            publishing,
+        } => {
+            report(ppk::repo::yank(
+                &publishing.artifact_dir,
+                &key(&publishing)?,
+                &package,
+                undo,
+            )?);
+        }
+        RepoCommand::Delete {
+            package,
+            reason,
+            publishing,
+        } => {
+            report(ppk::repo::delete(
+                &publishing.artifact_dir,
+                &key(&publishing)?,
+                &package,
+                &reason,
+            )?);
+        }
+        RepoCommand::Show {
+            artifact_dir,
+            public_key,
+        } => {
+            let public_key: Option<ppk::repo::PublicKey> =
+                public_key.as_deref().map(str::parse).transpose()?;
+            match ppk::repo::read_pointer(&artifact_dir, public_key.as_ref())? {
+                Some(pointer) => print!("{}", pointer.render()),
+                None => anyhow::bail!("{}: not published as a repository", artifact_dir.display()),
+            }
+        }
+        RepoCommand::PublicKey { key } => {
+            println!("{}", load_key(key.as_deref())?.public());
+        }
+    }
+    Ok(())
+}
+
 /// The environment the profiles at `profiles` describe together, with
 /// `packages` added. It must hold a package.
 fn environment(profiles: &[PathBuf], packages: Vec<PackageId>) -> anyhow::Result<ppk::Profile> {
@@ -550,6 +767,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             warn_unstamped(program, closed.unstamped);
             println!("{}", closed.identity);
         }
+        Command::Repo { command } => repo(program, command)?,
         Command::Name {
             name,
             closure,

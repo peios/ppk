@@ -7,8 +7,10 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1.0"
+base64 = "0.22"
 clap = { version = "4.6", features = ["derive", "wrap_help"] }
 libc = "0.2"
+ml-dsa = { version = "0.1", default-features = false }
 peios-uapi = { path = "vendor/kernel/peios/rust/peios-uapi", default-features = false }
 sha2 = "0.10"
 tempfile = "3.23"

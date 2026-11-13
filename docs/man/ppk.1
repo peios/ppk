@@ -57,6 +57,45 @@ ppk \- create and manage Peios packages
 .RB [ \-\-copy\-files ]
 .IR package ...
 .br
+.B ppk repo update
+.RB [ \-\-artifact\-dir
+.IR dir ]
+.RB [ \-\-key
+.IR file ]
+.RB [ \-\-strict ]
+.br
+.B ppk repo snapshot
+.RI [ options ]
+.I name
+.RB [ \-\-from
+.IR index ]
+.br
+.B ppk repo channel
+.RI [ options ]
+.RB [ \-\-ended ]
+.I name target
+.br
+.B ppk repo yank
+.RI [ options ]
+.RB [ \-\-undo ]
+.I package
+.br
+.B ppk repo delete
+.RI [ options ]
+.I package
+.B \-\-reason
+.I text
+.br
+.B ppk repo show
+.RB [ \-\-artifact\-dir
+.IR dir ]
+.RB [ \-\-public\-key
+.IR key ]
+.br
+.B ppk repo public\-key
+.RB [ \-\-key
+.IR file ]
+.br
 .B ppk name
 .RB [ \-\-artifact\-dir
 .IR dir ]
@@ -685,6 +724,87 @@ itself.
 It fails, leaving nothing behind, if a hard link cannot be made because the
 closure directory is not on the same mount as the artifact directory, or if
 a blob it copies does not match its hash.
+.TP
+.B repo update
+Publish the repository, an artifact directory: write its catalog, every
+version its refs hold, and the index
+.BR leading ,
+the newest current version of each package for each architecture, then sign
+its pointer file, one higher in sequence.
+A package whose dependencies or requirements
+.B leading
+can't satisfy is left out of it, with a warning, and so is anything left
+needing it; with
+.BR \-\-strict ,
+that is an error and nothing is published.
+A version yanked or deleted stays so.
+.IP
+Every
+.B repo
+command that publishes signs with the ML-DSA-65 private key in the PEM file
+.BR \-\-key ,
+or in
+.B $PPK_REPO_KEY
+if that isn't given, the kind of key
+.B openssl genpkey \-algorithm ML\-DSA\-65
+writes, and prints the pointer file it published.
+.TP
+.BI "repo snapshot" " name"
+Make
+.I name
+a new index holding what the index or channel
+.B \-\-from
+holds,
+.B leading
+unless given.
+A snapshot never changes, so
+.I name
+must be new.
+.TP
+.BI "repo channel" " name target"
+Make the channel
+.I name
+follow the index or channel
+.IR target .
+With
+.BR \-\-ended ,
+mark it as one that won't move again.
+Indexes and channels share one namespace, and every channel must reach an
+index.
+.TP
+.BI "repo yank" " package"
+Take the version
+.I package
+back: new resolutions don't choose it, but a request for exactly it still
+does.
+With
+.BR \-\-undo ,
+restore it.
+Publishes again, so
+.B leading
+follows.
+.TP
+.BI "repo delete" " package"
+Delete the version
+.IR package :
+its ref, its manifest, and every file of it that no other manifest names.
+The catalog keeps a tombstone with the reason
+.BR \-\-reason
+gives, one line, so that a resolution that needs it can say why it's gone.
+Publishes again.
+.TP
+.B repo show
+Print the repository's pointer file.
+With
+.BR \-\-public\-key ,
+its signature must be that key's.
+.TP
+.B repo public\-key
+Print the public key of
+.BR \-\-key ,
+as
+.B ml\-dsa\-65:
+and its base64, for a repository's configuration.
 .TP
 .BI name " \fR[\fPname \fR[\fPclosure\fR]]\fP"
 Name a closure in the closure directory, so that what a system runs can be
@@ -1367,6 +1487,56 @@ names another directory.
 .IR closures/ name
 A name for a closure: a symbolic link to its tree beside it, set by
 .BR name .
+.TP
+.I repository
+A published repository's pointer file, the one file of it that changes:
+.IP
+.EX
+sequence 1042
+signed 2026\-11\-13T11:30:00Z
+catalog sha256:...
+index 2026.10.0 sha256:...
+index leading sha256:...
+channel stable 2026.10
+channel 2026.09 2026.09.3 ended
+.EE
+.IP
+.B sequence
+goes up by one each time the repository is published, and
+.B signed
+is when, in UTC.
+.B catalog
+and each
+.B index
+name the top node of a tree;
+each
+.B channel
+names the index or channel it follows, and
+.B ended
+marks one that won't move again.
+Lines are in this order, indexes and channels each sorted by name.
+.TP
+.I repository.sig
+The ML-DSA-65 signature of the pointer file's bytes, in the context
+.BR "ppk repository" .
+.TP
+.IR trees/sha256/ hash
+A node of the catalog's or an index's tree, named by the SHA-256 hash of its
+content.
+A package's node has a line for each version:
+the version, the architecture and the manifest's identity, then
+.BR yanked ,
+or
+.B deleted
+and a reason, for a version taken back.
+A bucket's node has a line for each package whose name falls in it: its
+name and its node's hash.
+The top node has a line for each bucket: the bucket and its node's hash.
+A name falls in the bucket of the first two hex digits of the SHA-256 hash
+of the name.
+Every node's lines are sorted and unique, each ending in a newline.
+A catalog lists every version published; an index, one of each package for
+each architecture.
 .TP
 .IR closures/ hash .manifest
 The manifest of that closure.

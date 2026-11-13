@@ -70,6 +70,7 @@ mod metadata;
 mod names;
 mod pack;
 mod profile;
+pub mod repo;
 mod resolve;
 mod security;
 #[cfg(test)]

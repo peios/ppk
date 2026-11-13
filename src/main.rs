@@ -1076,7 +1076,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
 }
 
 /// Report the `unstamped` files and directories that lack security metadata
-/// their manifests record, as PSPU 5.16 asks of a consumer that can't set it.
+/// their manifests record, as PSPU 5.20 asks of a consumer that can't set it.
 fn warn_unstamped(program: &str, unstamped: usize) {
     let (what, record) = match unstamped {
         0 => return,

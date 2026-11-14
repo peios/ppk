@@ -21,6 +21,7 @@ fn full() -> Metadata {
         license: Some("MIT".to_owned()),
         license_class: LicenseClass::Free,
         source_license: Some("MIT AND BSD-3-Clause".to_owned()),
+        source: Some("dev.peios.hello-source@1.0-1?arch=noarch".parse().unwrap()),
         dependencies: BTreeMap::from([
             ("org.gnu.glibc".to_owned(), constraint(">=2.44")),
             ("dev.peios.libgreet".to_owned(), constraint("= 1.0-1")),
@@ -48,6 +49,7 @@ description = \"A friendly greeting\"
 homepage = \"https://peios.dev/hello\"
 license = \"MIT\"
 license_class = \"free\"
+source = \"dev.peios.hello-source@1.0-1?arch=noarch\"
 source_license = \"MIT AND BSD-3-Clause\"
 
 [claims]
@@ -312,6 +314,15 @@ fn descriptive_fields_are_checked() {
     assert!(!check(with(|m| m.license = Some(String::new()))));
     assert!(!check(with(|m| m.license = Some("MIT\n".to_owned()))));
     assert!(!check(with(|m| m.source_license = Some(String::new()))));
+    // The source names a package, with its version and architecture.
+    for source in [
+        "dev.peios.hello-source",
+        "dev.peios.hello-source@1.0-1",
+        "not a package@1.0-1?arch=noarch",
+    ] {
+        let text = FULL.replacen("dev.peios.hello-source@1.0-1?arch=noarch", source, 1);
+        assert!(parse_manifest(text.as_bytes()).is_err(), "{source}");
+    }
     for class in ["unknown", "free", "firmware", "proprietary"] {
         assert_eq!(class.parse::<LicenseClass>().unwrap().to_string(), class);
     }

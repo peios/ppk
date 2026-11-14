@@ -144,6 +144,7 @@ offers, and describe it:
 | `[provides]` | Capabilities this one offers, each at a version or none |
 | `[claims]` | Links this package provides besides its files, such as `/usr/bin/sh` |
 | `description`, `homepage`, `license`, `license_class`, `source_license` | What the package is and its terms |
+| `source` | The package holding the source it was built from |
 
 They're part of the manifest, so they're part of the package's identity, and
 like the files they have one spelling each. A package that records none of

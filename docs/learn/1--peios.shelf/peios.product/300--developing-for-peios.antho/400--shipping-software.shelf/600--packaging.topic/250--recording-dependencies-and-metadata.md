@@ -122,6 +122,10 @@ Add the descriptive options to the same command:
   that differs.
 - `--license-class` is `free`, `firmware`, `proprietary`, or `unknown`, the
   default.
+- `--source` names the package holding the corresponding source the package
+  was built from, as a package ID with its architecture, such as
+  `org.git.kernel.dash-source@0.5.13.5-1?arch=noarch`. A package built
+  from no source of its own, such as device firmware, leaves it out.
 
 ## Check the result
 

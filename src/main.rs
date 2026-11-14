@@ -376,6 +376,9 @@ struct MetadataArgs {
     /// Give the license of the package's source
     #[arg(long, value_name = "expression", allow_hyphen_values = true)]
     source_license: Option<String>,
+    /// Name the package holding the package's corresponding source
+    #[arg(long, value_name = "package")]
+    source: Option<String>,
 }
 
 impl MetadataArgs {
@@ -404,6 +407,10 @@ impl MetadataArgs {
                 None => LicenseClass::Unknown,
             },
             source_license: self.source_license,
+            source: self
+                .source
+                .map(|id| anyhow::Context::context(id.parse::<ppk::PackageId>(), "--source"))
+                .transpose()?,
             dependencies: pairs("--depends", &self.depends, Constraint::from_manifest_string)?,
             requires: pairs(
                 "--requires",

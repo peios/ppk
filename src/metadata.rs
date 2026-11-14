@@ -9,7 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::id::check_name;
 use crate::manifest::toml_string;
-use crate::{Constraint, Version};
+use crate::{Constraint, PackageId, Version};
 
 /// What a package's manifest records besides its identity and files. Every
 /// part is optional, and a package with none of them has the manifest it
@@ -35,6 +35,9 @@ pub struct Metadata {
     /// The license of the source the package was built from, where it is
     /// not the package's own.
     pub source_license: Option<String>,
+    /// The package holding the corresponding source this one was built from,
+    /// such as `org.gnu.bash-source@5.3.20-1?arch=noarch`.
+    pub source: Option<PackageId>,
     /// Packages this one needs, by name, each with the versions that do.
     pub dependencies: BTreeMap<String, Constraint>,
     /// Capabilities this one needs, such as a soname or `sh`, each with the
@@ -151,6 +154,7 @@ impl Metadata {
             ("homepage", self.homepage.clone()),
             ("license", self.license.clone()),
             ("license_class", class),
+            ("source", self.source.as_ref().map(PackageId::to_string)),
             ("source_license", self.source_license.clone()),
         ];
         let mut out = String::new();
@@ -210,6 +214,9 @@ impl Metadata {
                 None => LicenseClass::Unknown,
             },
             source_license: field("source_license")?,
+            source: field("source")?
+                .map(|id| id.parse::<PackageId>().context("source"))
+                .transpose()?,
             dependencies: read_table(doc, "dependencies", Constraint::from_manifest_string)?,
             requires: read_table(doc, "requires", Constraint::from_manifest_string)?,
             provides: read_table(doc, "provides", |s| {

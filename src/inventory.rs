@@ -197,7 +197,7 @@ impl Inventory {
         render_body(&self.packages)
     }
 
-    fn render(&self) -> String {
+    pub(crate) fn render(&self) -> String {
         format!("{CLOSURE_LINE}{}\n{}", self.identity, self.body())
     }
 

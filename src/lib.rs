@@ -65,6 +65,7 @@ pub mod environment;
 mod fetch;
 mod id;
 mod identity;
+mod image;
 mod inventory;
 mod manifest;
 mod metadata;
@@ -87,6 +88,9 @@ pub use derive::{SYMBOL_CAPABILITIES, SYMBOL_VERSION_FLOORS};
 pub use fetch::{Fetched, fetch, fetch_all, fetch_replacing};
 pub use id::{HOST_ARCH, PackageId};
 pub use identity::Identity;
+pub use image::{
+    ClosureImage, DESCRIPTOR_ATTRIBUTE, ImageEntry, ImageKind, SIGNATURE_ATTRIBUTE, closure_image,
+};
 pub use inventory::{Inventory, InventoryPackage, USER, Want, read_inventory};
 pub use manifest::{Entry, Manifest, parse_manifest, render_manifest};
 pub use metadata::{LicenseClass, Metadata};

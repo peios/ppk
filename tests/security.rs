@@ -443,3 +443,48 @@ fn a_malformed_descriptor_is_a_usage_error() {
         );
     }
 }
+
+#[test]
+fn an_image_carries_each_files_own_descriptor_and_signature() {
+    let input = firmware();
+    let artifacts = tempfile::tempdir().unwrap();
+    ppk::pack_with_options(&id(), &firmware_options(), input.path(), artifacts.path()).unwrap();
+    let requests = ppk::exact_requests(&[id()]).unwrap();
+
+    let image = ppk::closure_image(&[id()], &requests, artifacts.path()).unwrap();
+
+    let attribute = |path: &str, name: &str| -> Option<Vec<u8>> {
+        let entry = (image.entries.iter())
+            .find(|each| each.path == path)
+            .unwrap_or_else(|| panic!("{path} is in the image"));
+        (entry.attributes.iter())
+            .find(|(each, _)| *each == name)
+            .map(|(_, value)| value.clone())
+    };
+    let sd = |text: &str| {
+        text.parse::<SecurityDescriptor>()
+            .unwrap()
+            .as_bytes()
+            .to_vec()
+    };
+    assert_eq!(
+        attribute("lib/firmware/a.bin", ppk::SIGNATURE_ATTRIBUTE),
+        Some(signature(7))
+    );
+    assert_eq!(attribute("share/plain", ppk::SIGNATURE_ATTRIBUTE), None);
+    assert_eq!(
+        attribute("bin/server", ppk::DESCRIPTOR_ATTRIBUTE),
+        Some(sd(GXWI_SERVER))
+    );
+    assert_eq!(
+        attribute("libexec", ppk::DESCRIPTOR_ATTRIBUTE),
+        Some(sd(EVENTD))
+    );
+    // What no package describes gets the store's descriptor, the same for
+    // each file.
+    let plain = attribute("share/plain", ppk::DESCRIPTOR_ATTRIBUTE).unwrap();
+    assert_eq!(
+        attribute("lib/firmware/a.bin", ppk::DESCRIPTOR_ATTRIBUTE),
+        Some(plain)
+    );
+}

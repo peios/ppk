@@ -37,6 +37,8 @@ ppk \- create and manage Peios packages
 .IR class ]
 .RB [ \-\-source\-license
 .IR expression ]
+.RB [ \-\-source
+.IR package ]
 .I package path
 .br
 .B ppk fetch
@@ -1340,6 +1342,13 @@ is the default, and is recorded as nothing.
 For
 .BR pack ,
 record the license of the source the package was built from.
+.TP
+.BI \-\-source " package"
+For
+.BR pack ,
+record the package holding the corresponding source the package was built
+from, as a package ID with its architecture, such as
+.IR org.gnu.bash\-source@5.3.20\-1?arch=noarch .
 .TP
 .B \-\-copy\-files
 For

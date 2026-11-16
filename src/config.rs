@@ -22,7 +22,7 @@
 //! repository, the highest sequence, is state, not configuration: it is kept
 //! in the state directory, `/var/state/ppk` unless told otherwise.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::io;
@@ -30,8 +30,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::repo::{Pointer, PublicKey, Standing, check_ref_name};
-use crate::{Remote, Source};
+use crate::repo::{Pointer, PublicKey, Standing, Trees, check_ref_name};
+use crate::{Identity, Remote, Source};
 
 /// Where the repositories are read from unless told otherwise.
 pub const DEFAULT_CONFIG_DIR: &str = "/conf/ppk";
@@ -315,17 +315,20 @@ pub fn resolve(
     for repository in repositories {
         let source = repository.source(cache_dir)?;
         let pointer = repository.check_pointer(&source, state_dir)?;
-        holds.push((repository, held_names(&source, pointer.as_ref())?));
+        holds.push((repository, held_names(&source, pointer.as_ref())));
         sources.push(source);
     }
-    let holders = |name: &str| -> Vec<&Repository> {
-        (holds.iter())
-            .filter(|(_, held)| held.holds(name))
-            .map(|(repository, _)| *repository)
-            .collect()
+    let holders = |name: &str| -> Result<Vec<&Repository>> {
+        let mut holders = Vec::new();
+        for (repository, held) in &holds {
+            if held.holds(name)? {
+                holders.push(*repository);
+            }
+        }
+        Ok(holders)
     };
     let one = |name: &str| -> Result<&Repository> {
-        match holders(name).as_slice() {
+        match holders(name)?.as_slice() {
             [repository] => Ok(repository),
             [] => bail!("{name}: no configured repository publishes it"),
             several => {
@@ -364,37 +367,34 @@ pub fn resolve(
     })
 }
 
-/// The package names a repository publishes, to find the one a name
-/// belongs to.
+/// Where to find whether a repository publishes a name, to find the one
+/// a name belongs to.
 enum Held {
     /// An artifact directory, whose refs say.
     Dir(PathBuf),
-    /// A repository served over HTTP, whose catalog says.
-    Names(BTreeSet<String>),
+    /// A repository served over HTTP, whose catalog says, a name at a time.
+    Catalog(Trees, Option<Identity>),
 }
 
 impl Held {
-    fn holds(&self, name: &str) -> bool {
+    fn holds(&self, name: &str) -> Result<bool> {
         match self {
-            Self::Dir(path) => path.join("refs").join(name).is_dir(),
-            Self::Names(names) => names.contains(name),
+            Self::Dir(path) => Ok(path.join("refs").join(name).is_dir()),
+            Self::Catalog(_, None) => Ok(false),
+            Self::Catalog(trees, Some(catalog)) => Ok((trees.lookup(catalog, name)?.iter())
+                .any(|release| !matches!(release.standing, Standing::Deleted(_)))),
         }
     }
 }
 
-/// The names `source`, whose pointer file is `pointer`, publishes.
-fn held_names(source: &Source, pointer: Option<&Pointer>) -> Result<Held> {
-    if let Source::Dir(path) = source {
-        return Ok(Held::Dir(path.clone()));
+/// Where to find the names `source`, whose pointer file is `pointer`,
+/// publishes.
+fn held_names(source: &Source, pointer: Option<&Pointer>) -> Held {
+    match source {
+        Source::Dir(path) => Held::Dir(path.clone()),
+        Source::Remote(_) => Held::Catalog(
+            source.trees(),
+            pointer.and_then(|pointer| pointer.catalog.clone()),
+        ),
     }
-    let Some(catalog) = pointer.and_then(|pointer| pointer.catalog.as_ref()) else {
-        return Ok(Held::Names(BTreeSet::new()));
-    };
-    let names = (source.trees().read_tree(catalog)?.into_iter())
-        .filter(|(_, releases)| {
-            (releases.iter()).any(|release| !matches!(release.standing, Standing::Deleted(_)))
-        })
-        .map(|(name, _)| name)
-        .collect();
-    Ok(Held::Names(names))
 }

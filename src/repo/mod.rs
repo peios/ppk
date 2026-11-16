@@ -30,8 +30,9 @@ use anyhow::{Context, Result, bail};
 pub use export::{DEFAULT_LEVEL, Exported, export};
 pub use key::{PrivateKey, PublicKey};
 pub use pointer::{Blobs, Channel, LEADING, Pointer, check_ref_name};
-pub use tree::{Packages, Release, Standing, Trees};
+pub use tree::{Packages, Provider, Providers, Release, Standing, Trees};
 
+use crate::manifest::{parse_summary, summary_of};
 use crate::store::{self, ArtifactDir};
 use crate::{Entry, Identity, Metadata, PackageId, Version, parse_manifest, stored_packages};
 
@@ -142,6 +143,16 @@ fn update_with(
     }
     let mut pointer = old.next();
     pointer.catalog = Some(trees.write_tree(&catalog)?);
+    pointer.provides = Some(trees.write_provides(&providers(&trees, &catalog)?)?);
+    // Every snapshot is written again with its versions' summaries, which
+    // one written before summaries lacks, and is otherwise unchanged.
+    for (name, top) in (pointer.indexes.iter_mut()).filter(|(name, _)| *name != LEADING) {
+        *top = trees.write_tree(&with_summaries(
+            name,
+            &trees.read_legacy_tree(top)?,
+            &catalog,
+        )?)?;
+    }
     pointer
         .indexes
         .insert(LEADING.to_owned(), trees.write_tree(&leading)?);
@@ -149,12 +160,23 @@ fn update_with(
     Ok(Published { pointer, left_out })
 }
 
-/// The catalog of what `repo` holds: every ref, with the standing the
-/// catalog `old` names gave it, and every version it records as deleted.
+/// The catalog of what `repo` holds: every ref, with its summary and the
+/// standing the catalog `old` names gave it, and every version it records
+/// as deleted.
 fn catalog(repo: &Path, trees: &Trees, old: &Pointer) -> Result<Packages> {
     let previous = match &old.catalog {
-        Some(top) => trees.read_tree(top)?,
+        Some(top) => trees.read_legacy_tree(top)?,
         None => Packages::new(),
+    };
+    let layout = ArtifactDir::new(repo);
+    let known = |id: &PackageId, identity: &Identity| {
+        previous.get(id.name()).and_then(|releases| {
+            (releases.iter())
+                .find(|r| {
+                    r.version == id.version() && r.arch == id.arch() && r.identity == *identity
+                })
+                .and_then(|r| r.summary.clone())
+        })
     };
     let standing = |id: &PackageId| {
         previous.get(id.name()).and_then(|releases| {
@@ -169,6 +191,10 @@ fn catalog(repo: &Path, trees: &Trees, old: &Pointer) -> Result<Packages> {
             Some(Standing::Yanked) => Standing::Yanked,
             _ => Standing::Current,
         };
+        let summary = match known(&id, &identity) {
+            Some(summary) => summary,
+            None => write_summary(&layout, trees, &identity)?,
+        };
         catalog
             .entry(id.name().to_owned())
             .or_default()
@@ -176,6 +202,7 @@ fn catalog(repo: &Path, trees: &Trees, old: &Pointer) -> Result<Packages> {
                 version: id.version().to_owned(),
                 arch: id.arch().to_owned(),
                 identity,
+                summary: Some(summary),
                 standing,
             });
     }
@@ -193,6 +220,83 @@ fn catalog(repo: &Path, trees: &Trees, old: &Pointer) -> Result<Packages> {
         }
     }
     Ok(catalog)
+}
+
+/// Write the summary of the manifest `identity` as a tree node, returning
+/// the node's identity.
+fn write_summary(layout: &ArtifactDir, trees: &Trees, identity: &Identity) -> Result<Identity> {
+    let path = layout.manifest_path(identity);
+    let bytes = fs::read(&path).with_context(|| format!("{}", path.display()))?;
+    if Identity::of(&bytes) != *identity {
+        bail!("{}: does not match its hash", path.display());
+    }
+    let summary = summary_of(&bytes)
+        .and_then(|summary| std::str::from_utf8(summary).ok())
+        .with_context(|| format!("{}: not a manifest", path.display()))?;
+    trees.write(summary)
+}
+
+/// The provides tree of `catalog`: for each capability, every version not
+/// deleted that provides it, as its summary says, as resolving reads it.
+fn providers(trees: &Trees, catalog: &Packages) -> Result<Providers> {
+    let mut providers = Providers::new();
+    for (name, releases) in catalog {
+        for release in releases {
+            if matches!(release.standing, Standing::Deleted(_)) {
+                continue;
+            }
+            let id = PackageId::new(name, &release.version, &release.arch)?;
+            let summary = release
+                .summary
+                .as_ref()
+                .expect("a version published has a summary");
+            let manifest = parse_summary(trees.read(summary)?.as_bytes())
+                .with_context(|| format!("{id}: summary {summary}"))?;
+            if manifest.id != id {
+                bail!("{id}: its summary {summary} is {}'s", manifest.id);
+            }
+            for (capability, provided) in manifest.metadata.capabilities(&id) {
+                providers
+                    .entry(capability.to_owned())
+                    .or_default()
+                    .push(Provider {
+                        name: name.clone(),
+                        version: release.version.clone(),
+                        arch: release.arch.clone(),
+                        provided: provided.map(ToString::to_string),
+                    });
+            }
+        }
+    }
+    Ok(providers)
+}
+
+/// The index `name`'s `packages`, each with the summary `catalog` gives it.
+fn with_summaries(name: &str, packages: &Packages, catalog: &Packages) -> Result<Packages> {
+    let mut out = Packages::new();
+    for (package, releases) in packages {
+        for release in releases {
+            let summary = (catalog.get(package).into_iter().flatten())
+                .find(|r| {
+                    r.version == release.version
+                        && r.arch == release.arch
+                        && r.identity == release.identity
+                })
+                .and_then(|r| r.summary.clone());
+            let Some(summary) = summary else {
+                bail!(
+                    "index {name}: holds {package}@{} {}, which the catalog has no summary of",
+                    release.version,
+                    release.arch
+                );
+            };
+            out.entry(package.clone()).or_default().push(Release {
+                summary: Some(summary),
+                ..release.clone()
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// `leading` for `catalog`: the newest current version of each package for
@@ -349,6 +453,8 @@ pub fn delete(repo: &Path, key: &PrivateKey, id: &PackageId, reason: &str) -> Re
     let Some(identity) = store::read_ref(&layout.ref_path(id))? else {
         bail!("{id}: no such package in {}", repo.display());
     };
+    // Its summary stays in the catalog's tombstone, as it was published.
+    let summary = write_summary(&layout, &Trees::new(repo), &identity)?;
     // Nothing is removed until the files to keep are known.
     let doomed = files_of(&layout, &identity)?;
     let kept = files_of_others(&layout, &identity)?;
@@ -366,6 +472,7 @@ pub fn delete(repo: &Path, key: &PrivateKey, id: &PackageId, reason: &str) -> Re
                 version: id.version().to_owned(),
                 arch: id.arch().to_owned(),
                 identity,
+                summary: Some(summary),
                 standing: Standing::Deleted(reason),
             });
         Ok(())

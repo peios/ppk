@@ -102,8 +102,8 @@ ppk repo add peios http://cache.lan/peios/ https://pkgs.peios.org/ \
 
 If a URL can't be reached or doesn't have a file, `ppk` tries the next one.
 `ppk` keeps the tree nodes and manifests it reads from a repository served
-over HTTP in `/var/cache/ppk`, so only the first fetch reads all of them.
-Pass `--cache-dir` to keep them somewhere else.
+over HTTP in `/var/cache/ppk`, so it reads each of them only once. Pass
+`--cache-dir` to keep them somewhere else.
 
 A request for a bare name, or a name with a constraint, follows the channel
 its repository tracks, so this fetches the version `stable` holds, and what
@@ -141,7 +141,15 @@ catalog its signed pointer file leads to, at the identity the catalog gives,
 so a package it didn't publish, or a ref changed since, is refused.
 
 A repository served over HTTP has no refs that `ppk` can list, so its
-catalog says which packages it has. `ppk` checks every file it reads from
+catalog says which packages it has. To choose packages, `ppk` reads only the
+catalog's entries for the names it needs and each version's summary: the
+start of its manifest, which says what the package needs and provides but
+not what files it holds. A catalog also lists what provides each
+capability, so finding a library by its soname reads no more than that.
+`ppk` reads a manifest only when it fetches the package, and refuses one
+that doesn't begin with the summary it chose the package by.
+
+`ppk` checks every file it reads from
 the repository against its hash before using it, and checks the pointer file
 against the key. A file that fails its check is an error: `ppk` doesn't try
 the next URL, because a server that sends the wrong file is broken or

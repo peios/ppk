@@ -18,13 +18,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::id::check_name;
+use crate::manifest::parse_summary;
 use crate::metadata::check_capability;
 use crate::repo::{self, Standing, check_ref_name};
 use crate::store::{self, ArtifactDir};
 use crate::{Constraint, Identity, Metadata, PackageId, Profile, Source, Version, parse_manifest};
 
 /// What a request or requirement asks for.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Wanted {
     /// A package, by name.
     Package(String),
@@ -297,7 +298,10 @@ pub(crate) fn resolve_with(
     signed: &BTreeMap<PathBuf, repo::PublicKey>,
 ) -> Result<Resolution> {
     let wanted_indexes = requests.iter().filter_map(|r| r.index.clone()).collect();
-    let mut index = Index::read(sources, arch, &wanted_indexes, signed)?;
+    let roots = (pins.iter().map(|id| Wanted::Package(id.name().to_owned())))
+        .chain(requests.iter().map(|request| request.wanted.clone()))
+        .collect::<Vec<_>>();
+    let mut index = Index::read(sources, arch, &wanted_indexes, signed, &roots)?;
     let mut pinned = BTreeMap::new();
     let mut pin_requests = Vec::new();
     for id in pins {
@@ -380,11 +384,9 @@ impl Candidate {
     /// `None` if it doesn't provide it. A `provides` entry is given before
     /// its own name.
     fn provides(&self, capability: &str) -> Option<Option<&Version>> {
-        match self.metadata.provides.get(capability) {
-            Some(version) => Some(version.as_ref()),
-            None if capability == self.id.name() => Some(Some(self.id.parsed_version())),
-            None => None,
-        }
+        (self.metadata.capabilities(&self.id))
+            .find(|(name, _)| *name == capability)
+            .map(|(_, version)| version)
     }
 
     /// Whether this satisfies `need`. A capability is satisfied by its own
@@ -438,14 +440,15 @@ struct Published {
     /// `name@version`.
     indexes: BTreeMap<String, BTreeSet<String>>,
     deleted: Vec<(String, String, String)>,
-    /// For a repository whose signature was checked, or which is served
-    /// over HTTP, the identity its catalog gives each version published, by
-    /// name and version; `None` where refs are trusted for themselves.
+    /// For a repository whose signature was checked, the identity its
+    /// catalog gives each version published, by name and version; `None`
+    /// where refs are trusted for themselves.
     catalog: Option<BTreeMap<(String, String), Identity>>,
 }
 
 impl Published {
-    /// What `source` publishes, if it is a repository.
+    /// What the artifact directory `source` publishes, if it is a
+    /// repository.
     fn read(
         source: &Source,
         arch: &str,
@@ -453,19 +456,17 @@ impl Published {
         key: Option<&repo::PublicKey>,
     ) -> Result<Self> {
         let mut published = Self::default();
-        let remote = matches!(source, Source::Remote(_));
         let Some(pointer) = source.pointer(key)? else {
-            if remote {
-                bail!("{source}: not published as a repository, which fetching over HTTP needs");
-            }
             if key.is_some() {
                 bail!("{source}: not published as a repository, which its key needs");
             }
             return Ok(published);
         };
-        if key.is_some() || remote {
+        if key.is_some() {
             published.catalog = Some(BTreeMap::new());
         }
+        // A directory's packages are its refs, so its trees are read for
+        // what they say of them, whether or not they give summaries.
         let trees = source.trees();
         let held = |packages: &repo::Packages| {
             (packages.iter())
@@ -477,7 +478,7 @@ impl Published {
                 .collect::<Vec<_>>()
         };
         if let Some(catalog) = &pointer.catalog {
-            for (name, release) in held(&trees.read_tree(catalog)?) {
+            for (name, release) in held(&trees.read_legacy_tree(catalog)?) {
                 if let Some(identities) = &mut published.catalog
                     && !matches!(release.standing, Standing::Deleted(_))
                 {
@@ -503,7 +504,7 @@ impl Published {
             let Ok((_, top)) = pointer.index_of(index) else {
                 continue;
             };
-            let versions = (held(&trees.read_tree(top)?).into_iter())
+            let versions = (held(&trees.read_legacy_tree(top)?).into_iter())
                 .map(|(name, release)| format!("{name}@{}", release.version))
                 .collect();
             published.indexes.insert(index.clone(), versions);
@@ -513,11 +514,15 @@ impl Published {
 }
 
 impl Index {
+    /// The packages for `arch` in `sources`: every one a directory holds,
+    /// and of a repository served over HTTP, those `roots` can reach, read
+    /// a name at a time.
     fn read(
         sources: &[Source],
         arch: &str,
         wanted: &BTreeSet<String>,
         signed: &BTreeMap<PathBuf, repo::PublicKey>,
+        roots: &[Wanted],
     ) -> Result<Self> {
         if sources.is_empty() {
             bail!("no artifact directory to choose packages from");
@@ -525,10 +530,14 @@ impl Index {
         let mut names: BTreeMap<String, Vec<Candidate>> = BTreeMap::new();
         let mut deleted: BTreeMap<String, Vec<(String, Source, String)>> = BTreeMap::new();
         let mut found = BTreeSet::new();
+        let mut remotes = Vec::new();
         for source in sources {
             let key = match source {
                 Source::Dir(dir) => signed.get(dir),
-                Source::Remote(remote) => remote.key(),
+                Source::Remote(_) => {
+                    remotes.push(Served::read(source, wanted, &mut found)?);
+                    continue;
+                }
             };
             let published = Published::read(source, arch, wanted, key)?;
             found.extend(published.indexes.keys().cloned());
@@ -567,6 +576,9 @@ impl Index {
                 });
             }
         }
+        if !remotes.is_empty() {
+            reach(&remotes, arch, roots, &mut names, &mut deleted)?;
+        }
         if let Some(missing) = wanted.difference(&found).next() {
             bail!("#{missing}: no repository among the artifact directories publishes it");
         }
@@ -597,23 +609,201 @@ impl Index {
     }
 }
 
-/// The packages for `arch` that `source` holds, and the identity of each:
-/// a directory's refs, those its signed catalog lists if it is signed, or a
-/// remote repository's catalog.
-fn held(source: &Source, arch: &str, published: &Published) -> Result<Vec<(PackageId, Identity)>> {
-    let dir = match source {
-        Source::Dir(dir) => dir,
-        Source::Remote(_) => {
-            let catalog = published
-                .catalog
-                .as_ref()
-                .expect("a remote's catalog is read");
-            return (catalog.iter())
-                .map(|((name, version), identity)| {
-                    Ok((PackageId::new(name, version, arch)?, identity.clone()))
-                })
-                .collect();
+/// A name's candidates, and each version of it deleted, with why.
+type Versions = (Vec<Candidate>, Vec<(String, String)>);
+
+/// A repository served over HTTP, from which only the names resolving can
+/// reach are read: a name's versions from its node in the catalog, each
+/// version's metadata from its summary, and a capability's providers from
+/// the catalog's provides tree. No manifest is read.
+struct Served<'a> {
+    source: &'a Source,
+    trees: repo::Trees,
+    pointer: repo::Pointer,
+    /// The index or channel asked for each that it publishes, and the top
+    /// node of the index it is or follows.
+    indexes: Vec<(String, Identity)>,
+}
+
+impl<'a> Served<'a> {
+    fn read(
+        source: &'a Source,
+        wanted: &BTreeSet<String>,
+        found: &mut BTreeSet<String>,
+    ) -> Result<Self> {
+        let Some(pointer) = source.pointer(None)? else {
+            bail!("{source}: not published as a repository, which fetching over HTTP needs");
+        };
+        let mut indexes = Vec::new();
+        for index in wanted {
+            if let Ok((_, top)) = pointer.index_of(index) {
+                indexes.push((index.clone(), top.clone()));
+                found.insert(index.clone());
+            }
         }
+        Ok(Self {
+            source,
+            trees: source.trees(),
+            pointer,
+            indexes,
+        })
+    }
+
+    /// The versions of `name` for `arch` it publishes, and those it
+    /// deleted, with why.
+    fn name(&self, name: &str, arch: &str) -> Result<Versions> {
+        let (mut candidates, mut deleted) = (Vec::new(), Vec::new());
+        let Some(catalog) = &self.pointer.catalog else {
+            return Ok((candidates, deleted));
+        };
+        let mut in_indexes = Vec::new();
+        for (index, top) in &self.indexes {
+            let versions: BTreeSet<String> = (self.trees.lookup(top, name)?.into_iter())
+                .filter(|release| release.arch == arch)
+                .map(|release| release.version)
+                .collect();
+            in_indexes.push((index, versions));
+        }
+        for release in self.trees.lookup(catalog, name)? {
+            if release.arch != arch {
+                continue;
+            }
+            let yanked = match release.standing {
+                Standing::Current => false,
+                Standing::Yanked => true,
+                Standing::Deleted(reason) => {
+                    deleted.push((release.version, reason));
+                    continue;
+                }
+            };
+            let id = PackageId::new(name, &release.version, arch)?;
+            let summary = release.summary.expect("a version published has a summary");
+            let manifest = parse_summary(self.trees.read(&summary)?.as_bytes())
+                .with_context(|| format!("{id}: summary {summary} in {}", self.source))?;
+            if manifest.id != id {
+                bail!(
+                    "{id}: its summary {summary} in {} is {}'s",
+                    self.source,
+                    manifest.id
+                );
+            }
+            candidates.push(Candidate {
+                yanked,
+                indexes: (in_indexes.iter())
+                    .filter(|(_, versions)| versions.contains(&release.version))
+                    .map(|(index, _)| (*index).clone())
+                    .collect(),
+                id,
+                identity: release.identity,
+                source: self.source.clone(),
+                metadata: manifest.metadata,
+            });
+        }
+        Ok((candidates, deleted))
+    }
+
+    /// The names of the packages with a version for `arch` that provides
+    /// `capability`.
+    fn providers(&self, capability: &str, arch: &str) -> Result<Vec<String>> {
+        if self.pointer.catalog.is_none() {
+            return Ok(Vec::new());
+        }
+        let Some(top) = &self.pointer.provides else {
+            bail!(
+                "{}: published without a provides tree, which resolving a capability needs; \
+                 publish it again with ppk repo update",
+                self.source
+            );
+        };
+        Ok((self.trees.lookup_providers(top, capability)?.into_iter())
+            .filter(|provider| provider.arch == arch)
+            .map(|provider| provider.name)
+            .collect())
+    }
+}
+
+/// Read into `names` and `deleted` every name of `remotes` that `roots`
+/// reach: each package asked for by name, each package that provides a
+/// capability asked for, and, from any candidate of a name read, each
+/// package it depends on and each capability it requires. Every version
+/// of a name is read, so the index holds what resolving would choose
+/// among, whatever it chooses.
+fn reach(
+    remotes: &[Served],
+    arch: &str,
+    roots: &[Wanted],
+    names: &mut BTreeMap<String, Vec<Candidate>>,
+    deleted: &mut BTreeMap<String, Vec<(String, Source, String)>>,
+) -> Result<()> {
+    let mut queue: VecDeque<Wanted> = roots.iter().cloned().collect();
+    let mut seen = BTreeSet::new();
+    while let Some(wanted) = queue.pop_front() {
+        if !seen.insert(wanted.clone()) {
+            continue;
+        }
+        let name = match wanted {
+            Wanted::Package(name) => name,
+            Wanted::Capability(capability) => {
+                for remote in remotes {
+                    for name in remote.providers(&capability, arch)? {
+                        queue.push_back(Wanted::Package(name));
+                    }
+                }
+                // A directory's providers have their needs followed too.
+                for (name, candidates) in names.iter() {
+                    if candidates.iter().any(|c| c.provides(&capability).is_some()) {
+                        queue.push_back(Wanted::Package(name.clone()));
+                    }
+                }
+                continue;
+            }
+        };
+        for remote in remotes {
+            let (candidates, gone) = remote.name(&name, arch)?;
+            for (version, reason) in gone {
+                deleted.entry(name.clone()).or_default().push((
+                    version,
+                    remote.source.clone(),
+                    reason,
+                ));
+            }
+            let held = names.entry(name.clone()).or_default();
+            for candidate in candidates {
+                if let Some(first) = held.iter().find(|c| c.id == candidate.id) {
+                    if first.identity != candidate.identity {
+                        bail!(
+                            "{} is {} in {}, but {} in {}",
+                            candidate.id,
+                            first.identity,
+                            first.source,
+                            candidate.identity,
+                            candidate.source,
+                        );
+                    }
+                    continue;
+                }
+                held.push(candidate);
+            }
+        }
+        for candidate in names.get(&name).into_iter().flatten() {
+            let needs = (candidate.metadata.dependencies.keys())
+                .map(|name| Wanted::Package(name.clone()))
+                .chain(
+                    (candidate.metadata.requires.keys())
+                        .map(|capability| Wanted::Capability(capability.clone())),
+                );
+            queue.extend(needs.filter(|need| !seen.contains(need)));
+        }
+    }
+    Ok(())
+}
+
+/// The packages for `arch` that the artifact directory `source` holds, and
+/// the identity of each: its refs, those its signed catalog lists if it is
+/// signed.
+fn held(source: &Source, arch: &str, published: &Published) -> Result<Vec<(PackageId, Identity)>> {
+    let Source::Dir(dir) = source else {
+        unreachable!("only a directory's packages are listed");
     };
     let layout = ArtifactDir::new(dir);
     let mut held = Vec::new();

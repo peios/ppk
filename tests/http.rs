@@ -303,7 +303,7 @@ fn a_dead_url_and_a_missing_file_fall_back_to_the_next_url() {
 }
 
 #[test]
-fn tree_nodes_and_manifests_are_cached_and_checked_again() {
+fn resolving_reads_tree_nodes_and_summaries_and_caches_them() {
     let work = tempfile::tempdir().unwrap();
     let repo = work.path().join("repo");
     let key = load(TEST_KEY);
@@ -317,32 +317,37 @@ fn tree_nodes_and_manifests_are_cached_and_checked_again() {
             .ids()
     };
 
+    // Resolving reads no manifest, only tree nodes, summaries among them.
     let first = Server::new(&repo);
     let ids = resolve(&first);
     assert_eq!(ids, [id(APP), id(BASE)]);
-    let manifests: Vec<_> = fs::read_dir(cache.join("manifests/sha256"))
-        .unwrap()
-        .collect();
-    assert_eq!(manifests.len(), 2);
-    assert!(cache.join("trees/sha256").is_dir());
+    let requests = first.requests();
+    assert_eq!(requests[..2], ["repository", "repository.sig"]);
+    assert!(
+        requests[2..]
+            .iter()
+            .all(|path| path.starts_with("trees/sha256/")),
+        "{requests:?}"
+    );
+    assert!(!cache.join("manifests").exists());
 
     // A second run reads only the pointer file and its signature.
     let second = Server::new(&repo);
     assert_eq!(resolve(&second), ids);
     assert_eq!(second.requests(), ["repository", "repository.sig"]);
 
-    // A cached manifest that was changed is read again.
-    let identity = ppk::packed(&id(APP), &repo).unwrap().unwrap();
-    fs::write(
-        cache.join("manifests/sha256").join(identity.hex()),
-        b"tampered",
-    )
-    .unwrap();
+    // A cached summary that was changed is read again.
+    let pointer = repo::read_pointer(&repo, None).unwrap().unwrap();
+    let release = &repo::Trees::new(&repo)
+        .lookup(pointer.catalog.as_ref().unwrap(), "dev.peios.app")
+        .unwrap()[0];
+    let summary = release.summary.as_ref().unwrap();
+    fs::write(cache.join("trees/sha256").join(summary.hex()), b"tampered").unwrap();
     let third = Server::new(&repo);
     assert_eq!(resolve(&third), ids);
     assert_eq!(
         third.requests()[2..],
-        [format!("manifests/sha256/{}", identity.hex())]
+        [format!("trees/sha256/{}", summary.hex())]
     );
 }
 

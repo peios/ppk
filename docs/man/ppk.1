@@ -462,12 +462,18 @@ is passed over for the next.
 A file that fails its check is an error, and no other base URL is tried.
 If no base URL serves a file, the error names each URL and why it didn't.
 .PP
-Tree nodes and manifests read are kept in the cache directory under the
-paths the repository gives them, and checked against their hash again each
-time they are read from it.
-Resolving reads the manifest of every version the catalog lists for the
-architecture, so the first resolution from a repository reads all of them,
-and later ones only what has changed.
+Resolving reads no manifest.
+It reads, for each package name it reaches, the name's node in the catalog
+and each of its versions' summaries, and for each capability, its node in
+the catalog's provides tree, as
+.I trees/sha256/
+describes under FILES.
+Fetching reads the manifests of the packages it stores, and refuses one
+that doesn't begin with the summary its package was chosen by.
+.PP
+Tree nodes, summaries among them, and manifests read are kept in the cache
+directory under the paths the repository gives them, and checked against
+their hash again each time they are read from it.
 Blobs aren't kept in the cache: fetching writes them into the store.
 .PP
 ppk waits 15 seconds to connect, 30 seconds for a response, and 60 seconds
@@ -916,6 +922,11 @@ needing it; with
 .BR \-\-strict ,
 that is an error and nothing is published.
 A version yanked or deleted stays so.
+The catalog gives each version's summary, written beside the tree's nodes,
+and the catalog's provides tree is written too, so that resolving from the
+repository over HTTP reads no manifest.
+A catalog or snapshot written by a ppk from before summaries is written
+again with them, holding the same versions.
 .IP
 Every
 .B repo
@@ -1803,6 +1814,7 @@ sequence 1042
 signed 2026\-11\-13T11:30:00Z
 blobs zstd
 catalog sha256:...
+provides sha256:...
 index 2026.10.0 sha256:...
 index leading sha256:...
 channel stable 2026.10
@@ -1819,7 +1831,9 @@ are.
 .B catalog
 and each
 .B index
-name the top node of a tree;
+name the top node of a tree, and
+.B provides
+the top node of the catalog's provides tree;
 each
 .B channel
 names the index or channel it follows, and
@@ -1832,19 +1846,33 @@ The ML-DSA-65 signature of the pointer file's bytes, in the context
 .BR "ppk repository" .
 .TP
 .IR trees/sha256/ hash
-A node of the catalog's or an index's tree, named by the SHA-256 hash of its
-content.
+A node of the catalog's or an index's tree, or of the catalog's provides
+tree, or a version's summary, named by the SHA-256 hash of its content.
 A package's node has a line for each version:
-the version, the architecture and the manifest's identity, then
+the version, the architecture, the manifest's identity and the summary's,
+then
 .BR yanked ,
 or
 .B deleted
 and a reason, for a version taken back.
+A deleted version's line can lack its summary.
+A summary is the manifest's head: every line before the blank line before
+.BR [files] ,
+which holds the package's ID and metadata but not its files.
+A provides tree's leaves are capabilities rather than packages: a
+capability's node has a line for each version, of any package not deleted,
+that provides it: the package's name, version and architecture, and the
+version it provides the capability at, or
+.B \-
+for none.
+Each version provides its own name at its own version, unless its
+.B [provides]
+table gives that name, and each capability that table gives.
 A bucket's node has a line for each package whose name falls in it: its
 name and its node's hash.
 The top node has a line for each bucket: the bucket and its node's hash.
-A name falls in the bucket of the first two hex digits of the SHA-256 hash
-of the name.
+A name or capability falls in the bucket of the first two hex digits of the
+SHA-256 hash of the name.
 Every node's lines are sorted and unique, each ending in a newline.
 A catalog lists every version published; an index, one of each package for
 each architecture.

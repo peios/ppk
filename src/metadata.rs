@@ -95,6 +95,21 @@ impl fmt::Display for LicenseClass {
 }
 
 impl Metadata {
+    /// Every capability the package `id`, with this metadata, provides, and
+    /// the version it provides each at, if any: each its `provides` table
+    /// lists, then its own name at its own version, unless the table lists
+    /// that too (PSPU 5.4: names share one namespace).
+    pub(crate) fn capabilities<'a>(
+        &'a self,
+        id: &'a PackageId,
+    ) -> impl Iterator<Item = (&'a str, Option<&'a Version>)> {
+        let own = (!self.provides.contains_key(id.name()))
+            .then(|| (id.name(), Some(id.parsed_version())));
+        (self.provides.iter())
+            .map(|(name, version)| (name.as_str(), version.as_ref()))
+            .chain(own)
+    }
+
     /// Whether there is nothing to record.
     pub fn is_empty(&self) -> bool {
         self.render_fields().is_empty() && self.render_tables().is_empty()

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::access::{Security, Stamp};
+use crate::manifest::summary_of;
 use crate::repo::Blobs;
 use crate::store::{self, ArtifactDir};
 use crate::{Entry, Identity, Manifest, PackageId, Resolved, Source, parse_manifest};
@@ -308,6 +309,21 @@ fn check<'a>(pick: &Pick<'a>, to: &ArtifactDir, replace: bool) -> Result<Checked
     let manifest = parse_manifest(&bytes).with_context(|| place.clone())?;
     if manifest.id != *id {
         bail!("{place}: names {}, not {id}", manifest.id);
+    }
+    // A repository served over HTTP was resolved from the summary its
+    // catalog lists, so the manifest must be what that summary said.
+    if let Source::Remote(_) = source {
+        let Some(listed) = source
+            .listed(id)?
+            .filter(|listed| listed.identity == identity)
+        else {
+            bail!("{id}: {source} doesn't list it as {identity}");
+        };
+        let summary = listed.summary.expect("a version published has a summary");
+        let text = source.trees().read(&summary)?;
+        if summary_of(&bytes) != Some(text.as_bytes()) {
+            bail!("{place}: does not begin with its summary, {summary}");
+        }
     }
     Ok(Checked {
         id: id.clone(),

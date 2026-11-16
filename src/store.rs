@@ -320,13 +320,34 @@ pub(crate) fn write_pending(
 pub(crate) fn copy_pending(
     path: &Path,
     dest: &Path,
-    (hex, exec): (&str, bool),
+    form: (&str, bool),
     security: Security,
     unstamped: &mut usize,
 ) -> Result<Option<Pending>> {
     let file = File::open(path).with_context(|| format!("{}", path.display()))?;
+    copy_pending_from(
+        file,
+        &path.display().to_string(),
+        dest,
+        form,
+        security,
+        unstamped,
+    )
+}
+
+/// Copy what `reader` reads, from `source`, as [`copy_pending`] copies a
+/// file: under a temporary name beside `dest`, and `None`, keeping nothing,
+/// if it does not hash to `hex`.
+pub(crate) fn copy_pending_from(
+    reader: impl Read,
+    source: &str,
+    dest: &Path,
+    (hex, exec): (&str, bool),
+    security: Security,
+    unstamped: &mut usize,
+) -> Result<Option<Pending>> {
     let mut reader = HashingReader {
-        inner: file,
+        inner: reader,
         hasher: Sha256::new(),
     };
     let dir = dest
@@ -334,7 +355,7 @@ pub(crate) fn copy_pending(
         .expect("a blob's destination is in a directory");
     let mode = if exec { EXEC_BLOB_MODE } else { ARTIFACT_MODE };
     let mut tmp = new_temp(dir, mode)?;
-    io::copy(&mut reader, &mut tmp).with_context(|| format!("{}", path.display()))?;
+    io::copy(&mut reader, &mut tmp).with_context(|| source.to_owned())?;
     if Identity::from_digest(reader.hasher.finalize()).hex() != hex {
         return Ok(None);
     }
@@ -443,9 +464,10 @@ fn persist(tmp: tempfile::NamedTempFile, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-struct HashingReader<R> {
-    inner: R,
-    hasher: Sha256,
+/// A reader that hashes what it reads.
+pub(crate) struct HashingReader<R> {
+    pub(crate) inner: R,
+    pub(crate) hasher: Sha256,
 }
 
 impl<R: Read> Read for HashingReader<R> {

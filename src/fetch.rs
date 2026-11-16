@@ -1,4 +1,5 @@
-//! Fetching a package from another artifact directory.
+//! Fetching a package from another artifact directory, or from a
+//! repository served over HTTP.
 
 use std::collections::HashSet;
 use std::fs;
@@ -7,8 +8,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::access::{Security, Stamp};
+use crate::repo::Blobs;
 use crate::store::{self, ArtifactDir};
-use crate::{Entry, Identity, Manifest, PackageId, parse_manifest};
+use crate::{Entry, Identity, Manifest, PackageId, Resolved, Source, parse_manifest};
 
 /// The result of a successful fetch.
 #[derive(Debug)]
@@ -45,8 +47,27 @@ pub struct Fetched {
 /// check stops the fetch after earlier blobs were copied; they are named by
 /// their content, so they are correct and harmless.
 pub fn fetch(id: &PackageId, source: &Path, artifact_dir: &Path) -> Result<Fetched> {
-    let mut fetched = fetch_as(std::slice::from_ref(id), source, artifact_dir, false)?;
+    fetch_from(id, &Source::from(source), artifact_dir)
+}
+
+/// Copy package `id` from `source` into `artifact_dir`, as [`fetch`] does.
+/// From a repository served over HTTP, the package is the one its
+/// catalog lists, checked against its key if it has one, and every file is
+/// checked against its hash as it is read, before it is named in the store.
+pub fn fetch_from(id: &PackageId, source: &Source, artifact_dir: &Path) -> Result<Fetched> {
+    let mut fetched = fetch_as(&[Pick::new(id, source, None)], artifact_dir, false)?;
     Ok(fetched.remove(0))
+}
+
+/// Copy each package `packages` chose into `artifact_dir`, from the source
+/// that holds it, as [`fetch_all`] does. Each is the package its resolution
+/// chose: the manifest is the identity that chose it, not what the source
+/// says now.
+pub fn fetch_resolved(packages: &[Resolved], artifact_dir: &Path) -> Result<Vec<Fetched>> {
+    let picks: Vec<Pick> = (packages.iter())
+        .map(|package| Pick::new(&package.id, &package.source, Some(&package.identity)))
+        .collect();
+    fetch_as(&picks, artifact_dir, false)
 }
 
 /// Copy each of `ids` from `source` into `artifact_dir`, as [`fetch`] does,
@@ -55,7 +76,9 @@ pub fn fetch(id: &PackageId, source: &Path, artifact_dir: &Path) -> Result<Fetch
 /// of packages is much quicker to fetch this way than one by one. It checks
 /// every package before it writes anything.
 pub fn fetch_all(ids: &[PackageId], source: &Path, artifact_dir: &Path) -> Result<Vec<Fetched>> {
-    fetch_as(ids, source, artifact_dir, false)
+    let source = Source::from(source);
+    let picks: Vec<Pick> = ids.iter().map(|id| Pick::new(id, &source, None)).collect();
+    fetch_as(&picks, artifact_dir, false)
 }
 
 /// Copy package `id` from `source` into `artifact_dir`, as [`fetch`] does,
@@ -67,36 +90,58 @@ pub fn fetch_all(ids: &[PackageId], source: &Path, artifact_dir: &Path) -> Resul
 /// packages are rebuilt at the same versions before it is published. Only
 /// the ref changes: the replaced manifest and its blobs stay.
 pub fn fetch_replacing(id: &PackageId, source: &Path, artifact_dir: &Path) -> Result<Fetched> {
-    let mut fetched = fetch_as(std::slice::from_ref(id), source, artifact_dir, true)?;
+    fetch_replacing_from(id, &Source::from(source), artifact_dir)
+}
+
+/// Copy package `id` from `source` into `artifact_dir`, as [`fetch_from`]
+/// does, but replace whatever is stored as `id` there already, as
+/// [`fetch_replacing`] does.
+pub fn fetch_replacing_from(
+    id: &PackageId,
+    source: &Source,
+    artifact_dir: &Path,
+) -> Result<Fetched> {
+    let mut fetched = fetch_as(&[Pick::new(id, source, None)], artifact_dir, true)?;
     Ok(fetched.remove(0))
 }
 
-/// A package checked in the source, to be copied.
-struct Source {
+/// A package to fetch: where from, and its identity if it is known
+/// already, rather than to be read from the source.
+struct Pick<'a> {
+    id: &'a PackageId,
+    source: &'a Source,
+    identity: Option<&'a Identity>,
+}
+
+impl<'a> Pick<'a> {
+    fn new(id: &'a PackageId, source: &'a Source, identity: Option<&'a Identity>) -> Self {
+        Self {
+            id,
+            source,
+            identity,
+        }
+    }
+}
+
+/// A package checked in its source, to be copied.
+struct Checked<'a> {
     id: PackageId,
+    source: &'a Source,
+    /// How the source writes its blobs.
+    blobs: Blobs,
     identity: Identity,
     bytes: Vec<u8>,
     manifest: Manifest,
 }
 
-fn fetch_as(
-    ids: &[PackageId],
-    source: &Path,
-    artifact_dir: &Path,
-    replace: bool,
-) -> Result<Vec<Fetched>> {
-    if !fs::metadata(source)
-        .with_context(|| format!("{}", source.display()))?
-        .is_dir()
-    {
-        bail!("{}: not a directory", source.display());
-    }
-    let from = ArtifactDir::new(source);
+fn fetch_as(picks: &[Pick], artifact_dir: &Path, replace: bool) -> Result<Vec<Fetched>> {
+    // Where each file is below a source's top.
+    let from = ArtifactDir::new(Path::new(""));
     let to = ArtifactDir::new(artifact_dir);
 
     let mut packages = Vec::new();
-    for id in ids {
-        packages.push(check(id, &from, &to, source, replace)?);
+    for pick in picks {
+        packages.push(check(pick, &to, replace)?);
     }
 
     let blob_dir = to.blob_dir();
@@ -120,8 +165,10 @@ fn fetch_as(
             if !done.insert(blob.clone()) || blob.exists() {
                 continue;
             }
-            let source_blob = from.blob_path(signature, false);
-            let Some(copied) = store::copy_pending(
+            let (source_blob, reader) =
+                (package.source).open_blob(&from.blob_path(signature, false), package.blobs)?;
+            let Some(copied) = store::copy_pending_from(
+                reader,
                 &source_blob,
                 &blob,
                 (signature.as_str(), false),
@@ -129,7 +176,7 @@ fn fetch_as(
                 unstamped,
             )?
             else {
-                bail!("{}: does not match its hash", source_blob.display());
+                bail!("{source_blob}: does not match its hash");
             };
             pending.push(copied);
             *blobs_written += 1;
@@ -165,8 +212,10 @@ fn fetch_as(
                 }
                 continue;
             }
-            let source_blob = from.file_path(entry);
-            let Some(copied) = store::copy_pending(
+            let (source_blob, reader) =
+                (package.source).open_blob(&from.file_path(entry), package.blobs)?;
+            let Some(copied) = store::copy_pending_from(
+                reader,
                 &source_blob,
                 &blob,
                 (hex.as_str(), *exec),
@@ -174,7 +223,7 @@ fn fetch_as(
                 unstamped,
             )?
             else {
-                bail!("{}: does not match its hash", source_blob.display());
+                bail!("{source_blob}: does not match its hash");
             };
             pending.push(copied);
             *blobs_written += 1;
@@ -225,18 +274,25 @@ fn fetch_as(
         .collect())
 }
 
-/// Check package `id` in the source: its ref, and a manifest that hashes to
-/// it, names `id` and parses. Unless `replace`, `artifact_dir` must not hold
-/// another package as `id`.
-fn check(
-    id: &PackageId,
-    from: &ArtifactDir,
-    to: &ArtifactDir,
-    source: &Path,
-    replace: bool,
-) -> Result<Source> {
-    let Some(identity) = store::read_ref(&from.ref_path(id))? else {
-        bail!("{id}: no such package in {}", source.display());
+/// Check the package `pick` names in its source: its identity, given or
+/// read there, and a manifest that hashes to it, names the package and
+/// parses. Unless `replace`, `artifact_dir` must not hold another package
+/// under its ID.
+fn check<'a>(pick: &Pick<'a>, to: &ArtifactDir, replace: bool) -> Result<Checked<'a>> {
+    let (id, source) = (pick.id, pick.source);
+    if let Source::Dir(dir) = source
+        && !fs::metadata(dir)
+            .with_context(|| format!("{}", dir.display()))?
+            .is_dir()
+    {
+        bail!("{}: not a directory", dir.display());
+    }
+    let identity = match pick.identity {
+        Some(identity) => identity.clone(),
+        None => match source.identity(id)? {
+            Some(identity) => identity,
+            None => bail!("{id}: no such package in {source}"),
+        },
     };
     // The ref write at the end still refuses to replace a ref that appears
     // after this check.
@@ -244,29 +300,19 @@ fn check(
         && let Some(existing) =
             store::read_ref(&to.ref_path(id))?.filter(|existing| *existing != identity)
     {
-        bail!(
-            "{id}: already present as {existing}, but {} has {identity}",
-            source.display()
-        );
+        bail!("{id}: already present as {existing}, but {source} has {identity}");
     }
 
-    let source_manifest = from.manifest_path(&identity);
-    let bytes =
-        fs::read(&source_manifest).with_context(|| format!("{}", source_manifest.display()))?;
-    if Identity::of(&bytes) != identity {
-        bail!("{}: does not match its hash", source_manifest.display());
-    }
-    let manifest =
-        parse_manifest(&bytes).with_context(|| format!("{}", source_manifest.display()))?;
+    let bytes = source.manifest(&identity)?;
+    let place = source.manifest_place(&identity);
+    let manifest = parse_manifest(&bytes).with_context(|| place.clone())?;
     if manifest.id != *id {
-        bail!(
-            "{}: names {}, not {id}",
-            source_manifest.display(),
-            manifest.id
-        );
+        bail!("{place}: names {}, not {id}", manifest.id);
     }
-    Ok(Source {
+    Ok(Checked {
         id: id.clone(),
+        source,
+        blobs: source.blobs()?,
         identity,
         bytes,
         manifest,

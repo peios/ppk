@@ -6,6 +6,7 @@
 //! ```text
 //! sequence 1042
 //! signed 2026-11-13T11:30:00Z
+//! blobs zstd
 //! catalog sha256:…
 //! index 2026.10.0 sha256:…
 //! index leading sha256:…
@@ -15,8 +16,10 @@
 //!
 //! An index is the top node of a tree of one version of each package; a
 //! channel names an index or another channel, and `ended` marks one that
-//! won't move again. Indexes and channels share one namespace. Lines are in
-//! this order, indexes and channels each sorted by name.
+//! won't move again. Indexes and channels share one namespace. `blobs zstd`
+//! says that every blob of the repository is compressed; without it, they
+//! are as they are stored. Lines are in this order, indexes and channels
+//! each sorted by name.
 
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -35,6 +38,17 @@ pub struct Channel {
     pub ended: bool,
 }
 
+/// How a repository's blobs are written.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Blobs {
+    /// As they are stored: each blob's file holds its content.
+    #[default]
+    Plain,
+    /// Each blob's file holds a zstd frame of its content, under the name
+    /// the content's hash gives it.
+    Zstd,
+}
+
 /// A repository's pointer file.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Pointer {
@@ -42,6 +56,8 @@ pub struct Pointer {
     pub sequence: u64,
     /// When it was signed, as `YYYY-MM-DDTHH:MM:SSZ`.
     pub signed: String,
+    /// How its blobs are written.
+    pub blobs: Blobs,
     /// The catalog's top node, once there is one.
     pub catalog: Option<Identity>,
     pub indexes: BTreeMap<String, Identity>,
@@ -51,6 +67,9 @@ pub struct Pointer {
 impl Pointer {
     pub fn render(&self) -> String {
         let mut out = format!("sequence {}\nsigned {}\n", self.sequence, self.signed);
+        if self.blobs == Blobs::Zstd {
+            out.push_str("blobs zstd\n");
+        }
         if let Some(catalog) = &self.catalog {
             out.push_str(&format!("catalog {catalog}\n"));
         }
@@ -83,6 +102,9 @@ impl Pointer {
         for line in lines {
             let words: Vec<&str> = line.split(' ').collect();
             match words.as_slice() {
+                ["blobs", "zstd"] if pointer.blobs == Blobs::Plain => {
+                    pointer.blobs = Blobs::Zstd;
+                }
                 ["catalog", top] if pointer.catalog.is_none() => {
                     pointer.catalog = Some(top.parse()?);
                 }
@@ -110,7 +132,7 @@ impl Pointer {
                         bail!("channel {name}: given twice");
                     }
                 }
-                _ => bail!("{line:?}: not a catalog, index or channel"),
+                _ => bail!("{line:?}: not a catalog, index, channel or blobs line"),
             }
         }
         pointer.check()?;
@@ -204,7 +226,7 @@ fn check_time(time: &str) -> Result<()> {
 }
 
 /// The time now, as `YYYY-MM-DDTHH:MM:SSZ`.
-fn now() -> String {
+pub(super) fn now() -> String {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| since.as_secs());
@@ -277,6 +299,31 @@ mod tests {
         assert_eq!(pointer.index_of("stable").unwrap().0, "2026.10.0");
         assert!(text.contains("channel 2026.09 2026.10.0 ended\n"), "{text}");
         assert_eq!(pointer.next().sequence, 8);
+        assert!(!text.contains("blobs"), "{text}");
+
+        // Compressed blobs are a line of their own, after the time.
+        let zstd = Pointer {
+            blobs: Blobs::Zstd,
+            ..pointer.clone()
+        };
+        let zstd_text = zstd.render();
+        assert!(
+            zstd_text.starts_with("sequence 7\nsigned 2026-11-13T12:00:00Z\nblobs zstd\ncatalog "),
+            "{zstd_text}"
+        );
+        assert_eq!(Pointer::parse(&zstd_text).unwrap(), zstd);
+        assert_eq!(zstd.next().blobs, Blobs::Zstd);
+        for bad in [
+            zstd_text.replace("blobs zstd\n", "blobs zstd\nblobs zstd\n"),
+            zstd_text.replace("blobs zstd", "blobs gzip"),
+            text.replace(
+                "signed 2026-11-13T12:00:00Z\n",
+                "signed 2026-11-13T12:00:00Z\nblobs plain\n",
+            ),
+            format!("{text}blobs zstd\n"),
+        ] {
+            assert!(Pointer::parse(&bad).is_err(), "{bad}");
+        }
 
         let mut looped = pointer.clone();
         looped.channels.get_mut("2026.10").unwrap().target = "stable".to_owned();

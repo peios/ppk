@@ -1,4 +1,4 @@
-.TH PPK 1 2026-11-11 "Peios ppk 0.1.0"
+.TH PPK 1 2026-11-16 "Peios ppk 0.1.0"
 .SH NAME
 ppk \- create and manage Peios packages
 .SH SYNOPSIS
@@ -48,8 +48,11 @@ ppk \- create and manage Peios packages
 .IR arch ]
 .RB [ \-\-no\-deps ]
 .RB [ \-\-replace ]
+.RB [ \-\-cache\-dir
+.IR dir ]
 .B \-\-from
-.I dir request
+.IR dir | url
+.I request
 .br
 .B ppk fetch
 .RB [ \-\-artifact\-dir
@@ -59,6 +62,8 @@ ppk \- create and manage Peios packages
 .RB [ \-\-config\-dir
 .IR dir ]
 .RB [ \-\-state\-dir
+.IR dir ]
+.RB [ \-\-cache\-dir
 .IR dir ]
 .I request
 .br
@@ -76,6 +81,16 @@ ppk \- create and manage Peios packages
 .RB [ \-\-key
 .IR file ]
 .RB [ \-\-strict ]
+.br
+.B ppk repo export
+.RB [ \-\-artifact\-dir
+.IR dir ]
+.RB [ \-\-key
+.IR file ]
+.RB [ \-\-level
+.IR level ]
+.B \-\-to
+.I dir
 .br
 .B ppk repo snapshot
 .RI [ options ]
@@ -101,7 +116,7 @@ ppk \- create and manage Peios packages
 .br
 .B ppk repo show
 .RB [ \-\-artifact\-dir
-.IR dir ]
+.IR dir | url ]
 .RB [ \-\-public\-key
 .IR key ]
 .br
@@ -112,7 +127,8 @@ ppk \- create and manage Peios packages
 .IR key ]
 .RB [ \-\-track
 .IR index ]
-.I name path
+.I name
+.IR path | url ...
 .br
 .B ppk repo remove
 .RB [ \-\-config\-dir
@@ -185,8 +201,10 @@ ppk \- create and manage Peios packages
 .IR arch ]
 .RB [ \-\-out
 .IR file ]
+.RB [ \-\-cache\-dir
+.IR dir ]
 .B \-\-from
-.IR dir ...
+.IR dir | url ...
 .br
 .B ppk help
 .RI [ command ]
@@ -414,6 +432,60 @@ deleted.
 .PP
 An inventory records the index of each request that named one, as in
 .BR "[* #stable >=8]" .
+.SS Serving over HTTP
+Every file of a repository but
+.I repository
+and
+.I repository.sig
+is named by its hash and never changes, so a static web server can serve
+the repository's directory as it is.
+A repository served that way is given by its base URL, the URL of that
+directory, and each file is read from the base URL followed by the file's
+path in the directory, such as
+.IR https://pkgs.peios.org/trees/sha256/ hash .
+A repository can be given several base URLs, each serving a copy of it,
+such as a cache on the local network and then the repository's own server.
+.PP
+A repository served over HTTP must have a pointer file, and its packages
+are those its catalog lists, since its refs can't be listed.
+The pointer file and its signature are read from one base URL, the first
+that serves them both, and checked against the key as a directory's are.
+Every tree node, manifest and blob is checked against its hash before it is
+used, and a blob before it is given its name in the store, so a blob that
+fails its check is never stored.
+.PP
+Each file is read from the first base URL that serves it.
+One that can't be reached, or that answers with anything but the file, such
+as
+.BR "404 Not Found" ,
+is passed over for the next.
+A file that fails its check is an error, and no other base URL is tried.
+If no base URL serves a file, the error names each URL and why it didn't.
+.PP
+Tree nodes and manifests read are kept in the cache directory under the
+paths the repository gives them, and checked against their hash again each
+time they are read from it.
+Resolving reads the manifest of every version the catalog lists for the
+architecture, so the first resolution from a repository reads all of them,
+and later ones only what has changed.
+Blobs aren't kept in the cache: fetching writes them into the store.
+.PP
+ppk waits 15 seconds to connect, 30 seconds for a response, and 60 seconds
+for more of a file being sent.
+It doesn't make range requests.
+.SS Compressed blobs
+A repository whose pointer file has the line
+.B blobs zstd
+holds each blob as a zstd frame of its content, under the name its content
+gives it;
+.B repo export
+writes one.
+Fetching from it, as a directory or over HTTP, decompresses each blob and
+checks what it decompresses to against its hash before naming it in the
+store, which stays uncompressed.
+A blob that isn't a zstd frame, or that decompresses to anything else or to
+more than 64 GiB, is refused.
+Nothing else in the repository is compressed.
 .SH METADATA
 Besides its files, a package's manifest can say what the package needs and
 offers, and describe it.
@@ -683,7 +755,8 @@ fails and writes nothing: a packed version is never replaced.
 .BI fetch " request"
 Resolve
 .I request
-and its dependencies and requirements against the artifact directory named by
+and its dependencies and requirements against the artifact directory or
+repository named by
 .B \-\-from
 and copy every chosen package into the artifact directory.
 Print one identity per fetched package on standard output, in package-name order.
@@ -727,8 +800,20 @@ has seen of it, which is kept in
 .I /var/state/ppk
 unless given.
 .IP
+A repository served over HTTP, given by its URL to
+.B \-\-from
+or by the
+.B urls
+of its configuration, is read as REPOSITORIES describes, keeping the tree
+nodes and manifests it reads in
+.BR \-\-cache\-dir ,
+.I /var/cache/ppk
+unless given.
+.IP
 Nothing read from the source is trusted.
-The source's ref must hold exactly one identity and a newline.
+The source's ref must hold exactly one identity and a newline;
+a repository served over HTTP has no refs to read, and its catalog gives
+the identity instead.
 The manifest must hash to that identity, be in exactly the form
 .B ppk pack
 writes, name the chosen package,
@@ -842,6 +927,33 @@ if that isn't given, the kind of key
 .B openssl genpkey \-algorithm ML\-DSA\-65
 writes, and prints the pointer file it published.
 .TP
+.B repo export
+Write
+.BR \-\-to ,
+a directory, as a copy of the repository to serve, with its blobs
+compressed: its tree nodes, manifests and refs as they are, each blob as a
+zstd frame of its content under its own name, at
+.BR \-\-level ,
+1 to 22, 12 unless given, and its pointer file as it was last published,
+with the same sequence and the line
+.BR "blobs zstd" ,
+signed again.
+The repository itself is not changed and stays uncompressed.
+.IP
+Every form of a blob is a hard link of one compressed file.
+Each file copied is checked against its hash, and each blob as it is
+compressed.
+.B \-\-to
+must be new, empty or an earlier export, and an export is never written
+from a publication older than the one it has.
+What
+.B \-\-to
+holds already is kept, so exporting again after the next publication
+compresses only the blobs added since, on every CPU.
+The pointer file is written after everything it names; then what the
+repository doesn't hold, such as a version deleted, is removed from
+.BR \-\-to .
+.TP
 .BI "repo snapshot" " name"
 Make
 .I name
@@ -887,15 +999,19 @@ gives, one line, so that a resolution that needs it can say why it's gone.
 Publishes again.
 .TP
 .B repo show
-Print the repository's pointer file.
+Print the pointer file of the repository
+.BR \-\-artifact\-dir ,
+a directory or the URL of a repository served over HTTP.
 With
 .BR \-\-public\-key ,
 its signature must be that key's.
 .TP
-.BI "repo add" " name path"
+.BI "repo add" " name path\fR|\fPurl\fR...\fP"
 Add the repository at
-.I path
-to those this machine fetches from, as
+.IR path ,
+or served over HTTP at the base URLs
+.IR url ,
+tried in order, to those this machine fetches from, as
 .IR name ,
 writing its configuration in
 .BR \-\-config\-dir ,
@@ -916,8 +1032,8 @@ Stop fetching from the repository
 .IR name .
 .TP
 .B repo list
-Print each repository this machine fetches from: its name, its path, the
-index or channel it follows, and the sequence and signing time of its
+Print each repository this machine fetches from: its name, its path or
+URLs, the index or channel it follows, and the sequence and signing time of its
 pointer file, checked as
 .B fetch
 checks it.
@@ -1104,7 +1220,7 @@ and
 .B \-c
 need, from the packages for the architecture in the
 .B \-\-from
-directories, and write their profile: an
+artifact directories and repositories, and write their profile: an
 .B arch
 and a
 .B packages
@@ -1366,17 +1482,34 @@ own: it takes its own space, and a later change to the store's descriptors
 does not reach it.
 A closure that already exists is reused as it is.
 .TP
-.BI \-\-from " dir"
+.BI \-\-from " dir\fR|\fPurl"
 For
 .BR fetch ,
 copy from the artifact directory
-.IR dir .
+.IR dir ,
+or from the repository served over HTTP at the base URL
+.IR url ,
+an
+.B http
+or
+.B https
+URL, as REPOSITORIES describes.
 For
 .BR resolve ,
-choose from the packages in every artifact directory
-.I dir
+choose from the packages in every artifact directory or repository
 that follows, up to the next option.
 Required.
+.TP
+.BI \-\-cache\-dir " dir"
+For
+.B fetch
+and
+.BR resolve ,
+keep the tree nodes and manifests read from repositories served over HTTP
+in
+.IR dir ,
+.I /var/cache/ppk
+by default.
 .TP
 .BI \-\-out " path"
 For
@@ -1629,7 +1762,21 @@ key = "ml\-dsa\-65:..."
 track = "stable"
 .EE
 .IP
+A repository served over HTTP has
+.B urls
+in place of
+.BR path ,
+its base URLs, tried in order:
+.IP
+.EX
+urls = ["http://cache.lan/peios/", "https://pkgs.peios.org/"]
+key = "ml\-dsa\-65:..."
+.EE
+.IP
+One of
 .B path
+and
+.B urls
 is required;
 .B key
 and
@@ -1640,12 +1787,21 @@ are optional.
 The highest sequence this machine has seen of the repository
 .IR name .
 .TP
+.I /var/cache/ppk
+The tree nodes and manifests read from repositories served over HTTP, in
+.IR trees/sha256/ hash
+and
+.IR manifests/sha256/ hash ,
+shared by every repository.
+Anything in it can be removed; it is read again when needed.
+.TP
 .I repository
 A published repository's pointer file, the one file of it that changes:
 .IP
 .EX
 sequence 1042
 signed 2026\-11\-13T11:30:00Z
+blobs zstd
 catalog sha256:...
 index 2026.10.0 sha256:...
 index leading sha256:...
@@ -1657,6 +1813,9 @@ channel 2026.09 2026.09.3 ended
 goes up by one each time the repository is published, and
 .B signed
 is when, in UTC.
+.B "blobs zstd"
+is there only if the repository's blobs are compressed, as an export's
+are.
 .B catalog
 and each
 .B index

@@ -190,7 +190,7 @@ fn dependencies_and_requirements_are_followed_into_a_profile() {
         resolution
             .packages
             .iter()
-            .all(|p| p.artifact_dir == dirs.path(0))
+            .all(|p| p.artifact_dir() == Some(dirs.path(0).as_path()))
     );
     assert_eq!(
         resolution.profile().unwrap().render().unwrap(),
@@ -397,10 +397,16 @@ fn several_directories_are_one_set_of_packages() {
     let both = [dirs.path(0), dirs.path(1)];
     let resolution = resolve(&[package("org.gnu.make")], &both, ARCH).unwrap();
     assert_eq!(resolution.packages[0].id.version(), "4.4-1");
-    assert_eq!(resolution.packages[0].artifact_dir, dirs.path(1));
+    assert_eq!(
+        resolution.packages[0].artifact_dir(),
+        Some(dirs.path(1).as_path())
+    );
     let resolution = resolve(&[package("org.gnu.make < 4.4")], &both, ARCH).unwrap();
     // The first directory given that holds it.
-    assert_eq!(resolution.packages[0].artifact_dir, dirs.path(0));
+    assert_eq!(
+        resolution.packages[0].artifact_dir(),
+        Some(dirs.path(0).as_path())
+    );
 
     // One version that is two packages is refused.
     dirs.pack_into(2, "org.gnu.make@4.3-1", &Metadata::default(), "other");

@@ -15,6 +15,7 @@
 //! server can serve a repository as it is and a mirror can cache all of it
 //! but the two files at the top.
 
+mod export;
 mod key;
 mod pointer;
 mod tree;
@@ -26,18 +27,19 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+pub use export::{DEFAULT_LEVEL, Exported, export};
 pub use key::{PrivateKey, PublicKey};
-pub use pointer::{Channel, LEADING, Pointer, check_ref_name};
+pub use pointer::{Blobs, Channel, LEADING, Pointer, check_ref_name};
 pub use tree::{Packages, Release, Standing, Trees};
 
 use crate::store::{self, ArtifactDir};
 use crate::{Entry, Identity, Metadata, PackageId, Version, parse_manifest, stored_packages};
 
 /// The pointer file, at the repository's top.
-const POINTER: &str = "repository";
+pub(crate) const POINTER: &str = "repository";
 
 /// Its signature, beside it.
-const SIGNATURE: &str = "repository.sig";
+pub(crate) const SIGNATURE: &str = "repository.sig";
 
 /// A package left out of `leading`, because what it needs isn't there.
 #[derive(Debug)]
@@ -63,18 +65,40 @@ pub fn read_pointer(repo: &Path, key: Option<&PublicKey>) -> Result<Option<Point
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err).with_context(|| format!("{}", path.display())),
     };
-    if let Some(key) = key {
-        let signature_path = repo.join(SIGNATURE);
-        let signature =
-            fs::read(&signature_path).with_context(|| format!("{}", signature_path.display()))?;
-        if !key.verifies(&bytes, &signature) {
-            bail!("{}: not signed by the repository's key", path.display());
+    let signature = match key {
+        None => None,
+        Some(_) => {
+            let signature_path = repo.join(SIGNATURE);
+            Some(
+                fs::read(&signature_path)
+                    .with_context(|| format!("{}", signature_path.display()))?,
+            )
         }
+    };
+    check_pointer(
+        bytes,
+        signature.as_deref(),
+        key,
+        &path.display().to_string(),
+    )
+    .map(Some)
+}
+
+/// The pointer file `bytes`, read from `from`. With `key`, `signature` must
+/// be that key's signature over it.
+pub(crate) fn check_pointer(
+    bytes: Vec<u8>,
+    signature: Option<&[u8]>,
+    key: Option<&PublicKey>,
+    from: &str,
+) -> Result<Pointer> {
+    if let Some(key) = key
+        && !signature.is_some_and(|signature| key.verifies(&bytes, signature))
+    {
+        bail!("{from}: not signed by the repository's key");
     }
-    let text = String::from_utf8(bytes).with_context(|| format!("{}", path.display()))?;
-    Pointer::parse(&text)
-        .map(Some)
-        .with_context(|| format!("{}: malformed pointer file", path.display()))
+    let text = String::from_utf8(bytes).with_context(|| from.to_owned())?;
+    Pointer::parse(&text).with_context(|| format!("{from}: malformed pointer file"))
 }
 
 /// Sign and write `pointer`. The signature is written first, so a reader

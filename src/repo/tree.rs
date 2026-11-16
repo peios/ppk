@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::id::check_name;
+use crate::remote::Remote;
 use crate::store;
 use crate::{ALGORITHM, Identity, Version};
 
@@ -96,15 +97,28 @@ impl Release {
 /// Every package in a tree, by name, each with its versions.
 pub type Packages = BTreeMap<String, Vec<Release>>;
 
-/// The tree nodes of the repository at `repo`.
+/// The tree nodes of a repository.
 pub struct Trees {
     dir: PathBuf,
+    /// The repository, if it is served over HTTP, not a directory.
+    remote: Option<Remote>,
 }
 
 impl Trees {
+    /// The tree nodes of the repository at `repo`.
     pub fn new(repo: &Path) -> Self {
         Self {
             dir: repo.join(TREES).join(ALGORITHM),
+            remote: None,
+        }
+    }
+
+    /// The tree nodes of the repository `remote` serves, which can be read
+    /// but not written.
+    pub(crate) fn remote(remote: &Remote) -> Self {
+        Self {
+            dir: PathBuf::new(),
+            remote: Some(remote.clone()),
         }
     }
 
@@ -114,6 +128,10 @@ impl Trees {
 
     /// The node `identity`, checked against its hash.
     fn read(&self, identity: &Identity) -> Result<String> {
+        if let Some(remote) = &self.remote {
+            let bytes = remote.object(TREES, identity)?;
+            return String::from_utf8(bytes).with_context(|| format!("tree node {identity}"));
+        }
         let path = self.path(identity);
         let bytes = fs::read(&path).with_context(|| format!("{}", path.display()))?;
         if Identity::of(&bytes) != *identity {
@@ -124,6 +142,9 @@ impl Trees {
 
     /// Write the node `text`, if it isn't there, and return its identity.
     fn write(&self, text: &str) -> Result<Identity> {
+        if self.remote.is_some() {
+            bail!("a repository served over HTTP can't be written");
+        }
         let identity = Identity::of(text.as_bytes());
         let path = self.path(&identity);
         if !path.exists() {

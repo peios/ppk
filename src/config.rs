@@ -9,19 +9,29 @@
 //! track = "stable"
 //! ```
 //!
+//! A repository served over HTTP is given by its base URLs instead of a
+//! path, tried in order, such as a cache on the local network before the
+//! repository's own server:
+//!
+//! ```toml
+//! urls = ["http://cache.lan/peios/", "https://pkgs.peios.org/"]
+//! ```
+//!
 //! `/conf` merges what the system ships with what the machine adds, which
 //! is written under `/lcl/conf/ppk`. What the machine has seen of each
 //! repository, the highest sequence, is state, not configuration: it is kept
 //! in the state directory, `/var/state/ppk` unless told otherwise.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::repo::{self, Pointer, PublicKey, check_ref_name};
+use crate::repo::{Pointer, PublicKey, Standing, check_ref_name};
+use crate::{Remote, Source};
 
 /// Where the repositories are read from unless told otherwise.
 pub const DEFAULT_CONFIG_DIR: &str = "/conf/ppk";
@@ -32,8 +42,47 @@ pub const DEFAULT_LOCAL_CONFIG_DIR: &str = "/lcl/conf/ppk";
 /// Where what the machine has seen is kept unless told otherwise.
 pub const DEFAULT_STATE_DIR: &str = "/var/state/ppk";
 
+/// Where what is read from repositories served over HTTP is kept unless
+/// told otherwise.
+pub const DEFAULT_CACHE_DIR: &str = "/var/cache/ppk";
+
 /// The keys a repository's file may have.
-const KEYS: [&str; 3] = ["path", "key", "track"];
+const KEYS: [&str; 4] = ["path", "urls", "key", "track"];
+
+/// Where a repository is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Location {
+    /// An artifact directory.
+    Path(PathBuf),
+    /// The base URLs it is served at, tried in order.
+    Urls(Vec<String>),
+}
+
+impl Location {
+    /// The location `args` give: one path, or one or more URLs.
+    pub fn parse(args: &[String]) -> Result<Self> {
+        match args {
+            [] => bail!("no path or URL"),
+            [path] if !crate::is_url(path) => Ok(Self::Path(PathBuf::from(path))),
+            urls => {
+                if let Some(path) = urls.iter().find(|url| !crate::is_url(url)) {
+                    bail!("{path}: not an http or https URL; a repository is one path or URLs");
+                }
+                Remote::new(urls)?;
+                Ok(Self::Urls(urls.to_vec()))
+            }
+        }
+    }
+}
+
+impl fmt::Display for Location {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Path(path) => write!(f, "{}", path.display()),
+            Self::Urls(urls) => write!(f, "{}", urls.join(" ")),
+        }
+    }
+}
 
 /// A repository the machine fetches from.
 #[derive(Clone, Debug)]
@@ -41,7 +90,7 @@ pub struct Repository {
     /// Its name: its file's, without `.toml`.
     pub name: String,
     /// Where it is.
-    pub path: PathBuf,
+    pub location: Location,
     /// The key its pointer file must be signed with, if it must be.
     pub key: Option<PublicKey>,
     /// The index or channel a request for a bare name follows.
@@ -51,7 +100,13 @@ pub struct Repository {
 impl Repository {
     fn render(&self) -> String {
         let quote = |s: &str| toml::Value::String(s.to_owned()).to_string();
-        let mut out = format!("path = {}\n", quote(&self.path.display().to_string()));
+        let mut out = match &self.location {
+            Location::Path(path) => format!("path = {}\n", quote(&path.display().to_string())),
+            Location::Urls(urls) => {
+                let urls: Vec<String> = urls.iter().map(|url| quote(url)).collect();
+                format!("urls = [{}]\n", urls.join(", "))
+            }
+        };
         if let Some(key) = &self.key {
             out.push_str(&format!("key = {}\n", quote(&key.to_string())));
         }
@@ -75,16 +130,48 @@ impl Repository {
                     .ok_or_else(|| anyhow!("{key} is not a string")),
             }
         };
-        let path = string("path")?.ok_or_else(|| anyhow!("no path"))?;
+        let location = match (string("path")?, doc.get("urls")) {
+            (Some(path), None) => Location::Path(PathBuf::from(path)),
+            (None, Some(urls)) => {
+                let urls = (urls.as_array())
+                    .and_then(|urls| {
+                        (urls.iter())
+                            .map(|url| url.as_str().map(str::to_owned))
+                            .collect::<Option<Vec<String>>>()
+                    })
+                    .ok_or_else(|| anyhow!("urls is not a list of strings"))?;
+                if urls.is_empty() {
+                    bail!("urls is empty");
+                }
+                Remote::new(&urls)?;
+                Location::Urls(urls)
+            }
+            (Some(_), Some(_)) => bail!("both path and urls; a repository has one or the other"),
+            (None, None) => bail!("no path or urls"),
+        };
         let track = string("track")?;
         if let Some(track) = &track {
             check_ref_name(track)?;
         }
         Ok(Self {
             name: name.to_owned(),
-            path: PathBuf::from(path),
+            location,
             key: string("key")?.map(|key| key.parse()).transpose()?,
             track,
+        })
+    }
+
+    /// Where its packages are fetched from, keeping what is read over HTTP
+    /// in `cache_dir`.
+    pub fn source(&self, cache_dir: &Path) -> Result<Source> {
+        Ok(self.uncached()?.with_cache(cache_dir))
+    }
+
+    /// Where its packages are fetched from, keeping nothing read.
+    fn uncached(&self) -> Result<Source> {
+        Ok(match &self.location {
+            Location::Path(path) => Source::Dir(path.clone()),
+            Location::Urls(urls) => Source::Remote(Remote::new(urls)?.with_key(self.key.clone())),
         })
     }
 
@@ -92,7 +179,13 @@ impl Repository {
     /// and against the highest sequence the machine has seen of it, which
     /// it then records in `state_dir`. `None` if it hasn't published one.
     pub fn pointer(&self, state_dir: &Path) -> Result<Option<Pointer>> {
-        let Some(pointer) = repo::read_pointer(&self.path, self.key.as_ref())
+        self.check_pointer(&self.uncached()?, state_dir)
+    }
+
+    /// The pointer file of `source`, which is this repository, checked as
+    /// [`Repository::pointer`] checks it.
+    fn check_pointer(&self, source: &Source, state_dir: &Path) -> Result<Option<Pointer>> {
+        let Some(pointer) = (source.pointer(self.key.as_ref()))
             .with_context(|| format!("repository {}", self.name))?
         else {
             return Ok(None);
@@ -199,7 +292,7 @@ pub struct Settled {
 
 /// Resolve `requests` for `arch` from `repositories`, each checked as
 /// [`Repository::pointer`] checks it, recording what was seen in
-/// `state_dir`.
+/// `state_dir`, and keeping what is read over HTTP in `cache_dir`.
 ///
 /// A request for a package that names no index and isn't for one exact
 /// version follows the index or channel its repository tracks, if it
@@ -209,17 +302,26 @@ pub fn resolve(
     requests: &[crate::Request],
     repositories: &[Repository],
     state_dir: &Path,
+    cache_dir: &Path,
     arch: &str,
 ) -> Result<Settled> {
     if repositories.is_empty() {
         bail!("no repository is configured to fetch from");
     }
+    // One source each, which reads a remote repository's pointer file once,
+    // so that everything below follows the publication checked here.
+    let mut sources = Vec::with_capacity(repositories.len());
+    let mut holds = Vec::with_capacity(repositories.len());
     for repository in repositories {
-        repository.pointer(state_dir)?;
+        let source = repository.source(cache_dir)?;
+        let pointer = repository.check_pointer(&source, state_dir)?;
+        holds.push((repository, held_names(&source, pointer.as_ref())?));
+        sources.push(source);
     }
     let holders = |name: &str| -> Vec<&Repository> {
-        (repositories.iter())
-            .filter(|repository| repository.path.join("refs").join(name).is_dir())
+        (holds.iter())
+            .filter(|(_, held)| held.holds(name))
+            .map(|(repository, _)| *repository)
             .collect()
     };
     let one = |name: &str| -> Result<&Repository> {
@@ -246,11 +348,13 @@ pub fn resolve(
         }
         settled.push(request);
     }
-    let paths: Vec<PathBuf> = repositories.iter().map(|r| r.path.clone()).collect();
     let signed = (repositories.iter())
-        .filter_map(|r| r.key.clone().map(|key| (r.path.clone(), key)))
+        .filter_map(|r| match (&r.location, &r.key) {
+            (Location::Path(path), Some(key)) => Some((path.clone(), key.clone())),
+            _ => None,
+        })
         .collect();
-    let resolution = crate::resolve_signed(&settled, &paths, arch, &signed)?;
+    let resolution = crate::resolve::resolve_with(&settled, &[], &sources, arch, &signed)?;
     for package in &resolution.packages {
         one(package.id.name())?;
     }
@@ -258,4 +362,39 @@ pub fn resolve(
         resolution,
         requests: settled,
     })
+}
+
+/// The package names a repository publishes, to find the one a name
+/// belongs to.
+enum Held {
+    /// An artifact directory, whose refs say.
+    Dir(PathBuf),
+    /// A repository served over HTTP, whose catalog says.
+    Names(BTreeSet<String>),
+}
+
+impl Held {
+    fn holds(&self, name: &str) -> bool {
+        match self {
+            Self::Dir(path) => path.join("refs").join(name).is_dir(),
+            Self::Names(names) => names.contains(name),
+        }
+    }
+}
+
+/// The names `source`, whose pointer file is `pointer`, publishes.
+fn held_names(source: &Source, pointer: Option<&Pointer>) -> Result<Held> {
+    if let Source::Dir(path) = source {
+        return Ok(Held::Dir(path.clone()));
+    }
+    let Some(catalog) = pointer.and_then(|pointer| pointer.catalog.as_ref()) else {
+        return Ok(Held::Names(BTreeSet::new()));
+    };
+    let names = (source.trees().read_tree(catalog)?.into_iter())
+        .filter(|(_, releases)| {
+            (releases.iter()).any(|release| !matches!(release.standing, Standing::Deleted(_)))
+        })
+        .map(|(name, _)| name)
+        .collect();
+    Ok(Held::Names(names))
 }

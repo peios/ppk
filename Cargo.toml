@@ -16,3 +16,4 @@ sha2 = "0.10"
 tempfile = "3.23"
 toml = "0.8"
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
+zstd = { version = "0.13", default-features = false }

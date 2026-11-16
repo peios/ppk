@@ -518,6 +518,27 @@ enum RepoCommand {
         #[arg(long)]
         strict: bool,
     },
+    /// Write a copy of the repository to serve, with its blobs compressed
+    #[command(
+        override_usage = "ppk repo export [options] --to <dir>",
+        after_help = SEE_ALSO
+    )]
+    Export {
+        #[command(flatten)]
+        publishing: Publishing,
+        /// Write the copy in <dir>, new, empty or an earlier export
+        #[arg(long, value_name = "dir")]
+        to: PathBuf,
+        /// Compress with zstd at <level>, 1 to 22 (default: 12)
+        #[arg(
+            long,
+            value_name = "level",
+            default_value_t = ppk::repo::DEFAULT_LEVEL,
+            hide_default_value = true,
+            value_parser = clap::value_parser!(i32).range(1..=22)
+        )]
+        level: i32,
+    },
     /// Make a new index a snapshot of an index or channel
     #[command(
         override_usage = "ppk repo snapshot [options] <name> [--from <index>]",
@@ -699,6 +720,15 @@ fn repo(program: &str, command: RepoCommand) -> anyhow::Result<()> {
                 &key(&publishing)?,
                 strict,
             )?);
+        }
+        RepoCommand::Export {
+            publishing,
+            to,
+            level,
+        } => {
+            let exported =
+                ppk::repo::export(&publishing.artifact_dir, &to, &key(&publishing)?, level)?;
+            print!("{}", exported.pointer.render());
         }
         RepoCommand::Snapshot {
             name,

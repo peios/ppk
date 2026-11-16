@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use crate::compression;
 use crate::remote::{self, Remote};
-use crate::repo::{Pointer, PublicKey, Standing, Trees};
+use crate::repo::{Blobs, Pointer, PublicKey, Standing, Trees};
 use crate::store::{self, ArtifactDir};
 use crate::{ALGORITHM, Identity, PackageId};
 
@@ -45,6 +46,30 @@ impl Source {
         match self {
             Self::Dir(dir) => crate::repo::read_pointer(dir, key),
             Self::Remote(remote) => remote.pointer(),
+        }
+    }
+
+    /// How its blobs are written, as its pointer file says: plain if it
+    /// has none. A directory's pointer file is read without its key; a
+    /// blob is checked against its hash however it is written.
+    pub(crate) fn blobs(&self) -> Result<Blobs> {
+        Ok(self
+            .pointer(None)?
+            .map(|pointer| pointer.blobs)
+            .unwrap_or_default())
+    }
+
+    /// A reader of the content of the blob file at `path` below its top,
+    /// decompressed if its blobs are `blobs`, and where it is read from.
+    /// Nothing checks the content.
+    pub(crate) fn open_blob(&self, path: &Path, blobs: Blobs) -> Result<(String, Box<dyn Read>)> {
+        let (from, reader) = self.open(path)?;
+        match blobs {
+            Blobs::Plain => Ok((from, reader)),
+            Blobs::Zstd => {
+                let reader = compression::decoder(reader).with_context(|| from.clone())?;
+                Ok((from, Box::new(reader)))
+            }
         }
     }
 

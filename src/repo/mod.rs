@@ -15,6 +15,7 @@
 //! server can serve a repository as it is and a mirror can cache all of it
 //! but the two files at the top.
 
+mod export;
 mod key;
 mod pointer;
 mod tree;
@@ -26,8 +27,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+pub use export::{DEFAULT_LEVEL, Exported, export};
 pub use key::{PrivateKey, PublicKey};
-pub use pointer::{Channel, LEADING, Pointer, check_ref_name};
+pub use pointer::{Blobs, Channel, LEADING, Pointer, check_ref_name};
 pub use tree::{Packages, Release, Standing, Trees};
 
 use crate::store::{self, ArtifactDir};

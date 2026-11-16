@@ -464,9 +464,10 @@ fn persist(tmp: tempfile::NamedTempFile, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-struct HashingReader<R> {
-    inner: R,
-    hasher: Sha256,
+/// A reader that hashes what it reads.
+pub(crate) struct HashingReader<R> {
+    pub(crate) inner: R,
+    pub(crate) hasher: Sha256,
 }
 
 impl<R: Read> Read for HashingReader<R> {

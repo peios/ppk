@@ -59,6 +59,7 @@
 mod access;
 mod closure;
 mod compose;
+mod compression;
 pub mod config;
 mod derive;
 pub mod environment;

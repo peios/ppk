@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::access::{Security, Stamp};
+use crate::repo::Blobs;
 use crate::store::{self, ArtifactDir};
 use crate::{Entry, Identity, Manifest, PackageId, Resolved, Source, parse_manifest};
 
@@ -126,6 +127,8 @@ impl<'a> Pick<'a> {
 struct Checked<'a> {
     id: PackageId,
     source: &'a Source,
+    /// How the source writes its blobs.
+    blobs: Blobs,
     identity: Identity,
     bytes: Vec<u8>,
     manifest: Manifest,
@@ -162,7 +165,8 @@ fn fetch_as(picks: &[Pick], artifact_dir: &Path, replace: bool) -> Result<Vec<Fe
             if !done.insert(blob.clone()) || blob.exists() {
                 continue;
             }
-            let (source_blob, reader) = package.source.open(&from.blob_path(signature, false))?;
+            let (source_blob, reader) =
+                (package.source).open_blob(&from.blob_path(signature, false), package.blobs)?;
             let Some(copied) = store::copy_pending_from(
                 reader,
                 &source_blob,
@@ -208,7 +212,8 @@ fn fetch_as(picks: &[Pick], artifact_dir: &Path, replace: bool) -> Result<Vec<Fe
                 }
                 continue;
             }
-            let (source_blob, reader) = package.source.open(&from.file_path(entry))?;
+            let (source_blob, reader) =
+                (package.source).open_blob(&from.file_path(entry), package.blobs)?;
             let Some(copied) = store::copy_pending_from(
                 reader,
                 &source_blob,
@@ -307,6 +312,7 @@ fn check<'a>(pick: &Pick<'a>, to: &ArtifactDir, replace: bool) -> Result<Checked
     Ok(Checked {
         id: id.clone(),
         source,
+        blobs: source.blobs()?,
         identity,
         bytes,
         manifest,

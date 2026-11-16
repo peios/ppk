@@ -1,24 +1,25 @@
 ---
 title: Fetching a Package
 type: how-to
-description: Copy a package from another artifact directory with ppk fetch,
-  what it checks on the way, and what happens when the package is already
-  present.
+description: Copy a package from another artifact directory or from a
+  repository served over HTTP with ppk fetch, what it checks on the way, and
+  what happens when the package is already present.
 related:
   - peios/packaging/packages
   - peios/packaging/creating-a-package
 ---
 
 Fetching resolves a package and everything it needs from another artifact
-directory, then copies the chosen packages into yours and checks them on the
-way. Do this to use a package that was packed
-somewhere else, such as on a build machine whose artifact directory you can
-read.
+directory, or from a repository served over HTTP, then copies the chosen
+packages into yours and checks them on the way. Do this to use a package that
+was packed somewhere else, such as on a build machine whose artifact directory
+you can read, or one a repository publishes.
 
 ## Before you start
 
 - Install `ppk`.
-- Have read access to the source artifact directory, as a local path.
+- Have read access to the source: an artifact directory, as a local path, or
+  a repository's URL.
 - Have write access to your artifact directory. The default is
   `/system/artifacts`; to use a directory of your own, pass
   `--artifact-dir`.
@@ -60,6 +61,11 @@ To copy exactly one package without resolving anything it needs, pass
 ppk fetch --no-deps 'dev.peios.hello@1.0-1?arch=noarch' --from shared --artifact-dir artifacts
 ```
 
+`--from` also takes the URL of a repository served over HTTP, such as
+`https://pkgs.peios.org/`. `--from` takes no key, so `ppk` checks every file
+against its hash but can't check who signed the repository. To check that
+too, add the repository with its key, using `ppk repo add`.
+
 ## Check the result
 
 Compare the identity with the one `ppk pack` printed where the package was
@@ -84,6 +90,20 @@ with whatever the system ships. Then fetch without `--from`:
 ```sh
 ppk fetch se.curl.curl
 ```
+
+A repository served over HTTP is added by its URL instead of a path. Give
+more than one URL to try them in order, such as a cache on your network
+first and the repository's own server after it:
+
+```sh
+ppk repo add peios http://cache.lan/peios/ https://pkgs.peios.org/ \
+    --public-key 'ml-dsa-65:…' --track stable
+```
+
+If a URL can't be reached or doesn't have a file, `ppk` tries the next one.
+`ppk` keeps the tree nodes and manifests it reads from a repository served
+over HTTP in `/var/cache/ppk`, so only the first fetch reads all of them.
+Pass `--cache-dir` to keep them somewhere else.
 
 A request for a bare name, or a name with a constraint, follows the channel
 its repository tracks, so this fetches the version `stable` holds, and what
@@ -119,6 +139,13 @@ don't prove who published it, so fetch only from sources you trust. A
 configured repository with a key proves that too: a package must be in the
 catalog its signed pointer file leads to, at the identity the catalog gives,
 so a package it didn't publish, or a ref changed since, is refused.
+
+A repository served over HTTP has no refs that `ppk` can list, so its
+catalog says which packages it has. `ppk` checks every file it reads from
+the repository against its hash before using it, and checks the pointer file
+against the key. A file that fails its check is an error: `ppk` doesn't try
+the next URL, because a server that sends the wrong file is broken or
+hostile. A file that fails its check is never stored.
 
 ## When the package is already present
 

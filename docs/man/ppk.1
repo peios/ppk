@@ -82,6 +82,16 @@ ppk \- create and manage Peios packages
 .IR file ]
 .RB [ \-\-strict ]
 .br
+.B ppk repo export
+.RB [ \-\-artifact\-dir
+.IR dir ]
+.RB [ \-\-key
+.IR file ]
+.RB [ \-\-level
+.IR level ]
+.B \-\-to
+.I dir
+.br
 .B ppk repo snapshot
 .RI [ options ]
 .I name
@@ -463,6 +473,19 @@ Blobs aren't kept in the cache: fetching writes them into the store.
 ppk waits 15 seconds to connect, 30 seconds for a response, and 60 seconds
 for more of a file being sent.
 It doesn't make range requests.
+.SS Compressed blobs
+A repository whose pointer file has the line
+.B blobs zstd
+holds each blob as a zstd frame of its content, under the name its content
+gives it;
+.B repo export
+writes one.
+Fetching from it, as a directory or over HTTP, decompresses each blob and
+checks what it decompresses to against its hash before naming it in the
+store, which stays uncompressed.
+A blob that isn't a zstd frame, or that decompresses to anything else or to
+more than 64 GiB, is refused.
+Nothing else in the repository is compressed.
 .SH METADATA
 Besides its files, a package's manifest can say what the package needs and
 offers, and describe it.
@@ -903,6 +926,33 @@ or in
 if that isn't given, the kind of key
 .B openssl genpkey \-algorithm ML\-DSA\-65
 writes, and prints the pointer file it published.
+.TP
+.B repo export
+Write
+.BR \-\-to ,
+a directory, as a copy of the repository to serve, with its blobs
+compressed: its tree nodes, manifests and refs as they are, each blob as a
+zstd frame of its content under its own name, at
+.BR \-\-level ,
+1 to 22, 12 unless given, and its pointer file as it was last published,
+with the same sequence and the line
+.BR "blobs zstd" ,
+signed again.
+The repository itself is not changed and stays uncompressed.
+.IP
+Every form of a blob is a hard link of one compressed file.
+Each file copied is checked against its hash, and each blob as it is
+compressed.
+.B \-\-to
+must be new, empty or an earlier export, and an export is never written
+from a publication older than the one it has.
+What
+.B \-\-to
+holds already is kept, so exporting again after the next publication
+compresses only the blobs added since, on every CPU.
+The pointer file is written after everything it names; then what the
+repository doesn't hold, such as a version deleted, is removed from
+.BR \-\-to .
 .TP
 .BI "repo snapshot" " name"
 Make
@@ -1751,6 +1801,7 @@ A published repository's pointer file, the one file of it that changes:
 .EX
 sequence 1042
 signed 2026\-11\-13T11:30:00Z
+blobs zstd
 catalog sha256:...
 index 2026.10.0 sha256:...
 index leading sha256:...
@@ -1762,6 +1813,9 @@ channel 2026.09 2026.09.3 ended
 goes up by one each time the repository is published, and
 .B signed
 is when, in UTC.
+.B "blobs zstd"
+is there only if the repository's blobs are compressed, as an export's
+are.
 .B catalog
 and each
 .B index

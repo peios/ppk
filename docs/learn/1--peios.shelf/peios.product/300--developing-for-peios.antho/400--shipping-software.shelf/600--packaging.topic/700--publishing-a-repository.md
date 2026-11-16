@@ -3,8 +3,8 @@ title: Publishing a Repository
 type: how-to
 description: Publish an artifact directory as a repository with ppk repo, with
   a signed catalog of every version, the leading index of the newest, release
-  snapshots and the channels that follow them, serve it over HTTP, and take a
-  version back by yanking or deleting it.
+  snapshots and the channels that follow them, export a compressed copy and
+  serve it over HTTP, and take a version back by yanking or deleting it.
 related:
   - peios/packaging/packages
   - peios/packaging/fetching-a-package
@@ -122,12 +122,34 @@ A yanked version is chosen only by a request for exactly it, such as
 `'org.example.tool = 1.2-1'`. A request that only a deleted version would
 satisfy fails, giving the reason it was deleted.
 
+## Export a compressed copy
+
+Most of a repository is its blobs, the content of its packages' files. The
+repository itself keeps them uncompressed, because machines and builds that
+read it directly link them into closures. To serve it, export a copy whose
+blobs are compressed:
+
+```sh
+ppk repo export --artifact-dir artifacts --to export --key repo.key
+```
+
+`ppk repo export` writes `export` as the repository as it was last
+published, with each blob compressed with zstd under its own name, and
+prints the pointer file it signed, which says `blobs zstd`. Nothing else is
+compressed, and every package keeps its identity. `ppk` decompresses each
+blob as it fetches it and checks it against its hash before storing it.
+
+Run `ppk repo export` again after each `ppk repo update`. It compresses only
+the blobs the export doesn't hold yet, and removes anything you deleted from
+the repository. Compression uses zstd level 12 unless you pass `--level`,
+from 1, the fastest, to 22, the smallest.
+
 ## Serve the repository over HTTP
 
 Every file of a repository but `repository` and `repository.sig` is named by
 its hash and never changes. A static web server can serve the repository's
-directory as it is, with no other software. Machines then fetch from it by
-its URL, the URL of that directory:
+directory, or its export, as it is, with no other software. Machines then
+fetch from it by its URL, the URL of that directory:
 
 ```sh
 ppk repo add peios https://pkgs.peios.org/ --public-key 'ml-dsa-65:…' --track stable

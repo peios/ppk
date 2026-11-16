@@ -147,6 +147,11 @@ against the key. A file that fails its check is an error: `ppk` doesn't try
 the next URL, because a server that sends the wrong file is broken or
 hostile. A file that fails its check is never stored.
 
+A repository can keep its blobs compressed, as an export does, and its
+pointer file says so. `ppk` decompresses each blob as it fetches it and
+checks what it decompresses to, so your artifact directory always holds the
+files uncompressed.
+
 ## When the package is already present
 
 By default, a chosen package already present with the same identity is

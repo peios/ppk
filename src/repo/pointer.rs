@@ -8,13 +8,16 @@
 //! signed 2026-11-13T11:30:00Z
 //! blobs zstd
 //! catalog sha256:…
+//! provides sha256:…
 //! index 2026.10.0 sha256:…
 //! index leading sha256:…
 //! channel stable 2026.10
 //! channel 2026.09 2026.09.3 ended
 //! ```
 //!
-//! An index is the top node of a tree of one version of each package; a
+//! `provides` is the top node of the catalog's provides tree, which finds
+//! the versions that provide a capability. An index is the top node of a
+//! tree of one version of each package; a
 //! channel names an index or another channel, and `ended` marks one that
 //! won't move again. Indexes and channels share one namespace. `blobs zstd`
 //! says that every blob of the repository is compressed; without it, they
@@ -60,6 +63,8 @@ pub struct Pointer {
     pub blobs: Blobs,
     /// The catalog's top node, once there is one.
     pub catalog: Option<Identity>,
+    /// The top node of the catalog's provides tree, once there is one.
+    pub provides: Option<Identity>,
     pub indexes: BTreeMap<String, Identity>,
     pub channels: BTreeMap<String, Channel>,
 }
@@ -72,6 +77,9 @@ impl Pointer {
         }
         if let Some(catalog) = &self.catalog {
             out.push_str(&format!("catalog {catalog}\n"));
+        }
+        if let Some(provides) = &self.provides {
+            out.push_str(&format!("provides {provides}\n"));
         }
         for (name, top) in &self.indexes {
             out.push_str(&format!("index {name} {top}\n"));
@@ -108,6 +116,9 @@ impl Pointer {
                 ["catalog", top] if pointer.catalog.is_none() => {
                     pointer.catalog = Some(top.parse()?);
                 }
+                ["provides", top] if pointer.provides.is_none() => {
+                    pointer.provides = Some(top.parse()?);
+                }
                 ["index", name, top] => {
                     check_ref_name(name)?;
                     if pointer
@@ -132,7 +143,7 @@ impl Pointer {
                         bail!("channel {name}: given twice");
                     }
                 }
-                _ => bail!("{line:?}: not a catalog, index, channel or blobs line"),
+                _ => bail!("{line:?}: not a catalog, provides, index, channel or blobs line"),
             }
         }
         pointer.check()?;
@@ -272,6 +283,7 @@ mod tests {
             sequence: 7,
             signed: "2026-11-13T12:00:00Z".to_owned(),
             catalog: Some(Identity::of(b"catalog")),
+            provides: Some(Identity::of(b"provides")),
             ..Pointer::default()
         };
         pointer
@@ -298,6 +310,8 @@ mod tests {
         assert_eq!(Pointer::parse(&text).unwrap(), pointer);
         assert_eq!(pointer.index_of("stable").unwrap().0, "2026.10.0");
         assert!(text.contains("channel 2026.09 2026.10.0 ended\n"), "{text}");
+        let provides = format!("\nprovides {}\nindex ", Identity::of(b"provides"));
+        assert!(text.contains(&provides), "{text}");
         assert_eq!(pointer.next().sequence, 8);
         assert!(!text.contains("blobs"), "{text}");
 

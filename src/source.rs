@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::compression;
 use crate::remote::{self, Remote};
-use crate::repo::{Blobs, Pointer, PublicKey, Standing, Trees};
+use crate::repo::{Blobs, Pointer, PublicKey, Release, Standing, Trees};
 use crate::store::{self, ArtifactDir};
 use crate::{ALGORITHM, Identity, PackageId};
 
@@ -84,9 +84,17 @@ impl Source {
     /// have it: a directory's ref, or a remote repository's catalog, which
     /// it must have.
     pub(crate) fn identity(&self, id: &PackageId) -> Result<Option<Identity>> {
-        let remote = match self {
-            Self::Dir(dir) => return store::read_ref(&ArtifactDir::new(dir).ref_path(id)),
-            Self::Remote(remote) => remote,
+        match self {
+            Self::Dir(dir) => store::read_ref(&ArtifactDir::new(dir).ref_path(id)),
+            Self::Remote(_) => Ok(self.listed(id)?.map(|release| release.identity)),
+        }
+    }
+
+    /// The version `id` as a remote repository's catalog lists it, unless
+    /// it is deleted; `None` for a directory, whose refs say instead.
+    pub(crate) fn listed(&self, id: &PackageId) -> Result<Option<Release>> {
+        let Self::Remote(remote) = self else {
+            return Ok(None);
         };
         let Some(pointer) = remote.pointer()? else {
             bail!("{remote}: not published as a repository, which fetching over HTTP needs");
@@ -101,8 +109,7 @@ impl Source {
             release.version == id.version()
                 && release.arch == id.arch()
                 && !matches!(release.standing, Standing::Deleted(_))
-        })
-        .map(|release| release.identity))
+        }))
     }
 
     /// The manifest `identity`, checked against its hash.

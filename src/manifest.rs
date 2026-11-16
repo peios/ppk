@@ -112,7 +112,7 @@ pub fn render_manifest<P: AsRef<str>>(
     let _ = writeln!(out, "arch = {}", toml_string(id.arch()));
     out.push_str(&metadata.render_fields());
     out.push_str(&metadata.render_tables());
-    out.push_str("\n[files]\n");
+    out.push_str(FILES);
     for (path, entry) in entries {
         let _ = writeln!(
             out,
@@ -155,6 +155,29 @@ pub(crate) fn render_entry(entry: &Entry) -> String {
         }
     }
     format!("{{ {} }}", parts.join(", "))
+}
+
+/// What separates a manifest's head from its files.
+const FILES: &str = "\n[files]\n";
+
+/// The summary of the manifest `bytes`: its head, every line before the
+/// blank line before `[files]`, which says which package it is and
+/// everything resolving needs, but not its files. `None` if it has no
+/// `[files]` table.
+pub(crate) fn summary_of(bytes: &[u8]) -> Option<&[u8]> {
+    let at = bytes
+        .windows(FILES.len())
+        .position(|window| window == FILES.as_bytes())?;
+    Some(&bytes[..at])
+}
+
+/// Parse `bytes` as a manifest's summary from an untrusted source: in the
+/// one form [`summary_of`] gives, of a manifest [`parse_manifest`] accepts.
+/// The manifest it gives has no files.
+pub(crate) fn parse_summary(bytes: &[u8]) -> Result<Manifest> {
+    let mut manifest = bytes.to_vec();
+    manifest.extend_from_slice(FILES.as_bytes());
+    parse_manifest(&manifest).context("not a manifest's summary")
 }
 
 /// Parse `bytes` as a manifest from an untrusted source.

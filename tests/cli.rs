@@ -900,7 +900,7 @@ fn resolve_fails_on_a_conflict_and_refuses_bad_requests() {
         ),
         (
             vec!["resolve", "-p", "org.gnu.glibc"],
-            "missing option --from <dir>...",
+            "missing option --from <dir|url>...",
         ),
         (
             vec!["resolve", "-c", "sh >", "--from", "x"],

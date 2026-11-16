@@ -19,9 +19,9 @@ use anyhow::{Context, Result, bail};
 
 use crate::id::check_name;
 use crate::metadata::check_capability;
-use crate::repo::{self, Standing, Trees, check_ref_name};
+use crate::repo::{self, Standing, check_ref_name};
 use crate::store::{self, ArtifactDir};
-use crate::{Constraint, Identity, Metadata, PackageId, Profile, Version, parse_manifest};
+use crate::{Constraint, Identity, Metadata, PackageId, Profile, Source, Version, parse_manifest};
 
 /// What a request or requirement asks for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -159,10 +159,21 @@ pub struct Resolved {
     pub id: PackageId,
     /// Its manifest's identity.
     pub identity: Identity,
-    /// The first artifact directory given that holds it.
-    pub artifact_dir: PathBuf,
+    /// The first artifact directory or repository given that holds it.
+    pub source: Source,
     /// Why it was chosen: what first asked for it.
     pub reason: String,
+}
+
+impl Resolved {
+    /// The artifact directory that holds it, if it came from one rather
+    /// than from a repository served over HTTP.
+    pub fn artifact_dir(&self) -> Option<&Path> {
+        match &self.source {
+            Source::Dir(dir) => Some(dir),
+            Source::Remote(_) => None,
+        }
+    }
 }
 
 /// The packages chosen, one version of each name, sorted by name.
@@ -234,7 +245,23 @@ pub fn resolve_signed(
     arch: &str,
     signed: &BTreeMap<PathBuf, repo::PublicKey>,
 ) -> Result<Resolution> {
-    resolve_with(requests, &[], artifact_dirs, arch, signed)
+    resolve_with(requests, &[], &sources(artifact_dirs), arch, signed)
+}
+
+/// Resolve as [`resolve_pinned`] does, from `sources`, each an artifact
+/// directory or a repository served over HTTP.
+///
+/// A repository served over HTTP can't be listed, so its packages are
+/// those its catalog lists, which it must have; with a key, the catalog is
+/// checked as [`resolve_signed`] checks a directory's. Every manifest it
+/// lists for `arch` is read, and checked against its hash.
+pub fn resolve_sources(
+    requests: &[Request],
+    pins: &[PackageId],
+    sources: &[Source],
+    arch: &str,
+) -> Result<Resolution> {
+    resolve_with(requests, pins, sources, arch, &BTreeMap::new())
 }
 
 /// Resolve `requests` together with exact package IDs. Pins keep the version's
@@ -246,18 +273,31 @@ pub fn resolve_pinned(
     artifact_dirs: &[PathBuf],
     arch: &str,
 ) -> Result<Resolution> {
-    resolve_with(requests, pins, artifact_dirs, arch, &BTreeMap::new())
+    resolve_with(
+        requests,
+        pins,
+        &sources(artifact_dirs),
+        arch,
+        &BTreeMap::new(),
+    )
 }
 
-fn resolve_with(
+fn sources(artifact_dirs: &[PathBuf]) -> Vec<Source> {
+    artifact_dirs.iter().cloned().map(Source::Dir).collect()
+}
+
+/// Resolve from `sources`, where each directory `signed` names must have
+/// signed its pointer file with the key it gives. A repository served over
+/// HTTP carries its own key.
+pub(crate) fn resolve_with(
     requests: &[Request],
     pins: &[PackageId],
-    artifact_dirs: &[PathBuf],
+    sources: &[Source],
     arch: &str,
     signed: &BTreeMap<PathBuf, repo::PublicKey>,
 ) -> Result<Resolution> {
     let wanted_indexes = requests.iter().filter_map(|r| r.index.clone()).collect();
-    let mut index = Index::read(artifact_dirs, arch, &wanted_indexes, signed)?;
+    let mut index = Index::read(sources, arch, &wanted_indexes, signed)?;
     let mut pinned = BTreeMap::new();
     let mut pin_requests = Vec::new();
     for id in pins {
@@ -283,7 +323,7 @@ fn resolve_with(
     }
     let mut resolver = Resolver {
         index: &index,
-        artifact_dirs,
+        sources,
         arch,
         chosen: BTreeMap::new(),
         packages: VecDeque::new(),
@@ -314,7 +354,7 @@ fn resolve_with(
             Resolved {
                 id: candidate.id.clone(),
                 identity: candidate.identity.clone(),
-                artifact_dir: candidate.artifact_dir.clone(),
+                source: candidate.source.clone(),
                 reason: choice.needs[0].to_string(),
             }
         })
@@ -322,11 +362,11 @@ fn resolve_with(
     Ok(Resolution { packages })
 }
 
-/// A package one of the artifact directories holds.
+/// A package one of the sources holds.
 struct Candidate {
     id: PackageId,
     identity: Identity,
-    artifact_dir: PathBuf,
+    source: Source,
     metadata: Metadata,
     /// Whether its repository's catalog has yanked it.
     yanked: bool,
@@ -385,7 +425,7 @@ struct Index {
     names: BTreeMap<String, Vec<Candidate>>,
     /// Each version deleted from a repository, by name: its version, the
     /// repository, and why.
-    deleted: BTreeMap<String, Vec<(String, PathBuf, String)>>,
+    deleted: BTreeMap<String, Vec<(String, Source, String)>>,
 }
 
 /// What a repository's catalog and the indexes asked for say of each of
@@ -398,34 +438,35 @@ struct Published {
     /// `name@version`.
     indexes: BTreeMap<String, BTreeSet<String>>,
     deleted: Vec<(String, String, String)>,
-    /// For a repository whose signature was checked, the identity its
-    /// catalog gives each version published, as `name@version`; `None`
-    /// where refs are trusted for themselves.
-    catalog: Option<BTreeMap<String, Identity>>,
+    /// For a repository whose signature was checked, or which is served
+    /// over HTTP, the identity its catalog gives each version published, by
+    /// name and version; `None` where refs are trusted for themselves.
+    catalog: Option<BTreeMap<(String, String), Identity>>,
 }
 
 impl Published {
-    /// What the repository at `dir` publishes, if it is one.
+    /// What `source` publishes, if it is a repository.
     fn read(
-        dir: &Path,
+        source: &Source,
         arch: &str,
         wanted: &BTreeSet<String>,
         key: Option<&repo::PublicKey>,
     ) -> Result<Self> {
         let mut published = Self::default();
-        let Some(pointer) = repo::read_pointer(dir, key)? else {
+        let remote = matches!(source, Source::Remote(_));
+        let Some(pointer) = source.pointer(key)? else {
+            if remote {
+                bail!("{source}: not published as a repository, which fetching over HTTP needs");
+            }
             if key.is_some() {
-                bail!(
-                    "{}: not published as a repository, which its key needs",
-                    dir.display()
-                );
+                bail!("{source}: not published as a repository, which its key needs");
             }
             return Ok(published);
         };
-        if key.is_some() {
+        if key.is_some() || remote {
             published.catalog = Some(BTreeMap::new());
         }
-        let trees = Trees::new(dir);
+        let trees = source.trees();
         let held = |packages: &repo::Packages| {
             (packages.iter())
                 .flat_map(|(name, releases)| {
@@ -441,7 +482,7 @@ impl Published {
                     && !matches!(release.standing, Standing::Deleted(_))
                 {
                     identities.insert(
-                        format!("{name}@{}", release.version),
+                        (name.clone(), release.version.clone()),
                         release.identity.clone(),
                     );
                 }
@@ -473,71 +514,57 @@ impl Published {
 
 impl Index {
     fn read(
-        artifact_dirs: &[PathBuf],
+        sources: &[Source],
         arch: &str,
         wanted: &BTreeSet<String>,
         signed: &BTreeMap<PathBuf, repo::PublicKey>,
     ) -> Result<Self> {
-        if artifact_dirs.is_empty() {
+        if sources.is_empty() {
             bail!("no artifact directory to choose packages from");
         }
         let mut names: BTreeMap<String, Vec<Candidate>> = BTreeMap::new();
-        let mut deleted: BTreeMap<String, Vec<(String, PathBuf, String)>> = BTreeMap::new();
+        let mut deleted: BTreeMap<String, Vec<(String, Source, String)>> = BTreeMap::new();
         let mut found = BTreeSet::new();
-        for dir in artifact_dirs {
-            let layout = ArtifactDir::new(dir);
-            let published = Published::read(dir, arch, wanted, signed.get(dir))?;
+        for source in sources {
+            let key = match source {
+                Source::Dir(dir) => signed.get(dir),
+                Source::Remote(remote) => remote.key(),
+            };
+            let published = Published::read(source, arch, wanted, key)?;
             found.extend(published.indexes.keys().cloned());
-            for (name, version, reason) in published.deleted {
-                deleted
-                    .entry(name)
-                    .or_default()
-                    .push((version, dir.clone(), reason));
+            for (name, version, reason) in &published.deleted {
+                deleted.entry(name.clone()).or_default().push((
+                    version.clone(),
+                    source.clone(),
+                    reason.clone(),
+                ));
             }
-            for name in package_names(dir)? {
-                for version in store::versions(&name, arch, dir)? {
-                    let id = PackageId::new(&name, &version, arch)?;
-                    let Some(identity) = store::read_ref(&layout.ref_path(&id))? else {
-                        continue;
-                    };
-                    if let Some(catalog) = &published.catalog {
-                        match catalog.get(&format!("{name}@{version}")) {
-                            // Not published: a ref the key doesn't vouch for.
-                            None => continue,
-                            Some(listed) if *listed != identity => bail!(
-                                "{id}: its ref in {} names {identity}, but the repository's \
-                                 signed catalog lists {listed}",
-                                dir.display()
-                            ),
-                            Some(_) => {}
-                        }
+            for (id, identity) in held(source, arch, &published)? {
+                let name = id.name();
+                let held = names.entry(name.to_owned()).or_default();
+                if let Some(first) = held.iter().find(|c| c.id == id) {
+                    if first.identity != identity {
+                        bail!(
+                            "{id} is {} in {}, but {identity} in {source}",
+                            first.identity,
+                            first.source,
+                        );
                     }
-                    let held = names.entry(name.clone()).or_default();
-                    if let Some(first) = held.iter().find(|c| c.id == id) {
-                        if first.identity != identity {
-                            bail!(
-                                "{id} is {} in {}, but {identity} in {}",
-                                first.identity,
-                                first.artifact_dir.display(),
-                                dir.display()
-                            );
-                        }
-                        continue;
-                    }
-                    let metadata = read_metadata(&layout, &id, &identity)?;
-                    let short = format!("{name}@{version}");
-                    held.push(Candidate {
-                        yanked: published.yanked.contains(&short),
-                        indexes: (published.indexes.iter())
-                            .filter(|(_, held)| held.contains(&short))
-                            .map(|(index, _)| index.clone())
-                            .collect(),
-                        id,
-                        identity,
-                        artifact_dir: dir.clone(),
-                        metadata,
-                    });
+                    continue;
                 }
+                let metadata = read_metadata(source, &id, &identity)?;
+                let short = format!("{name}@{}", id.version());
+                held.push(Candidate {
+                    yanked: published.yanked.contains(&short),
+                    indexes: (published.indexes.iter())
+                        .filter(|(_, held)| held.contains(&short))
+                        .map(|(index, _)| index.clone())
+                        .collect(),
+                    id,
+                    identity,
+                    source: source.clone(),
+                    metadata,
+                });
             }
         }
         if let Some(missing) = wanted.difference(&found).next() {
@@ -557,18 +584,61 @@ impl Index {
     /// repository deleted one it would have satisfied.
     fn tombstone(&self, name: &str, need: &Need) -> Option<String> {
         let deleted = self.deleted.get(name)?;
-        let (version, dir, reason) = deleted.iter().find(|(version, _, _)| {
+        let (version, source, reason) = deleted.iter().find(|(version, _, _)| {
             Version::parse(version).is_ok_and(|version| need.constraint.matches(&version))
         })?;
         Some(format!(
-            "; {name}@{version} was deleted from {}: {reason}",
-            dir.display()
+            "; {name}@{version} was deleted from {source}: {reason}"
         ))
     }
 
     fn get(&self, name: &str) -> &[Candidate] {
         self.names.get(name).map_or(&[], Vec::as_slice)
     }
+}
+
+/// The packages for `arch` that `source` holds, and the identity of each:
+/// a directory's refs, those its signed catalog lists if it is signed, or a
+/// remote repository's catalog.
+fn held(source: &Source, arch: &str, published: &Published) -> Result<Vec<(PackageId, Identity)>> {
+    let dir = match source {
+        Source::Dir(dir) => dir,
+        Source::Remote(_) => {
+            let catalog = published
+                .catalog
+                .as_ref()
+                .expect("a remote's catalog is read");
+            return (catalog.iter())
+                .map(|((name, version), identity)| {
+                    Ok((PackageId::new(name, version, arch)?, identity.clone()))
+                })
+                .collect();
+        }
+    };
+    let layout = ArtifactDir::new(dir);
+    let mut held = Vec::new();
+    for name in package_names(dir)? {
+        for version in store::versions(&name, arch, dir)? {
+            let id = PackageId::new(&name, &version, arch)?;
+            let Some(identity) = store::read_ref(&layout.ref_path(&id))? else {
+                continue;
+            };
+            if let Some(catalog) = &published.catalog {
+                match catalog.get(&(name.clone(), version.clone())) {
+                    // Not published: a ref the key doesn't vouch for.
+                    None => continue,
+                    Some(listed) if *listed != identity => bail!(
+                        "{id}: its ref in {} names {identity}, but the repository's signed \
+                         catalog lists {listed}",
+                        dir.display()
+                    ),
+                    Some(_) => {}
+                }
+            }
+            held.push((id, identity));
+        }
+    }
+    Ok(held)
 }
 
 /// The names of the packages `dir` has refs for. A name that isn't a
@@ -600,19 +670,12 @@ fn package_names(dir: &Path) -> Result<Vec<String>> {
 
 /// The metadata of the package `id`, whose manifest is `identity`, checked
 /// against its hash and against the package its ref says it is.
-fn read_metadata(layout: &ArtifactDir, id: &PackageId, identity: &Identity) -> Result<Metadata> {
-    let path = layout.manifest_path(identity);
-    let bytes = fs::read(&path).with_context(|| format!("{}", path.display()))?;
-    if Identity::of(&bytes) != *identity {
-        bail!("{}: does not match its hash", path.display());
-    }
-    let manifest = parse_manifest(&bytes).with_context(|| format!("{}", path.display()))?;
+fn read_metadata(source: &Source, id: &PackageId, identity: &Identity) -> Result<Metadata> {
+    let bytes = source.manifest(identity)?;
+    let place = source.manifest_place(identity);
+    let manifest = parse_manifest(&bytes).with_context(|| place.clone())?;
     if manifest.id != *id {
-        bail!(
-            "{}: is {}, but its ref says {id}",
-            path.display(),
-            manifest.id
-        );
+        bail!("{place}: is {}, but its ref says {id}", manifest.id);
     }
     Ok(manifest.metadata)
 }
@@ -683,7 +746,7 @@ struct Choice<'a> {
 
 struct Resolver<'a> {
     index: &'a Index,
-    artifact_dirs: &'a [PathBuf],
+    sources: &'a [Source],
     arch: &'a str,
     chosen: BTreeMap<&'a str, Choice<'a>>,
     packages: VecDeque<Need>,
@@ -825,7 +888,7 @@ impl<'a> Resolver<'a> {
                  can tell apart; remove one of them from {}",
                 Short(chosen),
                 Short(&other.id),
-                other.artifact_dir.display()
+                other.source
             );
         }
         Ok(Some(index))
@@ -892,11 +955,9 @@ impl<'a> Resolver<'a> {
         message
     }
 
-    /// The artifact directories, for an error.
+    /// The sources, for an error.
     fn dirs(&self) -> String {
-        let dirs: Vec<String> = (self.artifact_dirs.iter())
-            .map(|dir| dir.display().to_string())
-            .collect();
+        let dirs: Vec<String> = self.sources.iter().map(ToString::to_string).collect();
         dirs.join(", ")
     }
 }

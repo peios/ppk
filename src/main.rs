@@ -87,7 +87,7 @@ enum Command {
     },
     /// Fetch a package and what it needs from another artifact directory
     #[command(
-        override_usage = "ppk fetch [options] --from <dir> <request>",
+        override_usage = "ppk fetch [options] [--from <dir|url>] <request>",
         after_help = SEE_ALSO
     )]
     Fetch {
@@ -102,10 +102,10 @@ enum Command {
             hide_default_value = true,
         )]
         artifact_dir: PathBuf,
-        /// Copy from the artifact directory <dir>, rather than from the
-        /// configured repositories
-        #[arg(long, value_name = "dir")]
-        from: Option<PathBuf>,
+        /// Copy from the artifact directory or repository URL <dir|url>,
+        /// rather than from the configured repositories
+        #[arg(long, value_name = "dir|url", value_parser = parse_source)]
+        from: Option<ppk::Source>,
         /// Read the repositories from <dir> (default: /conf/ppk)
         #[arg(
             long,
@@ -122,6 +122,14 @@ enum Command {
             hide_default_value = true
         )]
         state_dir: PathBuf,
+        /// Keep what is read over HTTP in <dir> (default: /var/cache/ppk)
+        #[arg(
+            long,
+            value_name = "dir",
+            default_value = ppk::config::DEFAULT_CACHE_DIR,
+            hide_default_value = true
+        )]
+        cache_dir: PathBuf,
         /// Copy exactly the package ID given, without resolving what it needs
         #[arg(long)]
         no_deps: bool,
@@ -278,7 +286,7 @@ enum Command {
     /// Choose packages and write their profile
     #[command(
         override_usage = "ppk resolve [options] [-p <request>...] [-c <request>...]\n       \
-                          --from <dir>...",
+                          --from <dir|url>...",
         after_help = SEE_ALSO
     )]
     Resolve {
@@ -294,9 +302,24 @@ enum Command {
         /// Capabilities to provide, with constraints
         #[arg(short = 'c', long = "capability", value_name = "request", num_args = 1..)]
         capabilities: Vec<String>,
-        /// Choose from the packages in <dir>
-        #[arg(long, value_name = "dir", num_args = 1.., required = true)]
-        from: Vec<PathBuf>,
+        /// Choose from the packages in the artifact directory or repository
+        /// URL <dir|url>
+        #[arg(
+            long,
+            value_name = "dir|url",
+            num_args = 1..,
+            required = true,
+            value_parser = parse_source
+        )]
+        from: Vec<ppk::Source>,
+        /// Keep what is read over HTTP in <dir> (default: /var/cache/ppk)
+        #[arg(
+            long,
+            value_name = "dir",
+            default_value = ppk::config::DEFAULT_CACHE_DIR,
+            hide_default_value = true
+        )]
+        cache_dir: PathBuf,
         /// Choose for <arch> (default: ppk's own)
         #[arg(long, value_name = "arch")]
         arch: Option<String>,
@@ -558,30 +581,32 @@ enum RepoCommand {
     /// Print a repository's pointer file, checking its signature with a key
     #[command(override_usage = "ppk repo show [options]", after_help = SEE_ALSO)]
     Show {
-        /// The repository (default: /system/artifacts)
+        /// The repository, a directory or URL (default: /system/artifacts)
         #[arg(
             long,
-            value_name = "dir",
+            value_name = "dir|url",
             default_value = ppk::DEFAULT_ARTIFACT_DIR,
             hide_default_value = true,
+            value_parser = parse_source
         )]
-        artifact_dir: PathBuf,
+        artifact_dir: ppk::Source,
         /// Check the signature against the public key <key>
         #[arg(long, value_name = "key")]
         public_key: Option<String>,
     },
     /// Add a repository for this machine to fetch from
     #[command(
-        override_usage = "ppk repo add [options] <name> <path>",
+        override_usage = "ppk repo add [options] <name> <path>\n       \
+                          ppk repo add [options] <name> <url>...",
         after_help = SEE_ALSO
     )]
     Add {
         /// Its name, such as peios
         #[arg(value_name = "name")]
         name: String,
-        /// Where it is
-        #[arg(value_name = "path")]
-        path: PathBuf,
+        /// Where it is: a directory, or base URLs tried in order
+        #[arg(value_name = "path|url", num_args = 1.., required = true)]
+        location: Vec<String>,
         /// Check its pointer file against the public key <key>
         #[arg(long, value_name = "key")]
         public_key: Option<String>,
@@ -639,6 +664,11 @@ enum RepoCommand {
         #[arg(long, value_name = "file")]
         key: Option<PathBuf>,
     },
+}
+
+/// The artifact directory or repository URL `s`.
+fn parse_source(s: &str) -> anyhow::Result<ppk::Source> {
+    ppk::Source::parse(s)
 }
 
 /// The private key at `path`, or at `$PPK_REPO_KEY` if no path is given.
@@ -724,18 +754,23 @@ fn repo(program: &str, command: RepoCommand) -> anyhow::Result<()> {
         } => {
             let public_key: Option<ppk::repo::PublicKey> =
                 public_key.as_deref().map(str::parse).transpose()?;
-            match ppk::repo::read_pointer(&artifact_dir, public_key.as_ref())? {
+            let pointer = match &artifact_dir {
+                ppk::Source::Dir(dir) => ppk::repo::read_pointer(dir, public_key.as_ref())?,
+                ppk::Source::Remote(remote) => remote.clone().with_key(public_key).pointer()?,
+            };
+            match pointer {
                 Some(pointer) => print!("{}", pointer.render()),
-                None => anyhow::bail!("{}: not published as a repository", artifact_dir.display()),
+                None => anyhow::bail!("{artifact_dir}: not published as a repository"),
             }
         }
         RepoCommand::Add {
             name,
-            path,
+            location,
             public_key,
             track,
             config_dir,
         } => {
+            let location = ppk::config::Location::parse(&location)?;
             let key = public_key.as_deref().map(str::parse).transpose()?;
             if let Some(track) = &track {
                 ppk::repo::check_ref_name(track)?;
@@ -744,7 +779,7 @@ fn repo(program: &str, command: RepoCommand) -> anyhow::Result<()> {
                 &config_dir,
                 &ppk::config::Repository {
                     name,
-                    path,
+                    location,
                     key,
                     track,
                 },
@@ -773,8 +808,7 @@ fn repo(program: &str, command: RepoCommand) -> anyhow::Result<()> {
                 let track = repository.track.as_deref().unwrap_or("-");
                 println!(
                     "{} {} #{track} ({published})",
-                    repository.name,
-                    repository.path.display()
+                    repository.name, repository.location
                 );
             }
         }
@@ -821,6 +855,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             from,
             config_dir,
             state_dir,
+            cache_dir,
             replace,
             no_deps,
             arch,
@@ -836,27 +871,34 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
                 let mut requests = ppk::exact_requests(&inputs.pins)?;
                 requests.extend(inputs.requests);
                 let repositories = ppk::config::repositories(&config_dir)?;
-                let settled =
-                    ppk::config::resolve(&requests, &repositories, &state_dir, &inputs.arch)?;
+                let settled = ppk::config::resolve(
+                    &requests,
+                    &repositories,
+                    &state_dir,
+                    &cache_dir,
+                    &inputs.arch,
+                )?;
                 for package in settled.resolution.packages {
-                    if ppk::packed(&package.id, &artifact_dir)? == Some(package.identity) {
+                    if ppk::packed(&package.id, &artifact_dir)? == Some(package.identity.clone()) {
                         continue;
                     }
-                    let fetched = ppk::fetch(&package.id, &package.artifact_dir, &artifact_dir)?;
+                    let mut fetched = ppk::fetch_resolved(&[package], &artifact_dir)?;
+                    let fetched = fetched.remove(0);
                     warn_unstamped(program, fetched.unstamped);
                     println!("{}", fetched.identity);
                 }
                 return Ok(ExitCode::SUCCESS);
             };
+            let from = from.with_cache(&cache_dir);
             if no_deps {
                 let id = match package.parse() {
                     Ok(id) => id,
                     Err(err) => return Ok(report_usage_error(program, &describe(&err))),
                 };
                 let fetched = if replace {
-                    ppk::fetch_replacing(&id, &from, &artifact_dir)?
+                    ppk::fetch_replacing_from(&id, &from, &artifact_dir)?
                 } else {
-                    ppk::fetch(&id, &from, &artifact_dir)?
+                    ppk::fetch_from(&id, &from, &artifact_dir)?
                 };
                 warn_unstamped(program, fetched.unstamped);
                 println!("{}", fetched.identity);
@@ -865,7 +907,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
                     Ok(inputs) => inputs,
                     Err(err) => return Ok(report_usage_error(program, &describe(&err))),
                 };
-                let resolved = ppk::resolve_pinned(
+                let resolved = ppk::resolve_sources(
                     &inputs.requests,
                     &inputs.pins,
                     std::slice::from_ref(&from),
@@ -873,11 +915,11 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
                 )?;
                 let mut wanted = Vec::new();
                 for package in resolved.packages {
-                    if ppk::packed(&package.id, &artifact_dir)? != Some(package.identity) {
-                        wanted.push(package.id);
+                    if ppk::packed(&package.id, &artifact_dir)? != Some(package.identity.clone()) {
+                        wanted.push(package);
                     }
                 }
-                let fetched = ppk::fetch_all(&wanted, &from, &artifact_dir)?;
+                let fetched = ppk::fetch_resolved(&wanted, &artifact_dir)?;
                 warn_unstamped(program, fetched.iter().map(|each| each.unstamped).sum());
                 for each in fetched {
                     println!("{}", each.identity);
@@ -1062,6 +1104,7 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
             packages,
             capabilities,
             from,
+            cache_dir,
             arch,
             out,
         } => {
@@ -1070,7 +1113,13 @@ fn run(program: &str, cli: Cli) -> anyhow::Result<ExitCode> {
                 Err(err) => return Ok(report_usage_error(program, &describe(&err))),
             };
             let arch = arch.as_deref().unwrap_or(ppk::HOST_ARCH);
-            let profile = ppk::resolve(&requests, &from, arch)?.profile()?.render()?;
+            let from: Vec<ppk::Source> = from
+                .into_iter()
+                .map(|source| source.with_cache(&cache_dir))
+                .collect();
+            let profile = ppk::resolve_sources(&requests, &[], &from, arch)?
+                .profile()?
+                .render()?;
             match out {
                 Some(out) => {
                     std::fs::write(&out, profile).map_err(|err| {

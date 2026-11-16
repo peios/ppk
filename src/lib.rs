@@ -72,9 +72,11 @@ mod metadata;
 mod names;
 mod pack;
 mod profile;
+mod remote;
 pub mod repo;
 mod resolve;
 mod security;
+mod source;
 #[cfg(test)]
 mod stamp_tests;
 mod store;
@@ -85,7 +87,9 @@ pub use compose::{
     Composed, EnvDir, EnvSymlink, Extras, RootArtifacts, compose_env, compose_env_for,
 };
 pub use derive::{SYMBOL_CAPABILITIES, SYMBOL_VERSION_FLOORS};
-pub use fetch::{Fetched, fetch, fetch_all, fetch_replacing};
+pub use fetch::{
+    Fetched, fetch, fetch_all, fetch_from, fetch_replacing, fetch_replacing_from, fetch_resolved,
+};
 pub use id::{HOST_ARCH, PackageId};
 pub use identity::Identity;
 pub use image::{
@@ -102,8 +106,12 @@ pub use pack::{
     PackOptions, Packed, pack, pack_replacing, pack_replacing_with, pack_with, pack_with_options,
 };
 pub use profile::Profile;
-pub use resolve::{Request, Resolution, Resolved, Wanted, resolve, resolve_pinned, resolve_signed};
+pub use remote::{Remote, is_url};
+pub use resolve::{
+    Request, Resolution, Resolved, Wanted, resolve, resolve_pinned, resolve_signed, resolve_sources,
+};
 pub use security::SecurityDescriptor;
+pub use source::Source;
 pub use store::{packed, prepare_artifact_dir, stored_packages, versions};
 pub use version::{Constraint, Operator, Version};
 

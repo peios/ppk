@@ -48,11 +48,20 @@ It writes the catalog and `leading`, signs the pointer file, and prints it:
 sequence 1
 signed 2026-11-13T13:11:46Z
 catalog sha256:09cc9d05541917d9894cb2fc71a05373509789c0218b9ca5b7284ed6cca28619
+provides sha256:f6ca384d90eb3223b077a93785c13ea3a9fb5ee53957f489e93cbd3b959e8015
 index leading sha256:f5e090f9de6441810fab9e15909770d071687375e9f35c35d73244302c877ab6
 ```
 
 The sequence goes up by one each time you publish. Run `ppk repo update`
 again after adding packages.
+
+Besides the catalog, `ppk repo update` writes each version's summary, the
+part of its manifest that says what it needs and provides, and the
+catalog's provides tree, which lists what provides each capability. A
+machine choosing packages from the repository over HTTP reads those for
+the names it needs, not every manifest the repository holds. A repository
+published by an earlier `ppk` gets them the next
+time you run `ppk repo update`, with the same packages.
 
 `leading` holds only what can be installed from it. A package whose
 dependencies or requirements `leading` can't satisfy is left out, with a

@@ -501,10 +501,39 @@ struct Publishing {
         hide_default_value = true,
     )]
     artifact_dir: PathBuf,
-    /// Sign with the ML-DSA-65 private key in the PEM file <file>
-    /// (default: $PPK_REPO_KEY)
+    /// Sign as the signer file <file> says (default: $PPK_REPO_SIGNER)
     #[arg(long, value_name = "file")]
-    key: Option<PathBuf>,
+    signer: Option<PathBuf>,
+}
+
+/// What a repository's signature must show.
+#[derive(Args)]
+struct Signed {
+    /// Check that its pointer file is signed as <name>
+    #[arg(long, value_name = "name")]
+    identity: Option<String>,
+    /// Accept a chain that no root vouches for
+    #[arg(long, requires = "identity")]
+    unrooted: bool,
+    /// Require its chain to end at the top-level whose hash is <hash>
+    #[arg(long, value_name = "hash", requires = "identity")]
+    anchor: Option<String>,
+}
+
+impl Signed {
+    fn trust(&self) -> anyhow::Result<Option<ppk::repo::Trust>> {
+        let Some(identity) = &self.identity else {
+            return Ok(None);
+        };
+        let mut trust = ppk::repo::Trust::new(identity, ppk::repo::Anchors::system()?);
+        trust.unrooted = self.unrooted;
+        trust.anchor = self
+            .anchor
+            .as_deref()
+            .map(pso::hex::decode_hash)
+            .transpose()?;
+        Ok(Some(trust))
+    }
 }
 
 #[derive(Subcommand)]
@@ -599,7 +628,7 @@ enum RepoCommand {
         #[command(flatten)]
         publishing: Publishing,
     },
-    /// Print a repository's pointer file, checking its signature with a key
+    /// Print a repository's pointer file, checking who signed it
     #[command(override_usage = "ppk repo show [options]", after_help = SEE_ALSO)]
     Show {
         /// The repository, a directory or URL (default: /system/artifacts)
@@ -611,9 +640,8 @@ enum RepoCommand {
             value_parser = parse_source
         )]
         artifact_dir: ppk::Source,
-        /// Check the signature against the public key <key>
-        #[arg(long, value_name = "key")]
-        public_key: Option<String>,
+        #[command(flatten)]
+        signed: Signed,
     },
     /// Add a repository for this machine to fetch from
     #[command(
@@ -628,9 +656,8 @@ enum RepoCommand {
         /// Where it is: a directory, or base URLs tried in order
         #[arg(value_name = "path|url", num_args = 1.., required = true)]
         location: Vec<String>,
-        /// Check its pointer file against the public key <key>
-        #[arg(long, value_name = "key")]
-        public_key: Option<String>,
+        #[command(flatten)]
+        signed: Signed,
         /// Follow the index or channel <index> for bare names, such as stable
         #[arg(long, value_name = "index")]
         track: Option<String>,
@@ -678,13 +705,6 @@ enum RepoCommand {
         )]
         state_dir: PathBuf,
     },
-    /// Print the public key of a private key, for a repository's configuration
-    #[command(override_usage = "ppk repo public-key --key <file>", after_help = SEE_ALSO)]
-    PublicKey {
-        /// The ML-DSA-65 private key in the PEM file <file> (default: $PPK_REPO_KEY)
-        #[arg(long, value_name = "file")]
-        key: Option<PathBuf>,
-    },
 }
 
 /// The artifact directory or repository URL `s`.
@@ -692,18 +712,19 @@ fn parse_source(s: &str) -> anyhow::Result<ppk::Source> {
     ppk::Source::parse(s)
 }
 
-/// The private key at `path`, or at `$PPK_REPO_KEY` if no path is given.
-fn load_key(path: Option<&Path>) -> anyhow::Result<ppk::repo::PrivateKey> {
-    let from_env = std::env::var_os("PPK_REPO_KEY").map(PathBuf::from);
+/// The signer the file at `path` describes, or the file `$PPK_REPO_SIGNER`
+/// names if no path is given.
+fn load_signer(path: Option<&Path>) -> anyhow::Result<ppk::repo::Signer> {
+    let from_env = std::env::var_os("PPK_REPO_SIGNER").map(PathBuf::from);
     let Some(path) = path.map(Path::to_path_buf).or(from_env) else {
-        anyhow::bail!("no key: give --key <file>, or set PPK_REPO_KEY");
+        anyhow::bail!("no signer: give --signer <file>, or set PPK_REPO_SIGNER");
     };
-    ppk::repo::PrivateKey::load(&path)
+    ppk::repo::Signer::load(&path)
 }
 
 /// Run the repository command `command`.
 fn repo(program: &str, command: RepoCommand) -> anyhow::Result<()> {
-    let key = |publishing: &Publishing| load_key(publishing.key.as_deref());
+    let key = |publishing: &Publishing| load_signer(publishing.signer.as_deref());
     let report = |published: ppk::repo::Published| {
         for left in &published.left_out {
             eprintln!(
@@ -780,13 +801,12 @@ fn repo(program: &str, command: RepoCommand) -> anyhow::Result<()> {
         }
         RepoCommand::Show {
             artifact_dir,
-            public_key,
+            signed,
         } => {
-            let public_key: Option<ppk::repo::PublicKey> =
-                public_key.as_deref().map(str::parse).transpose()?;
+            let trust = signed.trust()?;
             let pointer = match &artifact_dir {
-                ppk::Source::Dir(dir) => ppk::repo::read_pointer(dir, public_key.as_ref())?,
-                ppk::Source::Remote(remote) => remote.clone().with_key(public_key).pointer()?,
+                ppk::Source::Dir(dir) => ppk::repo::read_pointer(dir, trust.as_ref())?,
+                ppk::Source::Remote(remote) => remote.clone().with_trust(trust).pointer()?,
             };
             match pointer {
                 Some(pointer) => print!("{}", pointer.render()),
@@ -796,12 +816,12 @@ fn repo(program: &str, command: RepoCommand) -> anyhow::Result<()> {
         RepoCommand::Add {
             name,
             location,
-            public_key,
+            signed,
             track,
             config_dir,
         } => {
             let location = ppk::config::Location::parse(&location)?;
-            let key = public_key.as_deref().map(str::parse).transpose()?;
+            let trust = signed.trust()?;
             if let Some(track) = &track {
                 ppk::repo::check_ref_name(track)?;
             }
@@ -810,7 +830,7 @@ fn repo(program: &str, command: RepoCommand) -> anyhow::Result<()> {
                 &ppk::config::Repository {
                     name,
                     location,
-                    key,
+                    trust,
                     track,
                 },
             )?;
@@ -828,7 +848,7 @@ fn repo(program: &str, command: RepoCommand) -> anyhow::Result<()> {
                         "sequence {}, signed {}{}",
                         pointer.sequence,
                         pointer.signed,
-                        match repository.key {
+                        match repository.trust {
                             Some(_) => ", signature checked",
                             None => "",
                         }
@@ -841,9 +861,6 @@ fn repo(program: &str, command: RepoCommand) -> anyhow::Result<()> {
                     repository.name, repository.location
                 );
             }
-        }
-        RepoCommand::PublicKey { key } => {
-            println!("{}", load_key(key.as_deref())?.public());
         }
     }
     Ok(())

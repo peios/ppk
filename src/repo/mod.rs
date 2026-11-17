@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! repository           the pointer file
-//! repository.sig       its signature
+//! repository.pso       its signature
 //! trees/sha256/<hex>   the catalog's and the indexes' tree nodes
 //! refs/ manifests/ blobs/
 //! ```
@@ -16,8 +16,8 @@
 //! but the two files at the top.
 
 mod export;
-mod key;
 mod pointer;
+mod signing;
 mod tree;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -28,8 +28,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 pub use export::{DEFAULT_LEVEL, Exported, export};
-pub use key::{PrivateKey, PublicKey};
 pub use pointer::{Blobs, Channel, LEADING, Pointer, check_ref_name};
+pub use signing::{Anchors, Signer, Trust};
 pub use tree::{Packages, Provider, Providers, Release, Standing, Trees};
 
 use crate::manifest::{parse_summary, summary_of};
@@ -40,7 +40,7 @@ use crate::{Entry, Identity, Metadata, PackageId, Version, parse_manifest, store
 pub(crate) const POINTER: &str = "repository";
 
 /// Its signature, beside it.
-pub(crate) const SIGNATURE: &str = "repository.sig";
+pub(crate) const SIGNATURE: &str = "repository.pso";
 
 /// A package left out of `leading`, because what it needs isn't there.
 #[derive(Debug)]
@@ -58,15 +58,15 @@ pub struct Published {
 }
 
 /// The pointer file of the repository at `repo`, or `None` if it has none.
-/// With `key`, its signature must be that key's.
-pub fn read_pointer(repo: &Path, key: Option<&PublicKey>) -> Result<Option<Pointer>> {
+/// With `trust`, its signature must show what that requires.
+pub fn read_pointer(repo: &Path, trust: Option<&Trust>) -> Result<Option<Pointer>> {
     let path = repo.join(POINTER);
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err).with_context(|| format!("{}", path.display())),
     };
-    let signature = match key {
+    let signature = match trust {
         None => None,
         Some(_) => {
             let signature_path = repo.join(SIGNATURE);
@@ -79,24 +79,30 @@ pub fn read_pointer(repo: &Path, key: Option<&PublicKey>) -> Result<Option<Point
     check_pointer(
         bytes,
         signature.as_deref(),
-        key,
+        trust,
         &path.display().to_string(),
     )
     .map(Some)
 }
 
-/// The pointer file `bytes`, read from `from`. With `key`, `signature` must
-/// be that key's signature over it.
+/// The pointer file `bytes`, read from `from`. With `trust`, `signature`
+/// must sign it as that requires.
 pub(crate) fn check_pointer(
     bytes: Vec<u8>,
     signature: Option<&[u8]>,
-    key: Option<&PublicKey>,
+    trust: Option<&Trust>,
     from: &str,
 ) -> Result<Pointer> {
-    if let Some(key) = key
-        && !signature.is_some_and(|signature| key.verifies(&bytes, signature))
-    {
-        bail!("{from}: not signed by the repository's key");
+    if let Some(trust) = trust {
+        let Some(signature) = signature else {
+            bail!(
+                "{from}: not signed as {}: it has no signature",
+                trust.identity
+            );
+        };
+        trust
+            .check(&bytes, signature)
+            .with_context(|| format!("{from}: not signed as {}", trust.identity))?;
     }
     let text = String::from_utf8(bytes).with_context(|| from.to_owned())?;
     Pointer::parse(&text).with_context(|| format!("{from}: malformed pointer file"))
@@ -104,10 +110,10 @@ pub(crate) fn check_pointer(
 
 /// Sign and write `pointer`. The signature is written first, so a reader
 /// that finds the two don't match has read between them and can read again.
-fn write_pointer(repo: &Path, pointer: &Pointer, key: &PrivateKey) -> Result<()> {
+fn write_pointer(repo: &Path, pointer: &Pointer, signer: &Signer) -> Result<()> {
     pointer.check()?;
     let text = pointer.render();
-    let signature = key.sign(text.as_bytes())?;
+    let signature = signer.sign(text.as_bytes())?;
     store::write_replacing(repo, &repo.join(SIGNATURE), &signature)?;
     store::write_replacing(repo, &repo.join(POINTER), text.as_bytes())
 }
@@ -122,14 +128,14 @@ fn current(repo: &Path) -> Result<Pointer> {
 /// current version of each package for each architecture. A package whose
 /// dependencies or requirements `leading` can't satisfy is left out of it,
 /// and so is anything left needing it, or with `strict`, is an error. The
-/// pointer file goes up one in sequence and is signed with `key`.
-pub fn update(repo: &Path, key: &PrivateKey, strict: bool) -> Result<Published> {
-    update_with(repo, key, strict, |_| Ok(()))
+/// pointer file goes up one in sequence and is signed by `signer`.
+pub fn update(repo: &Path, signer: &Signer, strict: bool) -> Result<Published> {
+    update_with(repo, signer, strict, |_| Ok(()))
 }
 
 fn update_with(
     repo: &Path,
-    key: &PrivateKey,
+    signer: &Signer,
     strict: bool,
     change: impl FnOnce(&mut Packages) -> Result<()>,
 ) -> Result<Published> {
@@ -156,7 +162,7 @@ fn update_with(
     pointer
         .indexes
         .insert(LEADING.to_owned(), trees.write_tree(&leading)?);
-    write_pointer(repo, &pointer, key)?;
+    write_pointer(repo, &pointer, signer)?;
     Ok(Published { pointer, left_out })
 }
 
@@ -390,7 +396,7 @@ fn metadata(layout: &ArtifactDir, identity: &Identity) -> Result<Metadata> {
 
 /// Make the index `name` a snapshot of the index or channel `from`. A
 /// snapshot never changes, so `name` must be new.
-pub fn snapshot(repo: &Path, key: &PrivateKey, name: &str, from: &str) -> Result<Pointer> {
+pub fn snapshot(repo: &Path, signer: &Signer, name: &str, from: &str) -> Result<Pointer> {
     check_ref_name(name)?;
     let mut pointer = current(repo)?.next();
     if pointer.indexes.contains_key(name) || pointer.channels.contains_key(name) {
@@ -399,7 +405,7 @@ pub fn snapshot(repo: &Path, key: &PrivateKey, name: &str, from: &str) -> Result
     let (_, top) = pointer.index_of(from)?;
     let top = top.clone();
     pointer.indexes.insert(name.to_owned(), top);
-    write_pointer(repo, &pointer, key)?;
+    write_pointer(repo, &pointer, signer)?;
     Ok(pointer)
 }
 
@@ -407,7 +413,7 @@ pub fn snapshot(repo: &Path, key: &PrivateKey, name: &str, from: &str) -> Result
 /// it ended if `ended`.
 pub fn channel(
     repo: &Path,
-    key: &PrivateKey,
+    signer: &Signer,
     name: &str,
     target: &str,
     ended: bool,
@@ -425,13 +431,13 @@ pub fn channel(
         },
     );
     pointer.check()?;
-    write_pointer(repo, &pointer, key)?;
+    write_pointer(repo, &pointer, signer)?;
     Ok(pointer)
 }
 
 /// Yank the version `id`, or with `undo`, unyank it, and publish again.
-pub fn yank(repo: &Path, key: &PrivateKey, id: &PackageId, undo: bool) -> Result<Published> {
-    update_with(repo, key, false, |catalog| {
+pub fn yank(repo: &Path, signer: &Signer, id: &PackageId, undo: bool) -> Result<Published> {
+    update_with(repo, signer, false, |catalog| {
         let release = find(catalog, id)?;
         release.standing = match (&release.standing, undo) {
             (Standing::Deleted(_), _) => bail!("{id}: deleted, not current"),
@@ -445,7 +451,7 @@ pub fn yank(repo: &Path, key: &PrivateKey, id: &PackageId, undo: bool) -> Result
 /// Delete the version `id` for `reason`: its ref, its manifest, and every
 /// file of it that no other manifest names, leaving a tombstone in the
 /// catalog. Then publish again.
-pub fn delete(repo: &Path, key: &PrivateKey, id: &PackageId, reason: &str) -> Result<Published> {
+pub fn delete(repo: &Path, signer: &Signer, id: &PackageId, reason: &str) -> Result<Published> {
     if reason.is_empty() || reason.contains('\n') {
         bail!("a deletion's reason is one line, not empty");
     }
@@ -464,7 +470,7 @@ pub fn delete(repo: &Path, key: &PrivateKey, id: &PackageId, reason: &str) -> Re
         remove(file)?;
     }
     let reason = reason.to_owned();
-    update_with(repo, key, false, move |catalog| {
+    update_with(repo, signer, false, move |catalog| {
         catalog
             .entry(id.name().to_owned())
             .or_default()

@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
-use crate::repo::{self, Pointer, PublicKey};
+use crate::repo::{self, Pointer, Trust};
 use crate::{ALGORITHM, Identity};
 
 /// How long to wait to connect to a server.
@@ -52,9 +52,10 @@ pub fn is_url(s: &str) -> bool {
 pub struct Remote {
     /// Its base URLs, in the order they're tried, each ending in `/`.
     urls: Vec<String>,
-    /// Behind an `Arc`: an ML-DSA public key is large, and a remote is
-    /// cloned into everything resolved from it.
-    key: Option<Arc<PublicKey>>,
+    /// What its pointer file's signature must show, if it must be signed.
+    /// Behind an `Arc`, since a remote is cloned into everything resolved
+    /// from it.
+    trust: Option<Arc<Trust>>,
     cache: Option<PathBuf>,
     agent: ureq::Agent,
     /// Its pointer file, once read: a run reads it once, so that everything
@@ -66,7 +67,7 @@ impl fmt::Debug for Remote {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Remote")
             .field("urls", &self.urls)
-            .field("key", &self.key)
+            .field("trust", &self.trust)
             .field("cache", &self.cache)
             .finish_non_exhaustive()
     }
@@ -99,16 +100,17 @@ impl Remote {
             .new_agent();
         Ok(Self {
             urls,
-            key: None,
+            trust: None,
             cache: None,
             agent,
             pointer: Arc::new(Mutex::new(None)),
         })
     }
 
-    /// The same repository, whose pointer file must be signed with `key`.
-    pub fn with_key(mut self, key: Option<PublicKey>) -> Self {
-        self.key = key.map(Arc::new);
+    /// The same repository, whose pointer file must be signed as `trust`
+    /// requires.
+    pub fn with_trust(mut self, trust: Option<Trust>) -> Self {
+        self.trust = trust.map(Arc::new);
         self.pointer = Arc::new(Mutex::new(None));
         self
     }
@@ -125,12 +127,12 @@ impl Remote {
         &self.urls
     }
 
-    /// The key its pointer file must be signed with, if it must be.
-    pub fn key(&self) -> Option<&PublicKey> {
-        self.key.as_deref()
+    /// What its pointer file's signature must show, if it must be signed.
+    pub fn trust(&self) -> Option<&Trust> {
+        self.trust.as_deref()
     }
 
-    /// Its pointer file, checked against its key if it has one, or `None`
+    /// Its pointer file, checked against what it requires of its signature, if anything, or `None`
     /// if every base URL says it has none. Read once, and then remembered.
     pub fn pointer(&self) -> Result<Option<Pointer>> {
         let mut held = self.pointer.lock().expect("no reader panics holding it");
@@ -153,7 +155,7 @@ impl Remote {
                     continue;
                 }
             };
-            let signature = match &self.key {
+            let signature = match &self.trust {
                 None => None,
                 Some(_) => match self.get(&format!("{base}{}", repo::SIGNATURE), SMALL_LIMIT) {
                     Ok(signature) => Some(signature),
@@ -168,7 +170,7 @@ impl Remote {
                     }
                 },
             };
-            return repo::check_pointer(bytes, signature.as_deref(), self.key(), &url).map(Some);
+            return repo::check_pointer(bytes, signature.as_deref(), self.trust(), &url).map(Some);
         }
         if failures.iter().all(|failure| failure.missing) {
             return Ok(None);

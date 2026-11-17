@@ -236,15 +236,15 @@ pub fn resolve(requests: &[Request], artifact_dirs: &[PathBuf], arch: &str) -> R
 }
 
 /// Resolve as [`resolve`] does, where each repository `signed` names must
-/// have signed its pointer file with the key it gives. A package of such a
+/// have signed its pointer file as its requirement says. A package of such a
 /// repository is a candidate only if its signed catalog lists it, and only
 /// at the identity the catalog gives: its ref and manifest are checked
-/// against what the key vouches for, not trusted for themselves.
+/// against what the signature vouches for, not trusted for themselves.
 pub fn resolve_signed(
     requests: &[Request],
     artifact_dirs: &[PathBuf],
     arch: &str,
-    signed: &BTreeMap<PathBuf, repo::PublicKey>,
+    signed: &BTreeMap<PathBuf, repo::Trust>,
 ) -> Result<Resolution> {
     resolve_with(requests, &[], &sources(artifact_dirs), arch, signed)
 }
@@ -288,14 +288,14 @@ fn sources(artifact_dirs: &[PathBuf]) -> Vec<Source> {
 }
 
 /// Resolve from `sources`, where each directory `signed` names must have
-/// signed its pointer file with the key it gives. A repository served over
-/// HTTP carries its own key.
+/// signed its pointer file as its requirement says. A repository served
+/// over HTTP carries its own requirement.
 pub(crate) fn resolve_with(
     requests: &[Request],
     pins: &[PackageId],
     sources: &[Source],
     arch: &str,
-    signed: &BTreeMap<PathBuf, repo::PublicKey>,
+    signed: &BTreeMap<PathBuf, repo::Trust>,
 ) -> Result<Resolution> {
     let wanted_indexes = requests.iter().filter_map(|r| r.index.clone()).collect();
     let roots = (pins.iter().map(|id| Wanted::Package(id.name().to_owned())))
@@ -453,16 +453,16 @@ impl Published {
         source: &Source,
         arch: &str,
         wanted: &BTreeSet<String>,
-        key: Option<&repo::PublicKey>,
+        trust: Option<&repo::Trust>,
     ) -> Result<Self> {
         let mut published = Self::default();
-        let Some(pointer) = source.pointer(key)? else {
-            if key.is_some() {
-                bail!("{source}: not published as a repository, which its key needs");
+        let Some(pointer) = source.pointer(trust)? else {
+            if trust.is_some() {
+                bail!("{source}: not published as a repository, which its identity needs");
             }
             return Ok(published);
         };
-        if key.is_some() {
+        if trust.is_some() {
             published.catalog = Some(BTreeMap::new());
         }
         // A directory's packages are its refs, so its trees are read for
@@ -521,7 +521,7 @@ impl Index {
         sources: &[Source],
         arch: &str,
         wanted: &BTreeSet<String>,
-        signed: &BTreeMap<PathBuf, repo::PublicKey>,
+        signed: &BTreeMap<PathBuf, repo::Trust>,
         roots: &[Wanted],
     ) -> Result<Self> {
         if sources.is_empty() {
@@ -532,14 +532,14 @@ impl Index {
         let mut found = BTreeSet::new();
         let mut remotes = Vec::new();
         for source in sources {
-            let key = match source {
+            let trust = match source {
                 Source::Dir(dir) => signed.get(dir),
                 Source::Remote(_) => {
                     remotes.push(Served::read(source, wanted, &mut found)?);
                     continue;
                 }
             };
-            let published = Published::read(source, arch, wanted, key)?;
+            let published = Published::read(source, arch, wanted, trust)?;
             found.extend(published.indexes.keys().cloned());
             for (name, version, reason) in &published.deleted {
                 deleted.entry(name.clone()).or_default().push((
@@ -815,7 +815,7 @@ fn held(source: &Source, arch: &str, published: &Published) -> Result<Vec<(Packa
             };
             if let Some(catalog) = &published.catalog {
                 match catalog.get(&(name.clone(), version.clone())) {
-                    // Not published: a ref the key doesn't vouch for.
+                    // Not published: a ref the signature doesn't vouch for.
                     None => continue,
                     Some(listed) if *listed != identity => bail!(
                         "{id}: its ref in {} names {identity}, but the repository's signed \

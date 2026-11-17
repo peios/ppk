@@ -7,7 +7,7 @@ mod support;
 use std::fs;
 use std::path::Path;
 
-use ppk::repo::{self, PrivateKey, Trees};
+use ppk::repo::{self, Signer, Trees};
 use ppk::{Request, Source, Version};
 
 use support::*;
@@ -40,7 +40,7 @@ fn pack(repo: &Path, package: &str, provides: &[(&str, &str)], requires: &[(&str
 /// A signed repository at `repo` with two versions of `dev.peios.foo`,
 /// providing `libfoo.so.1` at 1.0 and 2.0, and `dev.peios.user`, which
 /// requires `libfoo.so.1 < 2`.
-fn publish_providers(repo: &Path, key: &PrivateKey) {
+fn publish_providers(repo: &Path, key: &Signer) {
     pack(repo, FOO_1, &[("libfoo.so.1", "1.0")], &[]);
     pack(repo, FOO_2, &[("libfoo.so.1", "2.0")], &[]);
     pack(repo, USER, &[], &[("libfoo.so.1", "< 2")]);
@@ -194,7 +194,7 @@ fn a_manifest_that_isnt_what_its_summary_says_is_refused_at_fetch() {
     pointer.catalog = Some(trees.write_tree(&catalog).unwrap());
     let text = pointer.render();
     overwrite(
-        &repo.join("repository.sig"),
+        &repo.join("repository.pso"),
         &key.sign(text.as_bytes()).unwrap(),
     );
     overwrite(&repo.join("repository"), text.as_bytes());
@@ -241,7 +241,7 @@ fn publishing_again_gives_a_catalog_from_before_summaries_its_summaries() {
     pointer.provides = None;
     let text = pointer.render();
     overwrite(
-        &repo.join("repository.sig"),
+        &repo.join("repository.pso"),
         &key.sign(text.as_bytes()).unwrap(),
     );
     overwrite(&repo.join("repository"), text.as_bytes());

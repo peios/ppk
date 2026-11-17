@@ -1,11 +1,11 @@
 //! The repositories a machine fetches from: each one a file of its own in
 //! the configuration directory, `/conf/ppk/repositories/<name>.toml` unless
-//! told otherwise, saying where it is, the public key its pointer file must
-//! be signed with, if any, and the index or channel the machine follows in it.
+//! told otherwise, saying where it is, the identity its pointer file must be
+//! signed under, if any, and the index or channel the machine follows in it.
 //!
 //! ```toml
 //! path = "/mnt/peios-repo"
-//! key = "ml-dsa-65:…"
+//! identity = "pkgs.peios.org"
 //! track = "stable"
 //! ```
 //!
@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::repo::{Pointer, PublicKey, Standing, Trees, check_ref_name};
+use crate::repo::{Anchors, Pointer, Standing, Trees, Trust, check_ref_name};
 use crate::{Identity, Remote, Source};
 
 /// Where the repositories are read from unless told otherwise.
@@ -47,7 +47,7 @@ pub const DEFAULT_STATE_DIR: &str = "/var/state/ppk";
 pub const DEFAULT_CACHE_DIR: &str = "/var/cache/ppk";
 
 /// The keys a repository's file may have.
-const KEYS: [&str; 4] = ["path", "urls", "key", "track"];
+const KEYS: [&str; 6] = ["path", "urls", "identity", "unrooted", "anchor", "track"];
 
 /// Where a repository is.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,8 +91,8 @@ pub struct Repository {
     pub name: String,
     /// Where it is.
     pub location: Location,
-    /// The key its pointer file must be signed with, if it must be.
-    pub key: Option<PublicKey>,
+    /// What its pointer file's signature must show, if it must be signed.
+    pub trust: Option<Trust>,
     /// The index or channel a request for a bare name follows.
     pub track: Option<String>,
 }
@@ -107,8 +107,14 @@ impl Repository {
                 format!("urls = [{}]\n", urls.join(", "))
             }
         };
-        if let Some(key) = &self.key {
-            out.push_str(&format!("key = {}\n", quote(&key.to_string())));
+        if let Some(trust) = &self.trust {
+            out.push_str(&format!("identity = {}\n", quote(&trust.identity)));
+            if trust.unrooted {
+                out.push_str("unrooted = true\n");
+            }
+            if let Some(anchor) = &trust.anchor {
+                out.push_str(&format!("anchor = {}\n", quote(&pso::hex::encode(anchor))));
+            }
         }
         if let Some(track) = &self.track {
             out.push_str(&format!("track = {}\n", quote(track)));
@@ -153,10 +159,36 @@ impl Repository {
         if let Some(track) = &track {
             check_ref_name(track)?;
         }
+        let unrooted = match doc.get("unrooted") {
+            None => None,
+            Some(value) => Some(
+                value
+                    .as_bool()
+                    .ok_or_else(|| anyhow!("unrooted is not true or false"))?,
+            ),
+        };
+        let anchor = (string("anchor")?)
+            .map(|anchor| pso::hex::decode_hash(&anchor).context("anchor"))
+            .transpose()?;
+        let trust = match string("identity")? {
+            Some(identity) => {
+                if !pso::core::valid_leaf_name(&identity) {
+                    bail!("identity is not a name a repository can sign under");
+                }
+                let mut trust = Trust::new(&identity, Anchors::system()?);
+                trust.unrooted = unrooted.unwrap_or(false);
+                trust.anchor = anchor;
+                Some(trust)
+            }
+            None if unrooted.is_some() || anchor.is_some() => {
+                bail!("unrooted and anchor are given only with identity")
+            }
+            None => None,
+        };
         Ok(Self {
             name: name.to_owned(),
             location,
-            key: string("key")?.map(|key| key.parse()).transpose()?,
+            trust,
             track,
         })
     }
@@ -171,11 +203,13 @@ impl Repository {
     fn uncached(&self) -> Result<Source> {
         Ok(match &self.location {
             Location::Path(path) => Source::Dir(path.clone()),
-            Location::Urls(urls) => Source::Remote(Remote::new(urls)?.with_key(self.key.clone())),
+            Location::Urls(urls) => {
+                Source::Remote(Remote::new(urls)?.with_trust(self.trust.clone()))
+            }
         })
     }
 
-    /// The repository's pointer file, checked against its key if it has one,
+    /// The repository's pointer file, checked against what it requires of its signature, if anything,
     /// and against the highest sequence the machine has seen of it, which
     /// it then records in `state_dir`. `None` if it hasn't published one.
     pub fn pointer(&self, state_dir: &Path) -> Result<Option<Pointer>> {
@@ -185,7 +219,7 @@ impl Repository {
     /// The pointer file of `source`, which is this repository, checked as
     /// [`Repository::pointer`] checks it.
     fn check_pointer(&self, source: &Source, state_dir: &Path) -> Result<Option<Pointer>> {
-        let Some(pointer) = (source.pointer(self.key.as_ref()))
+        let Some(pointer) = (source.pointer(self.trust.as_ref()))
             .with_context(|| format!("repository {}", self.name))?
         else {
             return Ok(None);
@@ -352,8 +386,8 @@ pub fn resolve(
         settled.push(request);
     }
     let signed = (repositories.iter())
-        .filter_map(|r| match (&r.location, &r.key) {
-            (Location::Path(path), Some(key)) => Some((path.clone(), key.clone())),
+        .filter_map(|r| match (&r.location, &r.trust) {
+            (Location::Path(path), Some(trust)) => Some((path.clone(), trust.clone())),
             _ => None,
         })
         .collect();

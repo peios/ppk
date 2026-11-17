@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::compression;
 use crate::remote::{self, Remote};
-use crate::repo::{Blobs, Pointer, PublicKey, Release, Standing, Trees};
+use crate::repo::{Blobs, Pointer, Release, Standing, Trees, Trust};
 use crate::store::{self, ArtifactDir};
 use crate::{ALGORITHM, Identity, PackageId};
 
@@ -41,16 +41,16 @@ impl Source {
     }
 
     /// Its pointer file, or `None` if it has none. A directory's is checked
-    /// against `key`; a remote repository's against its own.
-    pub(crate) fn pointer(&self, key: Option<&PublicKey>) -> Result<Option<Pointer>> {
+    /// against `trust`; a remote repository's against its own.
+    pub(crate) fn pointer(&self, trust: Option<&Trust>) -> Result<Option<Pointer>> {
         match self {
-            Self::Dir(dir) => crate::repo::read_pointer(dir, key),
+            Self::Dir(dir) => crate::repo::read_pointer(dir, trust),
             Self::Remote(remote) => remote.pointer(),
         }
     }
 
     /// How its blobs are written, as its pointer file says: plain if it
-    /// has none. A directory's pointer file is read without its key; a
+    /// has none. A directory's pointer file is read without checking who signed it; a
     /// blob is checked against its hash however it is written.
     pub(crate) fn blobs(&self) -> Result<Blobs> {
         Ok(self

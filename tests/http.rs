@@ -14,6 +14,7 @@ use support::*;
 
 fn ppk_cli(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_ppk"))
+        .env("PPK_DEVELOPMENT_ANCHORS", anchors_dir())
         .args(args)
         .output()
         .unwrap()
@@ -41,14 +42,14 @@ fn a_configured_repository_is_fetched_from_over_http() {
         work.path().join("store"),
     );
 
-    let public = key.public().to_string();
+    let public = identity(TEST_KEY);
     let added = ppk_cli(&[
         "repo",
         "add",
         "peios",
         &dead_url(),
         &server.url,
-        "--public-key",
+        "--identity",
         &public,
         "--config-dir",
         arg(&config),
@@ -91,7 +92,7 @@ fn a_configured_repository_is_fetched_from_over_http() {
     );
     // Nothing was asked of the server but files of the repository.
     let requests = server.requests();
-    assert_eq!(requests[..2], ["repository", "repository.sig"]);
+    assert_eq!(requests[..2], ["repository", "repository.pso"]);
     assert!(
         (requests.iter()).all(|path| path.starts_with("repository")
             || path.starts_with("trees/sha256/")
@@ -120,7 +121,7 @@ fn a_configured_repository_is_fetched_from_over_http() {
         "show",
         "--artifact-dir",
         &server.url,
-        "--public-key",
+        "--identity",
         &public,
     ]);
     assert!(shown.status.success(), "{}", stderr(&shown));
@@ -190,8 +191,10 @@ fn a_pointer_signed_by_another_key_is_refused_without_trying_the_next_url() {
     assert_eq!(
         format!("{err:#}"),
         format!(
-            "{}repository: not signed by the repository's key",
-            bad_server.url
+            "{}repository: not signed as {}: it is signed as {}",
+            bad_server.url,
+            identity(TEST_KEY),
+            identity(OTHER_KEY)
         )
     );
     assert!(good_server.requests().is_empty());
@@ -255,14 +258,14 @@ fn a_dead_url_and_a_missing_file_fall_back_to_the_next_url() {
     );
     assert_eq!(fetch(&source, "dev.peios.app", &store).unwrap().len(), 2);
     assert_eq!(empty.requests()[0], "repository");
-    assert_eq!(live.requests()[..2], ["repository", "repository.sig"]);
+    assert_eq!(live.requests()[..2], ["repository", "repository.pso"]);
     assert_eq!(ppk::stored_packages(&store).unwrap().len(), 2);
 
     // A URL that holds the pointer file but not its signature is passed
     // over too.
     let unsigned = work.path().join("unsigned");
     copy_dir(&repo, &unsigned);
-    fs::remove_file(unsigned.join("repository.sig")).unwrap();
+    fs::remove_file(unsigned.join("repository.pso")).unwrap();
     let unsigned = Server::new(&unsigned);
     let source = remote(
         &[&unsigned.url, &live.url],
@@ -322,7 +325,7 @@ fn resolving_reads_tree_nodes_and_summaries_and_caches_them() {
     let ids = resolve(&first);
     assert_eq!(ids, [id(APP), id(BASE)]);
     let requests = first.requests();
-    assert_eq!(requests[..2], ["repository", "repository.sig"]);
+    assert_eq!(requests[..2], ["repository", "repository.pso"]);
     assert!(
         requests[2..]
             .iter()
@@ -334,7 +337,7 @@ fn resolving_reads_tree_nodes_and_summaries_and_caches_them() {
     // A second run reads only the pointer file and its signature.
     let second = Server::new(&repo);
     assert_eq!(resolve(&second), ids);
-    assert_eq!(second.requests(), ["repository", "repository.sig"]);
+    assert_eq!(second.requests(), ["repository", "repository.pso"]);
 
     // A cached summary that was changed is read again.
     let pointer = repo::read_pointer(&repo, None).unwrap().unwrap();

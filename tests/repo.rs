@@ -1,23 +1,13 @@
+mod support;
+
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use ppk::repo::{self, PrivateKey, PublicKey, Standing, Trees};
+use ppk::repo::{self, Signer, Standing, Trees};
 use ppk::{Identity, PackageId};
+use support::{OTHER_KEY, Public, TEST_KEY, anchors_dir, identity, load};
 
-/// Test-only keys, built into the test, since its source isn't there when
-/// it runs.
-const TEST_KEY: &str = include_str!("fixtures/repo-test-key.pem");
-const OTHER_KEY: &str = include_str!("fixtures/repo-other-key.pem");
-
-/// The private key in the PEM text `pem`.
-fn load(pem: &str) -> PrivateKey {
-    let dir = tempfile::tempdir().unwrap();
-    let path: PathBuf = dir.path().join("key.pem");
-    fs::write(&path, pem).unwrap();
-    PrivateKey::load(&path).unwrap()
-}
-
-fn key() -> PrivateKey {
+fn key() -> Signer {
     load(TEST_KEY)
 }
 
@@ -81,9 +71,7 @@ fn publishing_signs_the_pointer_and_leading_holds_the_newest_that_can_install() 
     assert!(repo::read_pointer(repo, Some(&public)).unwrap().is_some());
     let other = load(OTHER_KEY).public();
     let err = repo::read_pointer(repo, Some(&other)).unwrap_err();
-    assert!(err.to_string().contains("not signed by"), "{err}");
-    let round: PublicKey = public.to_string().parse().unwrap();
-    assert_eq!(round, public);
+    assert!(err.to_string().contains("not signed as"), "{err}");
 
     // Publishing again goes up in sequence.
     assert_eq!(
@@ -262,6 +250,7 @@ fn yanked_versions_need_an_exact_request_and_deleted_ones_say_why() {
 
 fn ppk_cli(args: &[&str]) -> std::process::Output {
     std::process::Command::new(env!("CARGO_BIN_EXE_ppk"))
+        .env("PPK_DEVELOPMENT_ANCHORS", anchors_dir())
         .args(args)
         .output()
         .unwrap()
@@ -285,13 +274,13 @@ fn a_machine_fetches_bare_names_through_the_channel_it_tracks() {
     let config = work.path().join("conf");
     let state = work.path().join("state");
     let store = work.path().join("store");
-    let public = key().public().to_string();
+    let public = identity(TEST_KEY);
     let added = ppk_cli(&[
         "repo",
         "add",
         "peios",
         arg(&repo),
-        "--public-key",
+        "--identity",
         &public,
         "--track",
         "stable",
@@ -354,14 +343,14 @@ fn a_machine_fetches_bare_names_through_the_channel_it_tracks() {
     fs::write(state.join("sequences/peios"), "4\n").unwrap();
 
     // A repository signed by another key is refused.
-    let other = load(OTHER_KEY).public().to_string();
+    let other = identity(OTHER_KEY);
     assert!(
         ppk_cli(&[
             "repo",
             "add",
             "peios",
             arg(&repo),
-            "--public-key",
+            "--identity",
             &other,
             "--config-dir",
             arg(&config),
@@ -370,7 +359,7 @@ fn a_machine_fetches_bare_names_through_the_channel_it_tracks() {
         .success()
     );
     let refused = fetch("dev.peios.app");
-    assert!(String::from_utf8_lossy(&refused.stderr).contains("not signed by"));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("not signed as"));
 }
 
 #[test]
@@ -456,4 +445,138 @@ fn a_signed_repository_vouches_for_its_refs_through_its_catalog() {
     fs::write(&path, format!("{other}\n")).unwrap();
     let err = resolve("dev.peios.app").unwrap_err();
     assert!(err.contains("signed catalog lists"), "{err}");
+}
+
+/// A self-signed top-level that the tests' system has enabled, and a
+/// repository signed directly beneath it.
+fn unrooted_signer(repo: &Path) -> (Signer, [u8; 64]) {
+    use pso::core::{KeyType, RustCrypto, Warrant};
+
+    let key = pso::keys::SecretKey::from_seed(KeyType::MlDsa65, [9; 32]);
+    let top = pso::issue::top_level_self_signed(
+        &key,
+        "an unrooted publisher",
+        vec![
+            Warrant::name_warrant(&["unrooted.example.net"]).unwrap(),
+            Warrant::set("Repository", &[], true).unwrap(),
+        ],
+    )
+    .unwrap();
+    let hash = top.hash(&RustCrypto);
+    // The administrator's directory is what enables a top-level that no
+    // root signed.
+    let local = anchors_dir()
+        .join("system")
+        .join(pso::store::LOCAL_TOP_LEVELS);
+    fs::create_dir_all(&local).unwrap();
+    fs::write(local.join(pso::hex::encode(&hash)), top.bytes()).unwrap();
+    let signer = Signer::new("unrooted.example.net", top, key, Vec::new());
+    pack(repo, "dev.peios.app@1.0-1?arch=x86_64", &[]);
+    repo::update(repo, &signer, false).unwrap();
+    (signer, hash)
+}
+
+#[test]
+fn an_unrooted_repository_is_accepted_only_where_the_configuration_says() {
+    let work = tempfile::tempdir().unwrap();
+    let (signer, top_level) = unrooted_signer(work.path());
+
+    let rooted_only = signer.public();
+    let err = repo::read_pointer(work.path(), Some(&rooted_only)).unwrap_err();
+    assert!(format!("{err:#}").contains("no root vouches"), "{err:#}");
+
+    let mut unrooted = signer.public();
+    unrooted.unrooted = true;
+    assert!(
+        repo::read_pointer(work.path(), Some(&unrooted))
+            .unwrap()
+            .is_some()
+    );
+
+    // An anchor pins the chain to one top-level.
+    unrooted.anchor = Some(top_level);
+    assert!(
+        repo::read_pointer(work.path(), Some(&unrooted))
+            .unwrap()
+            .is_some()
+    );
+    unrooted.anchor = Some([0; 64]);
+    let err = repo::read_pointer(work.path(), Some(&unrooted)).unwrap_err();
+    assert!(format!("{err:#}").contains("configured anchor"), "{err:#}");
+}
+
+#[test]
+fn a_repository_signed_under_another_name_is_refused() {
+    let work = tempfile::tempdir().unwrap();
+    pack(work.path(), "dev.peios.app@1.0-1?arch=x86_64", &[]);
+    repo::update(work.path(), &load(OTHER_KEY), false).unwrap();
+    let err = repo::read_pointer(work.path(), Some(&key().public())).unwrap_err();
+    assert_eq!(
+        format!("{err:#}"),
+        format!(
+            "{}: not signed as {}: it is signed as {}",
+            work.path().join("repository").display(),
+            identity(TEST_KEY),
+            identity(OTHER_KEY)
+        )
+    );
+}
+
+#[test]
+fn a_changed_pointer_file_is_refused() {
+    let work = tempfile::tempdir().unwrap();
+    pack(work.path(), "dev.peios.app@1.0-1?arch=x86_64", &[]);
+    repo::update(work.path(), &key(), false).unwrap();
+    let pointer = work.path().join("repository");
+    let mut text = fs::read_to_string(&pointer).unwrap();
+    text.push_str("channel stable leading\n");
+    // The pointer file is read-only, so it is replaced, as publishing does.
+    fs::remove_file(&pointer).unwrap();
+    fs::write(&pointer, text).unwrap();
+    let err = repo::read_pointer(work.path(), Some(&key().public())).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("its signature is of other bytes"),
+        "{err:#}"
+    );
+}
+
+#[test]
+fn a_repository_file_names_an_identity_and_not_a_key() {
+    let work = tempfile::tempdir().unwrap();
+    let config = work.path().join("conf");
+    let add = |extra: &[&str]| {
+        let mut args = vec![
+            "repo",
+            "add",
+            "peios",
+            "/srv/repo",
+            "--config-dir",
+            arg(&config),
+        ];
+        args.extend_from_slice(extra);
+        ppk_cli(&args)
+    };
+    let anchor = "ab".repeat(64);
+    let added = add(&[
+        "--identity",
+        "pkgs.example.com",
+        "--unrooted",
+        "--anchor",
+        &anchor,
+    ]);
+    assert!(
+        added.status.success(),
+        "{}",
+        String::from_utf8_lossy(&added.stderr)
+    );
+    let file = fs::read_to_string(config.join("repositories/peios.toml")).unwrap();
+    assert_eq!(
+        file,
+        format!(
+            "path = \"/srv/repo\"\nidentity = \"pkgs.example.com\"\nunrooted = true\nanchor = \"{anchor}\"\n"
+        )
+    );
+    // Neither means anything without an identity.
+    assert!(!add(&["--unrooted"]).status.success());
+    assert!(!add(&["--anchor", &anchor]).status.success());
 }

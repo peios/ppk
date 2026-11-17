@@ -14,7 +14,7 @@ use std::thread;
 
 use anyhow::{Context, Result, bail};
 
-use super::{Blobs, Pointer, PrivateKey, read_pointer, write_pointer};
+use super::{Blobs, Pointer, Signer, read_pointer, write_pointer};
 use crate::store::{self, ArtifactDir};
 use crate::{ALGORITHM, Identity, compression, stored_packages};
 
@@ -39,7 +39,7 @@ pub struct Exported {
 
 /// Write `to` as a copy of the repository `repo`, as it was last
 /// published, with its blobs compressed with zstd at `level`, and sign its
-/// pointer file with `key`, saying `blobs zstd`.
+/// pointer file as `signer`, saying `blobs zstd`.
 ///
 /// Tree nodes, manifests and refs are copied as they are, and each blob is
 /// compressed under its name, once for all its forms, which are hard links
@@ -51,7 +51,7 @@ pub struct Exported {
 ///
 /// `to` must be new, empty or an earlier export, and not a later one than
 /// `repo`'s publication.
-pub fn export(repo: &Path, to: &Path, key: &PrivateKey, level: i32) -> Result<Exported> {
+pub fn export(repo: &Path, to: &Path, signer: &Signer, level: i32) -> Result<Exported> {
     let Some(published) = read_pointer(repo, None)? else {
         bail!(
             "{}: not published as a repository; run ppk repo update first",
@@ -76,7 +76,7 @@ pub fn export(repo: &Path, to: &Path, key: &PrivateKey, level: i32) -> Result<Ex
         blobs: Blobs::Zstd,
         ..published
     };
-    write_pointer(to, &pointer, key)?;
+    write_pointer(to, &pointer, signer)?;
     let removed = remove_others(to, &kept)?;
     Ok(Exported {
         pointer,

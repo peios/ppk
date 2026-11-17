@@ -224,12 +224,18 @@ fn repo_export_prints_the_pointer_file_it_published() {
     let work = tempfile::tempdir().unwrap();
     let (repo, export) = (work.path().join("repo"), work.path().join("export"));
     publish(&repo, &load(TEST_KEY));
-    let key = work.path().join("key.pem");
-    fs::write(&key, TEST_KEY).unwrap();
+    let key = signer_file(work.path(), TEST_KEY);
     let ppk = |level: &str| {
         std::process::Command::new(env!("CARGO_BIN_EXE_ppk"))
+            .env("PPK_DEVELOPMENT_ANCHORS", anchors_dir())
             .args(["repo", "export", "--artifact-dir"])
-            .args([&repo, Path::new("--to"), &export, Path::new("--key"), &key])
+            .args([
+                &repo,
+                Path::new("--to"),
+                &export,
+                Path::new("--signer"),
+                &key,
+            ])
             .args(["--level", level])
             .output()
             .unwrap()

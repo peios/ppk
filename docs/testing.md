@@ -228,3 +228,15 @@ checks that `ppk run` with no command starts the closure's own shell.
 The syscall and token helpers come from provium's and the kernel's
 integration suites, so the VM tests need the `provium` and `kernel`
 repositories checked out beside `ppk`.
+
+## Signed repositories in tests
+
+A test that signs a repository cannot use the roots ppk is built with,
+since nobody outside Peios holds their secret keys. `tests/support` makes a
+root, a top-level and two signing certificates of its own from fixed
+seeds, and writes the root and the top-level out as a directory.
+
+Library tests verify against that directory through `support::anchors()`.
+Tests that run the `ppk` command name it in `$PPK_DEVELOPMENT_ANCHORS`,
+which a build with debug assertions reads in place of its own roots and
+the system's trust store. A release build ignores the variable.

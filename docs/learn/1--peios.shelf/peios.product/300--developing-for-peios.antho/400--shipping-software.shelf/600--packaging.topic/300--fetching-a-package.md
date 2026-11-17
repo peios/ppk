@@ -62,9 +62,9 @@ ppk fetch --no-deps 'dev.peios.hello@1.0-1?arch=noarch' --from shared --artifact
 ```
 
 `--from` also takes the URL of a repository served over HTTP, such as
-`https://pkgs.peios.org/`. `--from` takes no key, so `ppk` checks every file
-against its hash but can't check who signed the repository. To check that
-too, add the repository with its key, using `ppk repo add`.
+`https://pkgs.peios.org/`. `--from` takes no identity, so `ppk` checks every
+file against its hash but can't check who signed the repository. To check
+that too, add the repository with its identity, using `ppk repo add`.
 
 ## Check the result
 
@@ -76,12 +76,22 @@ byte for byte.
 ## Fetch from configured repositories
 
 A machine keeps a list of the repositories it fetches from, each a file in
-`/conf/ppk/repositories/`. Add one with `ppk repo add`, giving its public
-key, so that its pointer file must be signed with it, and the channel it
-follows:
+`/conf/ppk/repositories/`. Add one with `ppk repo add`, giving the identity
+its pointer file must be signed under, and the channel it follows:
 
 ```sh
-ppk repo add peios /mnt/peios-repo --public-key 'ml-dsa-65:…' --track stable
+ppk repo add peios /mnt/peios-repo --identity pkgs.peios.org --track stable
+```
+
+`ppk` accepts the signature only if a root it was built with vouches for
+the chain that made it. A repository whose publisher has no such chain signs
+under a top-level certificate of its own, which you enable on the machine
+first. Add that repository with `--unrooted`, and optionally with
+`--anchor` and the top-level's hash, to accept that top-level and no
+other:
+
+```sh
+ppk repo add tools https://pkgs.example.com/ --identity pkgs.example.com --unrooted
 ```
 
 That writes `/lcl/conf/ppk/repositories/peios.toml`, which `/conf/ppk` merges
@@ -97,7 +107,7 @@ first and the repository's own server after it:
 
 ```sh
 ppk repo add peios http://cache.lan/peios/ https://pkgs.peios.org/ \
-    --public-key 'ml-dsa-65:…' --track stable
+    --identity pkgs.peios.org --track stable
 ```
 
 If a URL can't be reached or doesn't have a file, `ppk` tries the next one.
@@ -136,9 +146,9 @@ fetching a new version transfers only what changed.
 
 These checks prove that the package is the one the source's ref names. They
 don't prove who published it, so fetch only from sources you trust. A
-configured repository with a key proves that too: a package must be in the
-catalog its signed pointer file leads to, at the identity the catalog gives,
-so a package it didn't publish, or a ref changed since, is refused.
+configured repository with an identity proves that too: a package must be in
+the catalog its signed pointer file leads to, at the identity the catalog
+gives, so a package it didn't publish, or a ref changed since, is refused.
 
 A repository served over HTTP has no refs that `ppk` can list, so its
 catalog says which packages it has. To choose packages, `ppk` reads only the
@@ -150,8 +160,8 @@ capability, so finding a library by its soname reads no more than that.
 that doesn't begin with the summary it chose the package by.
 
 `ppk` checks every file it reads from
-the repository against its hash before using it, and checks the pointer file
-against the key. A file that fails its check is an error: `ppk` doesn't try
+the repository against its hash before using it, and checks the pointer
+file's signature. A file that fails its check is an error: `ppk` doesn't try
 the next URL, because a server that sends the wrong file is broken or
 hostile. A file that fails its check is never stored.
 

@@ -78,14 +78,14 @@ ppk \- create and manage Peios packages
 .B ppk repo update
 .RB [ \-\-artifact\-dir
 .IR dir ]
-.RB [ \-\-key
+.RB [ \-\-signer
 .IR file ]
 .RB [ \-\-strict ]
 .br
 .B ppk repo export
 .RB [ \-\-artifact\-dir
 .IR dir ]
-.RB [ \-\-key
+.RB [ \-\-signer
 .IR file ]
 .RB [ \-\-level
 .IR level ]
@@ -117,14 +117,20 @@ ppk \- create and manage Peios packages
 .B ppk repo show
 .RB [ \-\-artifact\-dir
 .IR dir | url ]
-.RB [ \-\-public\-key
-.IR key ]
+.RB [ \-\-identity
+.IR name ]
+.RB [ \-\-unrooted ]
+.RB [ \-\-anchor
+.IR hash ]
 .br
 .B ppk repo add
 .RB [ \-\-config\-dir
 .IR dir ]
-.RB [ \-\-public\-key
-.IR key ]
+.RB [ \-\-identity
+.IR name ]
+.RB [ \-\-unrooted ]
+.RB [ \-\-anchor
+.IR hash ]
 .RB [ \-\-track
 .IR index ]
 .I name
@@ -140,10 +146,6 @@ ppk \- create and manage Peios packages
 .IR dir ]
 .RB [ \-\-state\-dir
 .IR dir ]
-.br
-.B ppk repo public\-key
-.RB [ \-\-key
-.IR file ]
 .br
 .B ppk name
 .RB [ \-\-artifact\-dir
@@ -436,7 +438,7 @@ An inventory records the index of each request that named one, as in
 Every file of a repository but
 .I repository
 and
-.I repository.sig
+.I repository.pso
 is named by its hash and never changes, so a static web server can serve
 the repository's directory as it is.
 A repository served that way is given by its base URL, the URL of that
@@ -449,7 +451,7 @@ such as a cache on the local network and then the repository's own server.
 A repository served over HTTP must have a pointer file, and its packages
 are those its catalog lists, since its refs can't be listed.
 The pointer file and its signature are read from one base URL, the first
-that serves them both, and checked against the key as a directory's are.
+that serves them both, and the signature is checked as a directory's is.
 Every tree node, manifest and blob is checked against its hash before it is
 used, and a blob before it is given its name in the store, so a blob that
 fails its check is never stored.
@@ -799,8 +801,8 @@ A request for a package by a bare name or a constraint, naming no index and
 no exact version, follows the index or channel its repository tracks.
 Every package name belongs to one repository: one that two repositories
 publish is an error, for a request or anything it needs.
-A repository whose configuration gives a public key must have signed its
-pointer file with it, and none may publish a lower sequence than this machine
+A repository whose configuration gives an identity must have signed its
+pointer file under it, and none may publish a lower sequence than this machine
 has seen of it, which is kept in
 .BR \-\-state\-dir ,
 .I /var/state/ppk
@@ -852,9 +854,9 @@ is given. Earlier packages fetched successfully remain if a later fetch fails.
 .IP
 These checks prove that the package matches the source's ref.
 They do not prove who published it, so fetch only from sources you trust,
-or from a configured repository with a key: then the package must also be in
-the repository's catalog, at the identity the catalog gives, and the
-catalog is reached from the pointer file the key signed, so a package the
+or from a configured repository with an identity: then the package must
+also be in the repository's catalog, at the identity the catalog gives, and
+the catalog is reached from the signed pointer file, so a package the
 repository didn't publish, or a ref changed since, is refused.
 .TP
 .BI closure " package\fR...\fP"
@@ -930,13 +932,25 @@ again with them, holding the same versions.
 .IP
 Every
 .B repo
-command that publishes signs with the ML-DSA-65 private key in the PEM file
-.BR \-\-key ,
-or in
-.B $PPK_REPO_KEY
-if that isn't given, the kind of key
-.B openssl genpkey \-algorithm ML\-DSA\-65
-writes, and prints the pointer file it published.
+command that publishes signs as the signer file
+.BR \-\-signer
+says, or the one
+.B $PPK_REPO_SIGNER
+names if that isn't given, and prints the pointer file it published.
+A signer file is TOML, with
+.BR identity ,
+the name the repository signs as;
+.BR certificate ,
+a signing certificate that holds the
+.B Repository
+warrant;
+.BR key ,
+its secret key; and optionally
+.BR carry ,
+the certificates above it, in order upward.
+A path that isn't absolute is beside the signer file.
+.BR pso (1)
+issues the certificate and the key.
 .TP
 .B repo export
 Write
@@ -1014,8 +1028,14 @@ Print the pointer file of the repository
 .BR \-\-artifact\-dir ,
 a directory or the URL of a repository served over HTTP.
 With
-.BR \-\-public\-key ,
-its signature must be that key's.
+.BR \-\-identity ,
+its pointer file must be signed under that name, by a chain that a root
+this ppk was built with vouches for.
+.B \-\-unrooted
+also accepts a chain whose top-level this machine has enabled and no root
+signed, and
+.B \-\-anchor
+requires the chain to end at the top-level with that hash.
 .TP
 .BI "repo add" " name path\fR|\fPurl\fR...\fP"
 Add the repository at
@@ -1031,8 +1051,14 @@ unless given, which
 .I /conf/ppk
 merges with what the system ships.
 With
-.BR \-\-public\-key ,
-its pointer file must be signed with that key; with
+.BR \-\-identity ,
+its pointer file must be signed under that name, with
+.B \-\-unrooted
+and
+.B \-\-anchor
+as for
+.BR "repo show" ;
+with
 .BR \-\-track ,
 a request for a bare name follows that index or channel, such as
 .BR stable .
@@ -1048,13 +1074,6 @@ URLs, the index or channel it follows, and the sequence and signing time of its
 pointer file, checked as
 .B fetch
 checks it.
-.TP
-.B repo public\-key
-Print the public key of
-.BR \-\-key ,
-as
-.B ml\-dsa\-65:
-and its base64, for a repository's configuration.
 .TP
 .BI name " \fR[\fPname \fR[\fPclosure\fR]]\fP"
 Name a closure in the closure directory, so that what a system runs can be
@@ -1769,7 +1788,7 @@ A repository this machine fetches from:
 .IP
 .EX
 path = "/mnt/peios\-repo"
-key = "ml\-dsa\-65:..."
+identity = "pkgs.peios.org"
 track = "stable"
 .EE
 .IP
@@ -1781,7 +1800,7 @@ its base URLs, tried in order:
 .IP
 .EX
 urls = ["http://cache.lan/peios/", "https://pkgs.peios.org/"]
-key = "ml\-dsa\-65:..."
+identity = "pkgs.peios.org"
 .EE
 .IP
 One of
@@ -1789,10 +1808,19 @@ One of
 and
 .B urls
 is required;
-.B key
+.BR identity ,
+.BR unrooted ,
+.B anchor
 and
 .B track
 are optional.
+.B identity
+is the name the pointer file must be signed under.
+.B unrooted = true
+accepts a chain no root vouches for, and
+.B anchor
+is the hash of the top-level the chain must end at; both need
+.BR identity .
 .TP
 .IR /var/state/ppk/sequences/ name
 The highest sequence this machine has seen of the repository
@@ -1841,9 +1869,11 @@ names the index or channel it follows, and
 marks one that won't move again.
 Lines are in this order, indexes and channels each sorted by name.
 .TP
-.I repository.sig
-The ML-DSA-65 signature of the pointer file's bytes, in the context
-.BR "ppk repository" .
+.I repository.pso
+The pointer file's signature: a PSO bundle over its bytes, whose leaf is
+issued under the repository's identity and holds the
+.B Repository
+warrant.
 .TP
 .IR trees/sha256/ hash
 A node of the catalog's or an index's tree, or of the catalog's provides

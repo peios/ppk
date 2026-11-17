@@ -25,21 +25,34 @@ named by its hash, from there.
 - Have the packages in an artifact directory, as
   [Creating a Package](~peios/packaging/creating-a-package) and
   [Fetching a Package](~peios/packaging/fetching-a-package) describe.
-- Have an ML-DSA-65 private key for the repository, such as OpenSSL makes:
+- Have a signing certificate that holds the `Repository` warrant, and its
+  secret key. The `pso` command issues both. The certificate's `Name`
+  warrant has to cover the name your repository signs as, its identity, such
+  as `pkgs.example.com`.
+- Write a signer file that names them:
 
-  ```sh
-  openssl genpkey -algorithm ML-DSA-65 -out repo.key
+  ```toml
+  identity = "pkgs.example.com"
+  certificate = "signer.cert"
+  key = "signer.key"
+  carry = ["intermediate.cert"]
   ```
 
-  Keep it out of the repository and out of version control. Every `ppk repo`
-  command that publishes reads it from `--key`, or from `$PPK_REPO_KEY`.
+  A path that isn't absolute is beside the signer file. `carry` lists the
+  certificates above the signing certificate, in order upward, so that a
+  machine reading your repository for the first time has the whole chain.
+  Leave it out if the signing certificate was issued by a top-level.
+
+  Keep the key out of the repository and out of version control. Every
+  `ppk repo` command that publishes reads the signer file from `--signer`,
+  or from `$PPK_REPO_SIGNER`.
 
 ## Publish
 
 Run `ppk repo update`:
 
 ```sh
-ppk repo update --artifact-dir artifacts --key repo.key
+ppk repo update --artifact-dir artifacts --signer signer.toml
 ```
 
 It writes the catalog and `leading`, signs the pointer file, and prints it:
@@ -74,10 +87,10 @@ Take a snapshot of `leading` as the release's index, then point channels at
 it:
 
 ```sh
-ppk repo snapshot 2026.10.0 --artifact-dir artifacts --key repo.key
-ppk repo channel 2026.10 2026.10.0 --artifact-dir artifacts --key repo.key
-ppk repo channel stable 2026.10 --artifact-dir artifacts --key repo.key
-ppk repo channel unstable leading --artifact-dir artifacts --key repo.key
+ppk repo snapshot 2026.10.0 --artifact-dir artifacts --signer signer.toml
+ppk repo channel 2026.10 2026.10.0 --artifact-dir artifacts --signer signer.toml
+ppk repo channel stable 2026.10 --artifact-dir artifacts --signer signer.toml
+ppk repo channel unstable leading --artifact-dir artifacts --signer signer.toml
 ```
 
 A snapshot never changes, so its name must be new. To fix a release, take a
@@ -86,7 +99,7 @@ release gets no more fixes, mark its channel ended, so that a machine
 following it can tell:
 
 ```sh
-ppk repo channel 2026.10 2026.10.1 --ended --artifact-dir artifacts --key repo.key
+ppk repo channel 2026.10 2026.10.1 --ended --artifact-dir artifacts --signer signer.toml
 ```
 
 ## Take a version back
@@ -95,7 +108,7 @@ To stop new resolutions choosing a version, yank it. Anything that asks for
 exactly that version still gets it:
 
 ```sh
-ppk repo yank 'org.example.tool@1.2-1?arch=x86_64' --artifact-dir artifacts --key repo.key
+ppk repo yank 'org.example.tool@1.2-1?arch=x86_64' --artifact-dir artifacts --signer signer.toml
 ```
 
 `--undo` restores it. To remove a version altogether, delete it, giving a
@@ -103,7 +116,7 @@ reason:
 
 ```sh
 ppk repo delete 'org.example.tool@1.2-1?arch=x86_64' --reason 'legal takedown' \
-    --artifact-dir artifacts --key repo.key
+    --artifact-dir artifacts --signer signer.toml
 ```
 
 That removes its ref, its manifest, and every file of it that no other
@@ -139,7 +152,7 @@ read it directly link them into closures. To serve it, export a copy whose
 blobs are compressed:
 
 ```sh
-ppk repo export --artifact-dir artifacts --to export --key repo.key
+ppk repo export --artifact-dir artifacts --to export --signer signer.toml
 ```
 
 `ppk repo export` writes `export` as the repository as it was last
@@ -155,13 +168,13 @@ from 1, the fastest, to 22, the smallest.
 
 ## Serve the repository over HTTP
 
-Every file of a repository but `repository` and `repository.sig` is named by
+Every file of a repository but `repository` and `repository.pso` is named by
 its hash and never changes. A static web server can serve the repository's
 directory, or its export, as it is, with no other software. Machines then
 fetch from it by its URL, the URL of that directory:
 
 ```sh
-ppk repo add peios https://pkgs.peios.org/ --public-key 'ml-dsa-65:…' --track stable
+ppk repo add peios https://pkgs.peios.org/ --identity pkgs.peios.org --track stable
 ```
 
 `ppk` reads each file at the URL followed by the file's path in the
@@ -170,21 +183,24 @@ It doesn't need the server to list directories or answer range requests.
 
 A copy of the repository on another server, such as a cache on your own
 network, serves machines the same way. A cache can keep every file but
-`repository` and `repository.sig` for ever. A machine given the cache's URL
+`repository` and `repository.pso` for ever. A machine given the cache's URL
 before the repository's own tries the cache first and falls back to the
 repository for anything the cache can't serve. Because every file is checked
-against the key or its hash, a cache never has to be trusted for what it
+against its signature or its hash, a cache never has to be trusted for what it
 sends.
 
 ## Check what a repository publishes
 
-`ppk repo show` prints the pointer file. Give the repository's public key to
+`ppk repo show` prints the pointer file. Give the repository's identity to
 check its signature too:
 
 ```sh
-ppk repo public-key --key repo.key
-ppk repo show --artifact-dir artifacts --public-key 'ml-dsa-65:…'
+ppk repo show --artifact-dir artifacts --identity pkgs.example.com
 ```
+
+The check succeeds only if a root this build of `ppk` holds vouches for the
+chain that signed the repository. For a repository whose top-level you
+enabled yourself, add `--unrooted`.
 
 `--artifact-dir` also takes the URL of a repository served over HTTP, to
 check what a server is publishing.

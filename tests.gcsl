@@ -16,7 +16,9 @@ fn ran(tests: List<rust.RustTest>) -> {} {
     let each = for test in tests { = rust.run_test(test) }
 }
 
-def test ppk(tests: List<rust.RustTest> = rust.tests(crates(), "ppk")) {
+# The tests sign repositories with roots of their own, which ppk reads only
+# with the development-anchors feature, since pekit builds them --release.
+def test ppk(tests: List<rust.RustTest> = rust.tests(crates(), "ppk", features = ["development-anchors"])) {
     = ran(tests)
 }
 

@@ -43,6 +43,12 @@ named by its hash, from there.
   machine reading your repository for the first time has the whole chain.
   Leave it out if the signing certificate was issued by a top-level.
 
+  If the key is sealed under a passphrase, as `pso` makes keys unless told
+  otherwise, add `passphrase-file`, a file whose first line is the
+  passphrase. Without it, `ppk` asks for the passphrase on the terminal, and
+  fails if there isn't one. Keep the passphrase file with the same care as
+  the key: together they sign.
+
   Keep the key out of the repository and out of version control. Every
   `ppk repo` command that publishes reads the signer file from `--signer`,
   or from `$PPK_REPO_SIGNER`.

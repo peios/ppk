@@ -5,13 +5,18 @@ edition = "2024"
 description = "Peios package tool"
 license = "MIT"
 
+[features]
+# Lets $PPK_DEVELOPMENT_ANCHORS replace the roots ppk is built with and the
+# system's trust store, for ppk's own tests. Never enabled in a package.
+development-anchors = []
+
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.6", features = ["derive", "wrap_help"] }
 libc = "0.2"
 # Exact revisions: what verifies a repository, and the roots it trusts,
 # change only when this file does.
-pso = { git = "https://github.com/peios/pso.git", rev = "2b17e929e83a18092d73f70d1b3e3fa2a6679ce0" }
+pso = { git = "https://github.com/peios/pso.git", rev = "bfa22634e6999e626a5cc5a775ebf9fb08d0c4b2" }
 pso-roots = { git = "https://github.com/peios/pso-roots.git", rev = "20b5467f81525ed5fd694b6eeb4b6538305d91ba" }
 peios-uapi = { path = "vendor/kernel/peios/rust/peios-uapi", default-features = false }
 sha2 = "0.10"

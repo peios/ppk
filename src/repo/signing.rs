@@ -23,7 +23,7 @@ use pso::store::{self, DirectoryLookup};
 const REPOSITORY: &str = "Repository";
 
 /// The keys of a signer file.
-const SIGNER_KEYS: [&str; 4] = ["identity", "certificate", "key", "carry"];
+const SIGNER_KEYS: [&str; 5] = ["identity", "certificate", "key", "passphrase-file", "carry"];
 
 /// What publishes a repository: who it signs as, and what it signs with.
 pub struct Signer {
@@ -59,10 +59,14 @@ impl Signer {
     /// identity = "pkgs.example.com"
     /// certificate = "signer.cert"
     /// key = "signer.key"
+    /// passphrase-file = "signer.passphrase"
     /// carry = ["intermediate.cert"]
     /// ```
     ///
-    /// A path that isn't absolute is beside the signer file.
+    /// A path that isn't absolute is beside the signer file. If the key is
+    /// sealed, its passphrase is the first line of `passphrase-file`, or is
+    /// asked for on the terminal when there is none and standard input is
+    /// one. The signer file names only paths, never a passphrase.
     pub fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .map_err(|_| anyhow!("{}: cannot read the signer file", path.display()))?;
@@ -97,10 +101,21 @@ impl Signer {
                 .collect::<Result<_>>()?,
             Some(_) => bail!("{}: carry must be an array", path.display()),
         };
+        let passphrase_file = match doc.get("passphrase-file") {
+            None => None,
+            Some(file) => Some(beside(file.as_str().ok_or_else(|| {
+                anyhow!("{}: passphrase-file must be a string", path.display())
+            })?)),
+        };
+        let passphrase = pso::passphrase::Source::from_options(
+            None,
+            passphrase_file.as_deref(),
+            "name a passphrase-file in the signer file",
+        );
         Ok(Self {
             identity: string("identity")?.into(),
             certificate: certificate(string("certificate")?)?,
-            key: SecretKey::load(&beside(string("key")?))?,
+            key: SecretKey::load_with(&beside(string("key")?), &passphrase)?,
             carried: carry,
         })
     }
@@ -154,12 +169,14 @@ impl Anchors {
     /// The roots this build of ppk was given, and this system's trust
     /// store.
     ///
-    /// A build with debug assertions, which no release is, reads its roots
-    /// and the system's root from the directory `$PPK_DEVELOPMENT_ANCHORS`
-    /// names instead, if it is set: every `*.pub` file in its `roots`
-    /// directory, and its `system` directory. ppk's own tests use it.
+    /// A build with debug assertions or the `development-anchors` feature,
+    /// which no release has, reads its roots and the system's root from the
+    /// directory `$PPK_DEVELOPMENT_ANCHORS` names instead, if it is set:
+    /// every `*.pub` file in its `roots` directory, and its `system`
+    /// directory. ppk's own tests use it. pekit builds every test with
+    /// `--release`, so its test run turns the feature on.
     pub fn system() -> Result<Arc<Self>> {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "development-anchors"))]
         if let Some(directory) = std::env::var_os("PPK_DEVELOPMENT_ANCHORS") {
             return Self::development(Path::new(&directory));
         }
@@ -171,7 +188,7 @@ impl Anchors {
         Ok(Self::new(roots, "/"))
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "development-anchors"))]
     fn development(directory: &Path) -> Result<Arc<Self>> {
         let roots_dir = directory.join("roots");
         let mut files: Vec<PathBuf> = fs::read_dir(&roots_dir)

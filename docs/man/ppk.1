@@ -946,9 +946,15 @@ a signing certificate that holds the
 warrant;
 .BR key ,
 its secret key; and optionally
+.BR passphrase\-file ,
+a file whose first line is the passphrase of a sealed key, and
 .BR carry ,
 the certificates above it, in order upward.
 A path that isn't absolute is beside the signer file.
+A sealed key with no
+.B passphrase\-file
+is opened with a passphrase asked for on the terminal, and only if standard
+input is one.
 .BR pso (1)
 issues the certificate and the key.
 .TP

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use ppk::repo::{self, Signer, Standing, Trees};
 use ppk::{Identity, PackageId};
-use support::{OTHER_KEY, Public, TEST_KEY, anchors_dir, identity, load};
+use support::{OTHER_KEY, Public, TEST_KEY, anchors_dir, identity, load, sealed_signer_file};
 
 fn key() -> Signer {
     load(TEST_KEY)
@@ -579,4 +579,62 @@ fn a_repository_file_names_an_identity_and_not_a_key() {
     // Neither means anything without an identity.
     assert!(!add(&["--unrooted"]).status.success());
     assert!(!add(&["--anchor", &anchor]).status.success());
+}
+
+#[test]
+fn a_signer_file_opens_a_sealed_key_with_its_passphrase_file() {
+    let work = tempfile::tempdir().unwrap();
+    let passphrase = "correct horse battery staple";
+    fs::write(
+        work.path().join("signer.passphrase"),
+        format!("{passphrase}\n"),
+    )
+    .unwrap();
+    let path = sealed_signer_file(
+        work.path(),
+        TEST_KEY,
+        passphrase,
+        Some("passphrase-file = \"signer.passphrase\""),
+    );
+    let signer = Signer::load(&path).unwrap();
+    pack(work.path(), "dev.peios.app@1.0-1?arch=x86_64", &[]);
+    repo::update(work.path(), &signer, false).unwrap();
+    assert!(
+        repo::read_pointer(work.path(), Some(&key().public()))
+            .unwrap()
+            .is_some()
+    );
+
+    // A wrong passphrase opens nothing.
+    fs::write(
+        work.path().join("signer.passphrase"),
+        "not the passphrase at all\n",
+    )
+    .unwrap();
+    let err = Signer::load(&path).err().unwrap();
+    assert!(
+        format!("{err:#}").contains("passphrase is wrong"),
+        "{err:#}"
+    );
+}
+
+#[test]
+fn a_sealed_key_without_a_passphrase_file_needs_a_terminal() {
+    let work = tempfile::tempdir().unwrap();
+    let path = sealed_signer_file(work.path(), TEST_KEY, "correct horse battery staple", None);
+    // The test's standard input is not a terminal.
+    let output = ppk_cli(&[
+        "repo",
+        "update",
+        "--artifact-dir",
+        arg(work.path()),
+        "--signer",
+        arg(&path),
+    ]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("name a passphrase-file in the signer file"),
+        "{stderr}"
+    );
 }

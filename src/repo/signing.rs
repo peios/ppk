@@ -23,7 +23,7 @@ use pso::store::{self, DirectoryLookup};
 const REPOSITORY: &str = "Repository";
 
 /// The keys of a signer file.
-const SIGNER_KEYS: [&str; 4] = ["identity", "certificate", "key", "carry"];
+const SIGNER_KEYS: [&str; 5] = ["identity", "certificate", "key", "passphrase-file", "carry"];
 
 /// What publishes a repository: who it signs as, and what it signs with.
 pub struct Signer {
@@ -59,10 +59,14 @@ impl Signer {
     /// identity = "pkgs.example.com"
     /// certificate = "signer.cert"
     /// key = "signer.key"
+    /// passphrase-file = "signer.passphrase"
     /// carry = ["intermediate.cert"]
     /// ```
     ///
-    /// A path that isn't absolute is beside the signer file.
+    /// A path that isn't absolute is beside the signer file. If the key is
+    /// sealed, its passphrase is the first line of `passphrase-file`, or is
+    /// asked for on the terminal when there is none and standard input is
+    /// one. The signer file names only paths, never a passphrase.
     pub fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .map_err(|_| anyhow!("{}: cannot read the signer file", path.display()))?;
@@ -97,10 +101,21 @@ impl Signer {
                 .collect::<Result<_>>()?,
             Some(_) => bail!("{}: carry must be an array", path.display()),
         };
+        let passphrase_file = match doc.get("passphrase-file") {
+            None => None,
+            Some(file) => Some(beside(file.as_str().ok_or_else(|| {
+                anyhow!("{}: passphrase-file must be a string", path.display())
+            })?)),
+        };
+        let passphrase = pso::passphrase::Source::from_options(
+            None,
+            passphrase_file.as_deref(),
+            "name a passphrase-file in the signer file",
+        );
         Ok(Self {
             identity: string("identity")?.into(),
             certificate: certificate(string("certificate")?)?,
-            key: SecretKey::load(&beside(string("key")?))?,
+            key: SecretKey::load_with(&beside(string("key")?), &passphrase)?,
             carried: carry,
         })
     }

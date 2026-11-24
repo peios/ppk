@@ -131,6 +131,32 @@ pub fn signer_file(dir: &Path, label: &str) -> PathBuf {
     path
 }
 
+/// Write a signer file for the publisher `label` in `dir`, with its key
+/// sealed under `passphrase`, and the `passphrase-file` line it gives, if
+/// any. Return its path.
+pub fn sealed_signer_file(
+    dir: &Path,
+    label: &str,
+    passphrase: &str,
+    line: Option<&str>,
+) -> PathBuf {
+    let (certificate, key) = signing(label);
+    fs::write(dir.join("signer.cert"), certificate.bytes()).unwrap();
+    let sealing = pso::passphrase::NewPassphrase::new(passphrase).unwrap();
+    key.save_sealed(&dir.join("signer.key"), &sealing).unwrap();
+    let path = dir.join("signer.toml");
+    let mut text = format!(
+        "identity = \"{}\"\ncertificate = \"signer.cert\"\nkey = \"signer.key\"\n",
+        identity(label)
+    );
+    if let Some(line) = line {
+        text.push_str(line);
+        text.push('\n');
+    }
+    fs::write(&path, text).unwrap();
+    path
+}
+
 /// What a machine that trusts a signer requires of a signature.
 pub trait Public {
     fn public(&self) -> Trust;

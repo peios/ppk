@@ -238,5 +238,8 @@ seeds, and writes the root and the top-level out as a directory.
 
 Library tests verify against that directory through `support::anchors()`.
 Tests that run the `ppk` command name it in `$PPK_DEVELOPMENT_ANCHORS`,
-which a build with debug assertions reads in place of its own roots and
-the system's trust store. A release build ignores the variable.
+which a build with debug assertions or the `development-anchors` feature
+reads in place of its own roots and the system's trust store. `cargo test`
+builds with debug assertions; `pekit test` builds `--release` and turns
+the feature on instead. A package's build does neither, and ignores the
+variable.

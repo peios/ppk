@@ -169,12 +169,14 @@ impl Anchors {
     /// The roots this build of ppk was given, and this system's trust
     /// store.
     ///
-    /// A build with debug assertions, which no release is, reads its roots
-    /// and the system's root from the directory `$PPK_DEVELOPMENT_ANCHORS`
-    /// names instead, if it is set: every `*.pub` file in its `roots`
-    /// directory, and its `system` directory. ppk's own tests use it.
+    /// A build with debug assertions or the `development-anchors` feature,
+    /// which no release has, reads its roots and the system's root from the
+    /// directory `$PPK_DEVELOPMENT_ANCHORS` names instead, if it is set:
+    /// every `*.pub` file in its `roots` directory, and its `system`
+    /// directory. ppk's own tests use it. pekit builds every test with
+    /// `--release`, so its test run turns the feature on.
     pub fn system() -> Result<Arc<Self>> {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "development-anchors"))]
         if let Some(directory) = std::env::var_os("PPK_DEVELOPMENT_ANCHORS") {
             return Self::development(Path::new(&directory));
         }
@@ -186,7 +188,7 @@ impl Anchors {
         Ok(Self::new(roots, "/"))
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "development-anchors"))]
     fn development(directory: &Path) -> Result<Arc<Self>> {
         let roots_dir = directory.join("roots");
         let mut files: Vec<PathBuf> = fs::read_dir(&roots_dir)
